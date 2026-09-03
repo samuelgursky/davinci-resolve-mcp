@@ -2,7 +2,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-[![Version](https://img.shields.io/badge/version-2.204.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
+[![Version](https://img.shields.io/badge/version-2.205.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![npm](https://img.shields.io/npm/v/davinci-resolve-mcp.svg?label=npm&color=CB3837)](https://www.npmjs.com/package/davinci-resolve-mcp)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](docs/reference/api-coverage.md)
 [![Tools](https://img.shields.io/badge/MCP%20Tools-36%20(353%20full)-blue.svg)](#server-modes)
@@ -230,6 +230,27 @@ The open-source servers are complete and fully functional on their own.
 | Render and deliver | Format/codec matrix probing, render settings validation, queued job lifecycle checks, guarded Quick Export |
 | Extension authoring | Fuse, DCTL, ACES DCTL, and Resolve-page Lua/Python script lifecycle helpers with safe MCP-marked install/remove |
 | Craft guidance | The bundled editorial, colour, audio, and workflow guidance served as prose over MCP — indexed, searchable, and readable by any client, not just ones with this repository on disk |
+
+### Operation envelope
+
+Every compound tool return carries an `_operation` block beside its payload, so
+an agent reads one shape instead of a different key per tool: `status`
+(`success` / `partial` / `blocked` / `failed`), `verification` (with
+`contradiction` kept distinct — Resolve reported success and the readback
+disagreed), `changes` (the semantic delta), `warnings`, and an `execution_id`.
+
+Two absences are meaningful and deliberate. `verification.status: "unverified"`
+means *no evidence was reported*, not "checked and clean". A missing `changes`
+means the action did not report a delta, not that nothing changed — an empty
+`{}` there would be a confident, wrong answer about an edit that simply never
+declared one.
+
+The envelope is namespaced rather than merged into the top level because
+`status`, `operation`, `warnings`, `result` and `changes` are all already domain
+keys here; flattening would rewrite a background job's `status: "done"` and a
+confirm gate's `status: "confirmation_required"`. `setup(action="set_defaults",
+params={"result_envelope": "pure" | "legacy"})` changes the shape, per call via
+`params={"envelope": ...}`, per process via `RESOLVE_MCP_RESULT_ENVELOPE`.
 
 ## Optional Extras
 

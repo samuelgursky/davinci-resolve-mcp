@@ -89,3 +89,32 @@ def verify_by_readback(
             _STATS["unverified"] += 1
 
     return result
+
+
+def as_verification_dict(
+    readback_result: Dict[str, Any],
+    *,
+    check_name: str = "readback_verification",
+) -> Dict[str, Any]:
+    """Render a ``verify_by_readback`` result in the operation envelope's shape.
+
+    A contradiction stays a distinct status rather than collapsing into a plain
+    failure: "the API said yes and the post-state says no" is a different thing
+    for a caller to act on than "the call failed".
+    """
+    verified = bool(readback_result.get("verified"))
+    contradiction = bool(readback_result.get("contradiction"))
+    check: Dict[str, Any] = {
+        "check": check_name,
+        "passed": verified,
+        "contradiction": contradiction,
+        "success_raw": readback_result.get("success_raw"),
+        "observed": readback_result.get("observed"),
+    }
+    if "intent" in readback_result:
+        check["intent"] = readback_result["intent"]
+    return {
+        "status": "contradiction" if contradiction else ("passed" if verified else "failed"),
+        "checks": [check],
+        "contradiction": contradiction,
+    }

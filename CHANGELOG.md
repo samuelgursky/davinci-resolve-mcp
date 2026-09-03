@@ -2,6 +2,60 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.205.0 — a standard operation envelope on every tool result
+
+Adapted from the design contributed in PR #181.
+
+### Added
+
+- **`_operation` on every compound tool return.** Agents orchestrating
+  multi-turn edits had to answer the same three questions after every call —
+  did it happen, was it verified, what changed — in a different vocabulary per
+  tool (`readback.missing`, `succeeded`/`failed`, `partial`,
+  `status: "confirmation_required"`). Those are now normalized into one block:
+  `status` (`success` / `partial` / `blocked` / `failed`), `operation`,
+  `execution_id`, `verification`, `changes` and `warnings`.
+- **A contradiction stays its own verification status.** "Resolve reported
+  success and the readback disagrees" is a different thing for a caller to act
+  on than "the call failed", and this repo's most valuable reliability signal;
+  it does not collapse into a failure. `readback.as_verification_dict` renders
+  a `verify_by_readback` result in the same shape.
+- **`setup(action="set_defaults", params={"result_envelope": ...})`** — `dual`
+  (default), `pure`, or `legacy`, persisted to `logs/server-preferences.json`
+  and restored at startup. Override per call with `params={"envelope": ...}` or
+  per process with `RESOLVE_MCP_RESULT_ENVELOPE`.
+
+### Notes on the adaptation
+
+- **The envelope is namespaced, not flattened.** Five of its key names —
+  `status` (22 sites), `operation` (20), `warnings` (15), `result` (8),
+  `changes` (2) — are already domain keys on this server, so merging the
+  envelope into the top level silently rewrote them: `resolve_control`
+  `job_status` reported `"success"` instead of `"done"` (an agent polling a
+  job would never see it finish), a confirm gate's `"confirmation_required"`
+  became `"blocked"` — renaming the very signal the envelope exists to make
+  unambiguous — and a transcription's `"Transcribed"` was lost. The payload is
+  now passed through untouched and the envelope rides under `_operation`,
+  following the existing `_versioning` convention. A guard test fails the
+  suite if any module starts returning `_operation` as a domain key.
+- **An unreported delta is absent, not zero.** `changes: {}` reads as "this
+  operation changed nothing", which is false about an edit that simply never
+  declared its deltas — the silent-lie class this codebase treats as a bug.
+  The key is omitted instead, and `verification: "unverified"` likewise means
+  "no evidence reported", not "checked and clean".
+- **Status inference keys only on conventions this repo actually uses.**
+  `blocked` reads like a gate flag but is a domain key holding the *list of
+  targets that could not be resolved*; a successful `bulk_match_to_hero` dry
+  run carries a non-empty one. Reading it as a gate reported a confirmation
+  that was never requested.
+- **Semantic deltas are declared by the action, not guessed from key names.**
+  A mapping like `properties_restored_items` → `properties_updated` turns a
+  ripple insert's internal bookkeeping into an edit the caller never made.
+  `timeline.ripple_insert` declares its own; the rest report none rather than
+  a fabricated zero.
+- Verified through the real stdio JSON-RPC tool layer, not just at module
+  level: 36 tools register, the envelope arrives, the payload is intact.
+
 ## What's New in v2.204.0 — #179: the managed install can boot the advanced server
 
 ### Fixed

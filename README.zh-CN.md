@@ -2,7 +2,7 @@
 
 [English](README.md) | 简体中文
 
-[![Version](https://img.shields.io/badge/version-2.204.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
+[![Version](https://img.shields.io/badge/version-2.205.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![npm](https://img.shields.io/npm/v/davinci-resolve-mcp.svg?label=npm&color=CB3837)](https://www.npmjs.com/package/davinci-resolve-mcp)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](docs/reference/api-coverage.md)
 [![Tools](https://img.shields.io/badge/MCP%20Tools-36%20(353%20full)-blue.svg)](#服务器模式)
@@ -12,7 +12,7 @@
 [![Python](https://img.shields.io/badge/python-3.10+-green.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
-> 本翻译对应 v2.204.0 版 README。如与英文原版有出入，以 [英文原版](README.md) 为准。
+> 本翻译对应 v2.205.0 版 README。如与英文原版有出入，以 [英文原版](README.md) 为准。
 
 一个 Model Context Protocol (MCP) 服务器，让 AI 助手通过官方脚本 API 控制 DaVinci Resolve Studio（达芬奇）。它提供完整的 API 覆盖，外加带护栏的工作流助手，涵盖剪辑、媒体池整理、渲染设置、审阅标记、调色、Fusion、Fairlight、项目生命周期任务、扩展开发，以及不碰源媒体的媒体分析。
 
@@ -151,6 +151,14 @@ DRX 调色写入**针对 Resolve Studio 做过实机校准**：调色参数默�
 | 音频与 Fairlight | 轨道/条目探测、源映射、带护栏的音频属性写入、人声分离、自动同步规划、转写/字幕探测 |
 | 渲染与交付 | 格式/编解码矩阵探测、渲染设置校验、队列任务生命周期检查、带护栏的快速导出 |
 | 扩展开发 | Fuse、DCTL、ACES DCTL 及 Resolve 页面 Lua/Python 脚本生命周期助手，带 MCP 标记的安全安装/移除 |
+
+### 操作信封（operation envelope）
+
+每个复合工具的返回值都会在原有 payload 旁边带一个 `_operation` 块，这样 agent 读的是同一种结构，而不是每个工具一套 key：`status`（`success` / `partial` / `blocked` / `failed`）、`verification`（其中 `contradiction` 单独成一档——Resolve 报告成功但回读结果不一致）、`changes`（语义增量）、`warnings`，以及一个 `execution_id`。
+
+有两种"缺失"是刻意保留其含义的。`verification.status: "unverified"` 表示*没有报告任何证据*，不等于"已检查且没问题"。`changes` 缺失表示这个动作没有报告增量，不等于什么都没改——在那里放一个空的 `{}`，等于对一次并未声明增量的剪辑给出一个自信而错误的回答。
+
+信封是带命名空间的，而不是平铺到顶层，因为 `status`、`operation`、`warnings`、`result` 和 `changes` 在这里本来就都是业务 key；平铺会改写后台任务的 `status: "done"` 和确认关卡的 `status: "confirmation_required"`。用 `setup(action="set_defaults", params={"result_envelope": "pure" | "legacy"})` 改变形态，单次调用用 `params={"envelope": ...}`，进程级用 `RESOLVE_MCP_RESULT_ENVELOPE`。
 
 ## 可选增强
 

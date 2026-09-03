@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 353-tool granular server instead
 """
 
-VERSION = "2.204.0"
+VERSION = "2.205.0"
 
 import base64
 import os
@@ -60,6 +60,12 @@ from src.utils.page_lock import (
 )
 from src.utils.proc import safe_run
 from src.utils.readback import verify_by_readback, verification_stats as _verification_stats
+from src.utils import operation_result as _operation_result
+from src.utils.operation_result import (
+    build_operation_envelope as _build_operation_envelope,
+    get_envelope_mode as _get_envelope_mode,
+    set_envelope_mode as _set_envelope_mode,
+)
 from src.utils.render_ids import (
     render_codec_id_from_codecs as _render_codec_id_from_codecs,
     render_format_id_from_formats as _render_format_id_from_formats,
@@ -1472,6 +1478,15 @@ def _guarded_action_name(args, kwargs) -> str:
     return str(args[0]) if args else "?"
 
 
+def _guarded_params(args, kwargs) -> Optional[Dict[str, Any]]:
+    """This call's `params` dict, wherever in the signature it was passed."""
+    if isinstance(kwargs.get("params"), dict):
+        return kwargs["params"]
+    if len(args) > 1 and isinstance(args[1], dict):
+        return args[1]
+    return None
+
+
 def _guard_missing_params(fn):
     """Tool decorator: report a missing parameter instead of leaking a KeyError.
 
@@ -1489,21 +1504,35 @@ def _guard_missing_params(fn):
     - **The signature is not (action, params).** `media_analysis` also takes
       `ctx: Optional[Context]`, so the wrapper forwards `*args, **kwargs` rather
       than naming parameters it does not know about.
+
+    It is also where the operation envelope is attached, for the same reason it
+    is where the missing-parameter guard lives: this is the one seam every tool
+    return passes through. In the default `dual` mode the payload is untouched
+    and the envelope rides under `_operation` — see `src/utils/operation_result`
+    for why it is namespaced rather than flattened.
     """
+    tool_name = getattr(fn, "__name__", "tool")
+
     if inspect.iscoroutinefunction(fn):
         @functools.wraps(fn)
         async def wrapper(*args, **kwargs):
+            action = _guarded_action_name(args, kwargs)
             try:
-                return await fn(*args, **kwargs)
+                result = await fn(*args, **kwargs)
             except _MissingParam as exc:
-                return _missing_param_error(exc, _guarded_action_name(args, kwargs))
+                result = _missing_param_error(exc, action)
+            return _build_operation_envelope(
+                tool_name, action, _guarded_params(args, kwargs), result)
     else:
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
+            action = _guarded_action_name(args, kwargs)
             try:
-                return fn(*args, **kwargs)
+                result = fn(*args, **kwargs)
             except _MissingParam as exc:
-                return _missing_param_error(exc, _guarded_action_name(args, kwargs))
+                result = _missing_param_error(exc, action)
+            return _build_operation_envelope(
+                tool_name, action, _guarded_params(args, kwargs), result)
 
     wrapper.__wrapped_by_missing_param_guard__ = True
     return wrapper
@@ -5238,6 +5267,15 @@ def _timeline_ripple_insert_impl(proj, tl, p: Dict[str, Any], *, resolve=None) -
         "readback": {"after_counts": after_counts, "missing": missing},
         "gap_frames_by_track": gap_by_track,
         "warnings": warnings,
+        # Semantic delta for the operation envelope. Declared rather than
+        # inferred: this action deletes and re-appends the tail to move it, so
+        # a reader counting raw API calls would see a deletion that the edit
+        # did not make.
+        "_changes": {
+            "items_added": len(built_inserts),
+            "items_moved": len(tail_rows),
+            "items_deleted": 0,
+        },
     }
     if failures:
         result["failures"] = failures
@@ -10215,6 +10253,63 @@ def _read_json_strict(path: str) -> Dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+_SERVER_PREFS_ENV = "RESOLVE_MCP_SERVER_PREFS"
+
+
+def _server_preferences_path() -> str:
+    """Where server-general defaults live.
+
+    Separate from the media-analysis preferences file: these are settings about
+    how the server answers, not about how it analyses media, and mixing them
+    would make either file's name a lie.
+    """
+    override = os.environ.get(_SERVER_PREFS_ENV)
+    if override:
+        return os.path.realpath(os.path.abspath(os.path.expanduser(override)))
+    return os.path.join(project_dir, "logs", "server-preferences.json")
+
+
+def _read_server_preferences() -> Dict[str, Any]:
+    try:
+        return _read_json_strict(_server_preferences_path())
+    except ConfigParseError:
+        return {}
+
+
+def _write_server_preferences(preferences: Dict[str, Any]) -> None:
+    # Same atomic replace as the other preference stores: a crash mid-write must
+    # not truncate a file whose reader falls back to {}, since the next save
+    # would then persist that empty state over the user's settings.
+    path = _server_preferences_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp_path = f"{path}.tmp-{os.getpid()}-{threading.get_ident()}-{time.time_ns()}"
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as handle:
+            json.dump(preferences, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+        os.replace(tmp_path, path)
+    finally:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+
+
+def _apply_persisted_envelope_mode() -> str:
+    """Restore the saved result_envelope default at startup.
+
+    An explicit RESOLVE_MCP_RESULT_ENVELOPE wins: a process-level override is a
+    deliberate act for this run, and a saved preference should not silently
+    outrank it.
+    """
+    if os.environ.get("RESOLVE_MCP_RESULT_ENVELOPE"):
+        return _get_envelope_mode()
+    saved = _read_server_preferences().get("result_envelope")
+    if isinstance(saved, str):
+        _set_envelope_mode(saved)
+    return _get_envelope_mode()
+
+
 def _read_media_analysis_preferences() -> Dict[str, Any]:
     path = _media_analysis_preferences_path()
     try:
@@ -15091,11 +15186,57 @@ def _setup_updates_defaults() -> Dict[str, Any]:
     }
 
 
+def _setup_general_defaults() -> Dict[str, Any]:
+    return {
+        "result_envelope": _get_envelope_mode(),
+        "options": {"result_envelope": list(_operation_result.MODES)},
+        "preferences_path": _server_preferences_path(),
+    }
+
+
 def _setup_defaults_snapshot() -> Dict[str, Any]:
     return {
+        "general": _setup_general_defaults(),
         "media_analysis": _setup_media_analysis_defaults(),
         "updates": _setup_updates_defaults(),
     }
+
+
+def _setup_set_general_defaults(general: Dict[str, Any], dry_run: bool) -> Dict[str, Any]:
+    """Persist server-general defaults. Currently just the result envelope."""
+    if not general:
+        return {"changed": False, "recognized": False}
+
+    mode = _first_param(
+        general, "result_envelope", "resultEnvelope", "envelope_mode", "envelopeMode",
+        default=None)
+    if mode is None:
+        return {"changed": False, "recognized": False}
+
+    cleaned = str(mode).strip().lower()
+    if cleaned not in _operation_result.MODES:
+        return _err(
+            f"result_envelope must be one of {', '.join(_operation_result.MODES)}",
+            code="INVALID_ENUM_VALUE", category="validation",
+            state={"result_envelope": mode})
+
+    if dry_run:
+        return {"changed": True, "recognized": True, "result_envelope": cleaned,
+                "current": _get_envelope_mode()}
+
+    # Persist before applying: a saved setting that does not survive a restart
+    # is a setting the caller was told they changed and did not.
+    try:
+        preferences = _read_json_strict(_server_preferences_path())
+    except ConfigParseError as exc:
+        return _err(
+            f"server preferences file is unreadable: {exc}",
+            code="CONFIG_UNREADABLE", category="state",
+            remediation=f"Repair or delete {_server_preferences_path()}, then retry.")
+    preferences["result_envelope"] = cleaned
+    _write_server_preferences(preferences)
+    _set_envelope_mode(cleaned)
+    return {"changed": True, "recognized": True, "result_envelope": _get_envelope_mode()}
 
 
 def _setup_set_media_analysis_defaults(media_defaults: Dict[str, Any], dry_run: bool) -> Dict[str, Any]:
@@ -15691,6 +15832,17 @@ def setup(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any
                 },
                 "updates.check_interval_hours": {"values": "number >= 0.1", "storage": str(update_state_path(project_dir))},
                 "updates.snooze_hours": {"values": "number >= 0.1", "storage": str(update_state_path(project_dir))},
+                "general.result_envelope": {
+                    "description": (
+                        "Where the operation envelope goes. 'dual' (default) leaves the "
+                        "payload untouched and adds the envelope under '_operation'; "
+                        "'pure' returns only the envelope with the payload under 'result'; "
+                        "'legacy' adds nothing. Override per call with params={'envelope': ...}."
+                    ),
+                    "values": list(_operation_result.MODES),
+                    "current": _get_envelope_mode(),
+                    "storage": _server_preferences_path(),
+                },
             },
         }
 
@@ -15702,12 +15854,23 @@ def setup(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any
     if action in {"set_defaults", "set", "configure"}:
         defaults = p.get("defaults") if isinstance(p.get("defaults"), dict) else {}
         merged = {**defaults, **{k: v for k, v in p.items() if k != "defaults"}}
+        # media_analysis owns every unclaimed key, so anything another setter
+        # owns has to be named here or it lands in the wrong store.
+        _general_keys = {
+            "general", "result_envelope", "resultEnvelope",
+            "envelope_mode", "envelopeMode",
+        }
+        general_defaults = {
+            **_setup_nested(merged, "general"),
+            **{k: v for k, v in merged.items() if k in _general_keys and k != "general"},
+        }
         media_defaults = {
             **_setup_nested(merged, "media_analysis", "mediaAnalysis"),
             **{
                 key: value
                 for key, value in merged.items()
                 if key not in {"updates", "mcp_updates", "mcpUpdates", "dry_run", "dryRun"}
+                and key not in _general_keys
             },
             **({
                 "timed_markers_default": _first_param(
@@ -15758,19 +15921,25 @@ def setup(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any
             } if any(key in merged for key in ("snooze_hours", "snoozeHours", "update_snooze_hours", "updateSnoozeHours")) else {}),
         }
 
+        general_result = _setup_set_general_defaults(general_defaults, dry_run)
+        if general_result.get("error"):
+            return general_result
         media_result = _setup_set_media_analysis_defaults(media_defaults, dry_run)
         if media_result.get("error"):
             return media_result
         update_result = _setup_set_updates_defaults(update_defaults, dry_run)
         if update_result.get("error"):
             return update_result
-        recognized = bool(media_result.get("recognized")) or bool(update_result.get("recognized"))
+        recognized = (bool(general_result.get("recognized"))
+                      or bool(media_result.get("recognized"))
+                      or bool(update_result.get("recognized")))
         if not recognized:
             return _err("set_defaults did not receive a recognized default to set")
 
         return _ok(
             dry_run=dry_run,
             changes={
+                "general": general_result,
                 "media_analysis": media_result,
                 "updates": update_result,
             },
@@ -31310,6 +31479,9 @@ def _install_threaded_tool_dispatch(fastmcp) -> int:
 
 
 if __name__ == "__main__":
+    # Before any tool can answer: a saved result_envelope default has to be in
+    # force on the first call, not the second.
+    logger.info(f"Result envelope mode: {_apply_persisted_envelope_mode()}")
     start_background_update_check(VERSION, project_dir, logger, env=_setup_update_env())
     _install_threaded_tool_dispatch(mcp)
 

@@ -158,6 +158,59 @@ before mutating Resolve state.
 
 ---
 
+## Reading A Result: The Operation Envelope
+
+Every compound tool return carries an `_operation` block alongside its normal
+payload. It answers the three questions that otherwise need a different key per
+tool — did it happen, was it verified, what changed:
+
+```json
+{
+  "success": true,
+  "insert_frame_absolute": 86400,
+  "shift_frames": 48,
+
+  "_operation": {
+    "status": "success",
+    "operation": "timeline.ripple_insert",
+    "execution_id": "exec_d2c123817bee",
+    "verification": {
+      "status": "passed",
+      "checks": [{"check": "readback_verification", "passed": true, "missing_items": 0}],
+      "contradiction": false
+    },
+    "changes": {"items_added": 3, "items_moved": 17, "items_deleted": 0}
+  }
+}
+```
+
+- **`status`** — `success` | `partial` | `blocked` | `failed`. `blocked` means a
+  confirm gate is waiting; the payload still carries the `confirm_token` and
+  `preview` to act on.
+- **`verification.status`** — `passed` | `failed` | `partial` | `contradiction`
+  | `unverified`. **`contradiction` is the one to stop on**: Resolve reported
+  success and the readback disagrees. **`unverified` means no evidence was
+  reported, not that the operation was checked and found clean** — if you need
+  certainty there, go and read the state back.
+- **`changes`** — the semantic delta, present only when the action declared or
+  reported one. **Absent means "not reported", never "nothing changed"**, so do
+  not read a missing `changes` as a no-op.
+- **`warnings`** — present only when there are any.
+- **`execution_id`** — correlates one call across logs and transcripts.
+
+The envelope is namespaced under `_operation` rather than merged into the top
+level because `status`, `operation`, `warnings`, `result` and `changes` are all
+already domain keys on this server (a background job's `status` is `"done"`, a
+confirm gate's is `"confirmation_required"`). The payload is passed through
+untouched; read domain values where you always read them.
+
+Change the shape with `setup(action="set_defaults", params={"result_envelope": "pure" | "legacy" | "dual"})`,
+per call with `params={"envelope": "pure"}`, or per process with
+`RESOLVE_MCP_RESULT_ENVELOPE`. `pure` returns only the envelope with the payload
+nested under `result`; `legacy` adds nothing.
+
+---
+
 ## Two Server Modes
 
 | Mode | Entry point | Tool count | Use when |
