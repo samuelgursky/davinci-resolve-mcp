@@ -274,6 +274,10 @@ This project treats camera originals and source media as immutable. Analysis too
 
 The default server is a local stdio process launched by your MCP client; it does not expose a network listener or built-in multi-user auth surface. The two opt-in local HTTP surfaces — the control panel and the networked MCP transport — bind loopback only and require a per-launch bearer token on every request, with Host/Origin checks against DNS rebinding and CSRF. Tool metadata includes MCP client-safety hints for read-only, destructive, idempotent, and external-resource operations. See [Security Policy](SECURITY.md) for operational boundaries, confirmation guidance, and vulnerability reporting.
 
+## Structured Operation Results
+
+Every compound MCP tool returns a standardized envelope (`status`, `operation`, `execution_id`, `result`, `verification`, `changes`, `warnings`). By default, the server operates in `dual` mode, retaining top-level keys for full backward compatibility while providing structured machine-readable metadata. Strict `pure` mode can be requested per-call via `params={"envelope": "pure"}` or globally configured using `setup(action="set_defaults", params={"result_envelope": "pure"})`. See [AI Skill Reference](docs/SKILL.md#structured-operation-results) for details and envelope schema.
+
 ## Key Stats
 
 | Metric | Value |

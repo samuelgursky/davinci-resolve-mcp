@@ -2099,6 +2099,69 @@ reports, deletes the project, and removes generated media. See
 
 ---
 
+## Structured Operation Results
+
+Every compound MCP tool call returns a standardized result envelope to make server responses predictable and machine-readable across all workflows.
+
+### Envelope Structure
+
+```json
+{
+  "status": "success",
+  "operation": "timeline.ripple_insert",
+  "execution_id": "exec_d2c123817bee",
+
+  "result": {
+    "insert_frame_absolute": 86400,
+    "shift_frames": 48
+  },
+
+  "verification": {
+    "status": "passed",
+    "checks": [
+      {"check": "readback_verification", "passed": true, "missing_items": 0}
+    ],
+    "contradiction": false
+  },
+
+  "changes": {
+    "items_added": 3,
+    "items_moved": 17,
+    "items_deleted": 0
+  },
+
+  "warnings": []
+}
+```
+
+- **`status`**: `"success" | "partial" | "blocked" | "failed"`.
+  - `"success"`: the operation completed cleanly.
+  - `"partial"`: some sub-actions or items succeeded while others failed (e.g. bulk operations).
+  - `"blocked"`: the action is held waiting for user confirmation (e.g. dry-run confirmation token issued).
+  - `"failed"`: the action failed or returned an error.
+- **`operation`**: `{tool_name}.{action}` (e.g. `"timeline.ripple_insert"`, `"project_manager.get_current"`).
+- **`execution_id`**: unique traceable execution identifier (`exec_<uuid12>`), or correlated with `_versioning.analysis_run_id`.
+- **`result`**: dictionary holding the domain-specific action payload.
+- **`verification`**: readback verification status (`"passed"`, `"failed"`, `"partial"`, `"unverified"`, or `"contradiction"`) with individual audit checks.
+- **`changes`**: semantic change tracking (`items_added`, `items_moved`, `items_deleted`, `properties_updated`, metric before/after deltas).
+- **`warnings`**: array of warning strings raised during the call.
+
+### Envelope Modes
+
+The server supports three output envelope modes:
+
+1. **`dual` (default)**: Emits all envelope keys while mirroring raw top-level domain keys (`success`, `timelines`, `name`, etc.) for 100% backward compatibility with existing scripts and prompts.
+2. **`pure`**: Emits strictly the nested envelope keys (`status`, `operation`, `execution_id`, `result`, `verification`, `changes`, `warnings`) without top-level domain key mirrors.
+3. **`legacy`**: Returns the un-enveloped raw dictionary directly.
+
+### Overrides & Configuration
+
+- **Per-request override**: Pass `params={"envelope": "pure" | "dual" | "legacy"}` in any tool call.
+- **Session default**: Configure via `setup(action="set_defaults", params={"result_envelope": "pure"})`.
+- **Environment variable**: Set `RESOLVE_MCP_RESULT_ENVELOPE=pure` before launching the server.
+
+---
+
 ## Error Handling and Recovery
 
 | Error message | Cause | Fix |

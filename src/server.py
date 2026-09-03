@@ -60,6 +60,11 @@ from src.utils.page_lock import (
 )
 from src.utils.proc import safe_run
 from src.utils.readback import verify_by_readback, verification_stats as _verification_stats
+from src.utils.operation_result import (
+    build_operation_envelope as _build_operation_envelope,
+    get_envelope_mode as _get_envelope_mode,
+    set_envelope_mode as _set_envelope_mode,
+)
 from src.utils.render_ids import (
     render_codec_id_from_codecs as _render_codec_id_from_codecs,
     render_format_id_from_formats as _render_format_id_from_formats,
@@ -1472,8 +1477,18 @@ def _guarded_action_name(args, kwargs) -> str:
     return str(args[0]) if args else "?"
 
 
+def _guarded_params(args, kwargs) -> Optional[Dict[str, Any]]:
+    """The `params` dictionary for this call, wherever it was passed."""
+    if "params" in kwargs and isinstance(kwargs["params"], dict):
+        return kwargs["params"]
+    if len(args) > 1 and isinstance(args[1], dict):
+        return args[1]
+    return None
+
+
 def _guard_missing_params(fn):
-    """Tool decorator: report a missing parameter instead of leaking a KeyError.
+    """Tool decorator: report a missing parameter instead of leaking a KeyError
+    and envelope all action results into the standardized operation envelope.
 
     Sits *under* `@mcp.tool()` so FastMCP registers the guarded callable.
     `functools.wraps` keeps the name, docstring and signature FastMCP builds the
@@ -1490,20 +1505,27 @@ def _guard_missing_params(fn):
       `ctx: Optional[Context]`, so the wrapper forwards `*args, **kwargs` rather
       than naming parameters it does not know about.
     """
+    tool_name = getattr(fn, "__wrapped_tool_name__", getattr(fn, "__name__", "tool"))
     if inspect.iscoroutinefunction(fn):
         @functools.wraps(fn)
         async def wrapper(*args, **kwargs):
+            action = _guarded_action_name(args, kwargs)
+            p = _guarded_params(args, kwargs)
             try:
-                return await fn(*args, **kwargs)
+                res = await fn(*args, **kwargs)
             except _MissingParam as exc:
-                return _missing_param_error(exc, _guarded_action_name(args, kwargs))
+                res = _missing_param_error(exc, action)
+            return _build_operation_envelope(tool_name, action, p, res)
     else:
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
+            action = _guarded_action_name(args, kwargs)
+            p = _guarded_params(args, kwargs)
             try:
-                return fn(*args, **kwargs)
+                res = fn(*args, **kwargs)
             except _MissingParam as exc:
-                return _missing_param_error(exc, _guarded_action_name(args, kwargs))
+                res = _missing_param_error(exc, action)
+            return _build_operation_envelope(tool_name, action, p, res)
 
     wrapper.__wrapped_by_missing_param_guard__ = True
     return wrapper
@@ -5233,6 +5255,9 @@ def _timeline_ripple_insert_impl(proj, tl, p: Dict[str, Any], *, resolve=None) -
         "shift_frames": shift,
         "inserted_clips": len(built_inserts),
         "tail_items_shifted": len(tail_rows),
+        "items_added": len(built_inserts),
+        "items_moved": len(tail_rows),
+        "items_deleted": 0,
         "properties_restored_items": restored,
         "property_restore_failures": restore_failures,
         "readback": {"after_counts": after_counts, "missing": missing},
@@ -15093,6 +15118,10 @@ def _setup_updates_defaults() -> Dict[str, Any]:
 
 def _setup_defaults_snapshot() -> Dict[str, Any]:
     return {
+        "general": {
+            "result_envelope": _get_envelope_mode(),
+            "options": ["dual", "pure", "legacy"],
+        },
         "media_analysis": _setup_media_analysis_defaults(),
         "updates": _setup_updates_defaults(),
     }
@@ -15691,6 +15720,11 @@ def setup(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any
                 },
                 "updates.check_interval_hours": {"values": "number >= 0.1", "storage": str(update_state_path(project_dir))},
                 "updates.snooze_hours": {"values": "number >= 0.1", "storage": str(update_state_path(project_dir))},
+                "general.result_envelope": {
+                    "description": "Standardized operation result envelope mode: 'dual' (default), 'pure', or 'legacy'.",
+                    "values": ["dual", "pure", "legacy"],
+                    "current": _get_envelope_mode(),
+                },
             },
         }
 
@@ -15758,22 +15792,40 @@ def setup(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any
             } if any(key in merged for key in ("snooze_hours", "snoozeHours", "update_snooze_hours", "updateSnoozeHours")) else {}),
         }
 
+        env_mode = _first_param(
+            merged,
+            "result_envelope",
+            "resultEnvelope",
+            "envelope_mode",
+            "envelopeMode",
+            default=None,
+        )
+        env_changed = False
+        if env_mode is not None:
+            if not dry_run:
+                _set_envelope_mode(str(env_mode))
+            env_changed = True
+
         media_result = _setup_set_media_analysis_defaults(media_defaults, dry_run)
         if media_result.get("error"):
             return media_result
         update_result = _setup_set_updates_defaults(update_defaults, dry_run)
         if update_result.get("error"):
             return update_result
-        recognized = bool(media_result.get("recognized")) or bool(update_result.get("recognized"))
+        recognized = bool(media_result.get("recognized")) or bool(update_result.get("recognized")) or env_changed
         if not recognized:
             return _err("set_defaults did not receive a recognized default to set")
 
+        changes_dict = {
+            "media_analysis": media_result,
+            "updates": update_result,
+        }
+        if env_changed:
+            changes_dict["general"] = {"result_envelope": _get_envelope_mode()}
+
         return _ok(
             dry_run=dry_run,
-            changes={
-                "media_analysis": media_result,
-                "updates": update_result,
-            },
+            changes=changes_dict,
             defaults=_setup_defaults_snapshot(),
         )
 
