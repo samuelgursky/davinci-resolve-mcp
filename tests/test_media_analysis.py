@@ -4221,7 +4221,10 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
             },
             name="Transcript batch",
         )
-        self.assertTrue(created["success"])
+        # Carry the payload into the message: a bare "False is not true" from a
+        # helper four call-frames deep says nothing about which precondition
+        # failed, and this one only runs where ffmpeg exists.
+        self.assertTrue(created["success"], created)
         job = created["job"]
         with unittest.mock.patch.object(
             _media_analysis_module, "_transcribe", return_value=payload
