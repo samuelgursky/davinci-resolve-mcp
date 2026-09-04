@@ -9733,6 +9733,20 @@ def _media_analysis_bool(value: Any, default: bool = False) -> bool:
     return bool(value)
 
 
+def _media_analysis_plan_project_root(created: Any) -> str:
+    """Extract the project root path from a created batch job.
+
+    `plan["output_root"]` holds the mapping `resolve_output_root()` returns
+    ({"success", "base_root", "project_root", "project_directory", ...}), not a
+    path. `str()` on it yields a dict repr, which is a non-empty string and so
+    passes a truthiness guard while naming no directory that exists.
+    """
+    output_root = (created.get("plan") or {}).get("output_root") or ""
+    if isinstance(output_root, dict):
+        output_root = output_root.get("project_root") or ""
+    return str(output_root)
+
+
 MEDIA_ANALYSIS_ASYNC_QUEUED = "queued"
 MEDIA_ANALYSIS_ASYNC_RUNNING = "running"
 
@@ -22310,7 +22324,7 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
         # get a runner. Reached either by the analyze_* divert (which sets
         # _async_mode) or by calling start_batch_job with background=true.
         job_id = str((created.get("job") or {}).get("job_id") or "")
-        project_root = str((created.get("plan") or {}).get("output_root") or "")
+        project_root = _media_analysis_plan_project_root(created)
         wants_runner = p.get("_async_mode") == MEDIA_ANALYSIS_ASYNC_RUNNING or (
             _media_analysis_bool(p.get("background"), False)
             or _media_analysis_bool(p.get("async_job"), False)
