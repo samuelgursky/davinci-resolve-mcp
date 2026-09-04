@@ -219,6 +219,80 @@ nested under `result`; `legacy` adds nothing.
 
 ---
 
+## Agent Observability: Execution Traces ("Why did the editor do this?")
+
+Multi-step AI operations (such as detecting pauses, deleting multiple timeline
+items, and verifying the result) correlate across calls into unified execution
+traces. Each trace captures the user request or prompt, tool execution timing,
+cumulative semantic deltas, and verification outcomes.
+
+Example trace shape returned by `resolve_control(action="get_execution_trace")`:
+
+```json
+{
+  "execution_id": "exec_8f91c7a210bc",
+  "request": "Remove all pauses longer than 800ms",
+  "status": "success",
+  "started_at": "2026-09-04T07:30:00Z",
+  "ended_at": "2026-09-04T07:30:02Z",
+  "duration_ms": 2845,
+  "tools": [
+    {
+      "tool": "media_analysis.analyze_timeline",
+      "count": 1,
+      "duration_ms": 821
+    },
+    {
+      "tool": "timeline.delete_item",
+      "count": 17,
+      "duration_ms": 1420
+    }
+  ],
+  "changes": {
+    "items_deleted": 17
+  },
+  "verification": {
+    "status": "passed",
+    "passed": true,
+    "checks": [{"check": "readback_verification", "passed": true}]
+  },
+  "warnings": []
+}
+```
+
+### Trace Actions on `resolve_control`
+
+- **`begin_execution(request?, execution_id?, initiator?)`**: Opens a scoped
+  multi-step execution. Subsequent tool calls in the session automatically thread
+  under this `execution_id` until ended.
+- **`end_execution(execution_id?, verification?, status?, notes?)`**: Closes the
+  active execution, finalizes timestamps and aggregated metrics.
+- **`get_execution_trace(execution_id?)`** / **`get_execution(execution_id)`**:
+  Fetches the trace for a specific ID, or the most recent execution if omitted.
+- **`list_recent_executions(limit?)`**: Returns the recent execution traces
+  (newest first, default limit 20).
+- **`clear_executions(dry_run?)`**: Clears the in-memory execution trace buffer.
+
+Explicit correlation is also supported per-call: pass `params={"execution_id": ...}`
+or `params={"trace_id": ...}` in any tool call to associate it with a specific trace.
+
+Two things to know when a trace is not where you expect it. The buffer holds the
+**100 most recent** executions and is in memory only — a server restart empties
+it, and the on-disk `logs/execution-traces.jsonl` is the durable record.
+`list_recent_executions` returns a `persistence` block naming that file and
+whether it is writable; check it before concluding that nothing was traced,
+since the append is best-effort and will never fail a real edit to report a
+logging problem.
+
+Recorded per step: tool, action, `duration_ms`, status, semantic deltas and
+verification. **Not** recorded: parameters, file paths, clip or project names.
+The only free text is the `request` string passed to `begin_execution`.
+
+The file rotates at 8 MB, keeping one previous generation as
+`execution-traces.jsonl.1`. Both are gitignored along with the rest of `logs/`.
+
+---
+
 ## Two Server Modes
 
 | Mode | Entry point | Tool count | Use when |

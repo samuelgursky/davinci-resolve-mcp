@@ -266,6 +266,25 @@ confirm gate's `status: "confirmation_required"`. `setup(action="set_defaults",
 params={"result_envelope": "pure" | "legacy"})` changes the shape, per call via
 `params={"envelope": ...}`, per process via `RESOLVE_MCP_RESULT_ENVELOPE`.
 
+### Agent execution traces ("Why did the editor do this?")
+
+Multi-step AI operations correlate across tool calls into unified execution
+traces. Each trace aggregates tool durations (`duration_ms`), call counts, cumulative
+semantic deltas (`items_deleted`, `items_added`), and readback verifications.
+Agents and editors can inspect workflows via `resolve_control`:
+`get_execution_trace(execution_id?)`, `list_recent_executions()`, or open a
+scoped execution with `begin_execution(request="...")` / `end_execution()`.
+
+Traces live in a 100-entry in-memory ring and are appended to
+`logs/execution-traces.jsonl` beside `server.log` — `RESOLVE_MCP_TRACE_FILE`
+moves it. `list_recent_executions` reports that path and whether it is
+writable, so "the log is empty" and "nothing is being written" are
+distinguishable without reading the source. What is recorded is tool name,
+action, timing, status, semantic deltas and verification — no parameters and no
+file paths. The one free-text field is the `request` you pass to
+`begin_execution`, so treat it the way you would a commit message on a client
+project.
+
 ## Optional Extras
 
 The core install is deliberately small: Python, ffmpeg, and the Resolve scripting
