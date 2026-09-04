@@ -2,7 +2,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-[![Version](https://img.shields.io/badge/version-2.205.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
+[![Version](https://img.shields.io/badge/version-2.206.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![npm](https://img.shields.io/npm/v/davinci-resolve-mcp.svg?label=npm&color=CB3837)](https://www.npmjs.com/package/davinci-resolve-mcp)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](docs/reference/api-coverage.md)
 [![Tools](https://img.shields.io/badge/MCP%20Tools-36%20(353%20full)-blue.svg)](#server-modes)
@@ -251,6 +251,15 @@ keys here; flattening would rewrite a background job's `status: "done"` and a
 confirm gate's `status: "confirmation_required"`. `setup(action="set_defaults",
 params={"result_envelope": "pure" | "legacy"})` changes the shape, per call via
 `params={"envelope": ...}`, per process via `RESOLVE_MCP_RESULT_ENVELOPE`.
+
+### Agent execution traces ("Why did the editor do this?")
+
+Multi-step AI operations correlate across tool calls into unified execution
+traces. Each trace aggregates tool durations (`duration_ms`), call counts, cumulative
+semantic deltas (`items_deleted`, `items_added`), and readback verifications.
+Agents and editors can inspect workflows via `resolve_control`:
+`get_execution_trace(execution_id?)`, `list_recent_executions()`, or open a
+scoped execution with `begin_execution(request="...")` / `end_execution()`.
 
 ## Optional Extras
 

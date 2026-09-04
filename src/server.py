@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 353-tool granular server instead
 """
 
-VERSION = "2.205.0"
+VERSION = "2.206.0"
 
 import base64
 import os
@@ -65,6 +65,15 @@ from src.utils.operation_result import (
     build_operation_envelope as _build_operation_envelope,
     get_envelope_mode as _get_envelope_mode,
     set_envelope_mode as _set_envelope_mode,
+)
+from src.utils import execution_trace as _execution_trace
+from src.utils.execution_trace import (
+    get_execution_trace,
+    get_execution,
+    list_recent_executions,
+    begin_execution,
+    end_execution,
+    clear_executions,
 )
 from src.utils.render_ids import (
     render_codec_id_from_codecs as _render_codec_id_from_codecs,
@@ -1487,6 +1496,50 @@ def _guarded_params(args, kwargs) -> Optional[Dict[str, Any]]:
     return None
 
 
+_TRACE_OBSERVER_ACTIONS = {
+    "get_execution_trace", "get_execution", "list_recent_executions",
+    "clear_executions", "begin_execution", "end_execution",
+}
+
+
+def _record_execution_step(
+    tool_name: str,
+    action: str,
+    params: Optional[Dict[str, Any]],
+    raw_result: Any,
+    enveloped: Any,
+    duration_ms: int,
+) -> None:
+    if tool_name == "resolve_control" and action in _TRACE_OBSERVER_ACTIONS:
+        return
+    try:
+        env = None
+        if isinstance(enveloped, dict):
+            env = enveloped.get(_operation_result.ENVELOPE_KEY)
+            if not env and "execution_id" in enveloped:
+                env = enveloped
+        exec_id = env.get("execution_id") if isinstance(env, dict) else None
+        status = env.get("status") if isinstance(env, dict) else None
+        verification = env.get("verification") if isinstance(env, dict) else None
+        changes = env.get("changes") if isinstance(env, dict) else None
+        warnings = env.get("warnings") if isinstance(env, dict) else None
+
+        _execution_trace.record_step(
+            tool=tool_name,
+            action=action,
+            params=params if isinstance(params, dict) else None,
+            raw_result=raw_result,
+            duration_ms=duration_ms,
+            execution_id=exec_id,
+            status=status,
+            verification=verification,
+            changes=changes,
+            warnings=warnings,
+        )
+    except Exception as exc:  # pragma: no cover
+        logger.debug("Failed to record execution step: %s", exc)
+
+
 def _guard_missing_params(fn):
     """Tool decorator: report a missing parameter instead of leaking a KeyError.
 
@@ -1517,22 +1570,32 @@ def _guard_missing_params(fn):
         @functools.wraps(fn)
         async def wrapper(*args, **kwargs):
             action = _guarded_action_name(args, kwargs)
+            params = _guarded_params(args, kwargs)
+            t0 = time.perf_counter()
             try:
                 result = await fn(*args, **kwargs)
             except _MissingParam as exc:
                 result = _missing_param_error(exc, action)
-            return _build_operation_envelope(
-                tool_name, action, _guarded_params(args, kwargs), result)
+            duration_ms = max(0, int((time.perf_counter() - t0) * 1000))
+            enveloped = _build_operation_envelope(
+                tool_name, action, params, result, duration_ms=duration_ms)
+            _record_execution_step(tool_name, action, params, result, enveloped, duration_ms)
+            return enveloped
     else:
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
             action = _guarded_action_name(args, kwargs)
+            params = _guarded_params(args, kwargs)
+            t0 = time.perf_counter()
             try:
                 result = fn(*args, **kwargs)
             except _MissingParam as exc:
                 result = _missing_param_error(exc, action)
-            return _build_operation_envelope(
-                tool_name, action, _guarded_params(args, kwargs), result)
+            duration_ms = max(0, int((time.perf_counter() - t0) * 1000))
+            enveloped = _build_operation_envelope(
+                tool_name, action, params, result, duration_ms=duration_ms)
+            _record_execution_step(tool_name, action, params, result, enveloped, duration_ms)
+            return enveloped
 
     wrapper.__wrapped_by_missing_param_guard__ = True
     return wrapper
@@ -16033,6 +16096,18 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         — Captures the current Resolve UI state so it can be restored after a preview.
       restore_state(state_token) -> {success, restored: {...}}
         — Returns Resolve to a previously-saved state.
+      get_execution_trace(execution_id?) -> {success, trace}
+        — Correlated agent execution trace by execution_id, or most recent if omitted (no connection needed).
+      get_execution(execution_id) -> {success, trace}
+        — Alias for get_execution_trace.
+      list_recent_executions(limit?) -> {success, executions, count}
+        — List recent execution traces with aggregated tool calls, durations, and verifications (no connection needed).
+      begin_execution(request?, execution_id?, initiator?) -> {success, execution_id, started_at, request}
+        — Open a multi-step execution trace so subsequent tool calls thread under this execution ID.
+      end_execution(execution_id?, verification?, status?, notes?) -> {success, trace}
+        — Conclude an execution trace and compute final rollups.
+      clear_executions(dry_run?) -> {success, cleared}
+        — Clear the in-memory execution trace buffer.
     """
     p = _params(params)
 
@@ -16119,6 +16194,43 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         return status
     if action == "list_jobs":
         return {"jobs": background_jobs.list_jobs()}
+
+    if action in {"get_execution_trace", "get_execution"}:
+        exec_id = p.get("execution_id") or p.get("id")
+        trace = _execution_trace.get_execution_trace(exec_id)
+        if not trace:
+            return _err(f"No execution trace found for id: {exec_id or 'latest'}", code="NOT_FOUND", category="state")
+        return {"success": True, "trace": trace}
+    if action == "list_recent_executions":
+        limit = _safe_int(p.get("limit"), 20, minimum=1, maximum=100)
+        executions = _execution_trace.list_recent_executions(limit=limit)
+        return {"success": True, "executions": executions, "count": len(executions)}
+    if action == "begin_execution":
+        req = p.get("request") or p.get("prompt") or p.get("reason")
+        exec_id = p.get("execution_id") or p.get("id")
+        res = _execution_trace.begin_execution(
+            request=req,
+            execution_id=exec_id,
+            initiator=p.get("initiator") or "agent",
+        )
+        return res
+    if action == "end_execution":
+        exec_id = p.get("execution_id") or p.get("id")
+        trace = _execution_trace.end_execution(
+            execution_id=exec_id,
+            verification=p.get("verification"),
+            status=p.get("status"),
+            notes=p.get("notes"),
+        )
+        if not trace:
+            return _err("No active or matching execution to end", code="NOT_FOUND", category="state")
+        return {"success": True, "trace": trace}
+    if action == "clear_executions":
+        dry_run = _setup_bool(p.get("dry_run", p.get("dryRun")), False)
+        if dry_run:
+            return {"success": True, "dry_run": True, "count": len(_execution_trace.list_recent_executions(100))}
+        res = _execution_trace.clear_executions()
+        return res
 
     # Control-panel actions don't require Resolve to be running.
     if action == "open_control_panel":
@@ -16334,7 +16446,7 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         if err:
             return _err(err)
         return {"success": bool(r.ExportUserPreferencesPreset(clean["name"], clean["path"]))}
-    return _unknown(action, ["launch","runtime_mode","get_version","api_truth","check_version_support","verification_stats","job_status","list_jobs","mcp_update_status","set_mcp_update_policy","ignore_mcp_update","snooze_mcp_update","clear_mcp_update_preferences","get_page","open_page","get_keyframe_mode","set_keyframe_mode","quit","get_fairlight_presets","set_high_priority","disable_background_tasks_for_current_session","list_user_preferences_presets","save_user_preferences_preset","load_user_preferences_preset","delete_user_preferences_preset","import_user_preferences_preset","export_user_preferences_preset","open_control_panel","control_panel_status","close_control_panel","save_state","restore_state"])
+    return _unknown(action, ["launch","runtime_mode","get_version","api_truth","check_version_support","verification_stats","job_status","list_jobs","get_execution_trace","get_execution","list_recent_executions","begin_execution","end_execution","clear_executions","mcp_update_status","set_mcp_update_policy","ignore_mcp_update","snooze_mcp_update","clear_mcp_update_preferences","get_page","open_page","get_keyframe_mode","set_keyframe_mode","quit","get_fairlight_presets","set_high_priority","disable_background_tasks_for_current_session","list_user_preferences_presets","save_user_preferences_preset","load_user_preferences_preset","delete_user_preferences_preset","import_user_preferences_preset","export_user_preferences_preset","open_control_panel","control_panel_status","close_control_panel","save_state","restore_state"])
 
 
 # ─── V2 C4: Per-field corrections with provenance + changelog ────────────────

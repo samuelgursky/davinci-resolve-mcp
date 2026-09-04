@@ -2,6 +2,38 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.206.0 — agent execution traces and observability
+
+Execution traces and observability translating Strands-style agent observability into DaVinci Resolve MCP to answer "Why did the editor do this?".
+
+### Added
+
+- **Agent execution traces & observability ("Why did the editor do this?")**:
+  Multi-step AI operations correlate across tool calls into unified execution
+  traces. Each trace captures the user request or prompt, per-tool timing
+  (`duration_ms`) and invocation counts, cumulative semantic deltas
+  (`items_deleted`, `items_added`), and readback verifications.
+- **Trace query and lifecycle actions on `resolve_control`**:
+  - `get_execution_trace(execution_id?)` / `get_execution(execution_id)`: Look up
+    correlated trace by ID, or the most recent execution if omitted.
+  - `list_recent_executions(limit?)`: List recent execution summaries (newest first).
+  - `begin_execution(request?, execution_id?, initiator?)`: Open a scoped execution
+    so subsequent tool calls in the session automatically thread under this ID.
+  - `end_execution(execution_id?, verification?, status?, notes?)`: Conclude an
+    execution trace and compute aggregated rollups.
+  - `clear_executions(dry_run?)`: Reset the in-memory execution trace buffer.
+- **Direct Python API**: Exported `get_execution_trace`, `get_execution`,
+  `list_recent_executions`, `begin_execution`, `end_execution`, `clear_executions`
+  from `src/utils/execution_trace` and `src/server`.
+
+### Notes on tracing and observability
+
+- **Observer isolation**: Querying `get_execution_trace` or `list_recent_executions`
+  does not record an execution step, preventing observer recursion from corrupting
+  the active trace.
+- **Envelope integration**: The standard `_operation` envelope carries `execution_id`
+  and measured `duration_ms` on every compound tool response.
+
 ## What's New in v2.205.0 — a standard operation envelope on every tool result
 
 Adapted from the design contributed in PR #181.
