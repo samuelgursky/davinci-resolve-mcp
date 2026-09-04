@@ -2,6 +2,23 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.205.2 — #184: background analysis actually starts
+
+### Fixed
+
+- **`background=true` / `async_job=true` silently never ran.**
+  `start_batch_job` derived the runner's project root with
+  `str(plan["output_root"])`, but that field holds the *mapping*
+  `resolve_output_root()` returns, not a path. `str()` on it produced a dict
+  repr — and because that repr is a **non-empty** string it satisfied the
+  `if wants_runner and job_id and project_root` guard, so the runner was handed
+  a "directory" naming nothing on disk. It found no job store, returned
+  `job_not_found`, and the caller was told to go debug a job that existed and
+  was perfectly healthy. Reported and fixed in #184 by @turapins, who also
+  established that `batch_cli` and the analysis dashboard already read the
+  field as a mapping — `server.py` was the single consumer out of step, so the
+  fix belonged there rather than in the mapping's shape.
+
 ## What's New in v2.205.1 — #182: the bridge preflight checks both halves of Resolve's Python lookup
 
 ### Fixed
