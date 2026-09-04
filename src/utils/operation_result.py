@@ -337,6 +337,7 @@ def build_operation_envelope(
     *,
     execution_id: Optional[str] = None,
     mode: Optional[str] = None,
+    duration_ms: Optional[int] = None,
 ) -> Any:
     """Attach the operation envelope to one action's return value."""
     if is_passthrough(raw_result):
@@ -346,12 +347,29 @@ def build_operation_envelope(
     if selected == "legacy":
         return raw_result
 
+    if not execution_id and isinstance(params, dict):
+        candidate = params.get("execution_id") or params.get("_execution_id") or params.get("trace_id")
+        if isinstance(candidate, str) and candidate.strip():
+            execution_id = candidate.strip()
+
+    if not execution_id:
+        try:
+            from src.utils import execution_trace
+            active_id = execution_trace.current_execution_id()
+            if active_id:
+                execution_id = active_id
+        except ImportError:
+            pass
+
     envelope: Dict[str, Any] = {
         "status": normalize_status(raw_result),
         "operation": f"{tool_name}.{action}",
         "execution_id": execution_id or new_execution_id(),
         "verification": extract_verification(raw_result),
     }
+
+    if duration_ms is not None:
+        envelope["duration_ms"] = max(0, int(duration_ms))
 
     changes = extract_changes(raw_result)
     if changes is not None:
