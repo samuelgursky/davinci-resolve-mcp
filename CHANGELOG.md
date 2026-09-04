@@ -2,6 +2,57 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.206.0 — agent execution traces
+
+Adapted from the design contributed in PR #183.
+
+### Added
+
+- **Execution traces answer "why did the editor do this?"** v2.205.0's
+  `_operation` envelope describes one call; a real editorial pass is a loop of
+  them. When an agent removes 17 pauses, seventeen individual returns each show
+  one deletion. A trace correlates them into a single execution carrying the
+  request that started it, the tools invoked and how often, cumulative
+  `duration_ms`, the summed semantic deltas (`items_deleted: 17`), and a
+  verification rollup that keeps a contradiction distinct.
+- **Six actions on `resolve_control`** — `begin_execution`, `end_execution`,
+  `get_execution_trace`, `get_execution`, `list_recent_executions`,
+  `clear_executions` — with the compound tool count unchanged at 36. Any call
+  passing an explicit `execution_id` is correlated automatically; queries are
+  exempt from step recording, so observing a trace cannot alter it.
+- **`duration_ms` on the `_operation` envelope**, measured with
+  `time.perf_counter()` around the call.
+
+### Notes on the adaptation
+
+- **The trace log is anchored to the repo, not the working directory.** It was
+  derived from `os.getcwd()` and returned None when `./logs` did not exist —
+  and the generated client configs set no `cwd`, so on a standard install
+  persistence silently did nothing, with no signal either way. It now sits
+  beside `server.log`, the way `media-analysis-preferences.json` and
+  `server-preferences.json` already do, and the directory is created on first
+  write rather than being a precondition.
+- **`list_recent_executions` reports where the log is and whether it is
+  writable.** The append is best-effort and must never fail a real edit, which
+  means a broken destination is otherwise invisible — "the file is empty" and
+  "nothing is being written" looked identical from the caller's side.
+- **The log rotates at 8 MB, keeping one generation.** The in-memory ring was
+  capped at 100 executions; the file had no bound at all, at one append per
+  tool call, on machines that run for months.
+- **The persistence is described accurately.** It is a synchronous buffered
+  append on the calling thread — measured at ~0.07ms per call, immaterial
+  beside any Resolve round-trip, but "non-blocking" was the wrong word for it.
+  It runs outside the lock, so a slow filesystem cannot serialize concurrent
+  tool calls.
+- **What is recorded is now documented**: tool, action, timing, status,
+  semantic deltas, verification — no parameters, no file paths, no clip or
+  project names. The one free-text field is the `request` passed to
+  `begin_execution`, which on client work deserves the care of a commit
+  message.
+- Verified through the real stdio JSON-RPC tool layer: 36 tools register, a
+  begin/call/end cycle produces one correlated trace, and the reported
+  persistence path is the one actually written.
+
 ## What's New in v2.205.2 — #184: background analysis actually starts
 
 ### Fixed

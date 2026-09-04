@@ -2,7 +2,7 @@
 
 [English](README.md) | 简体中文
 
-[![Version](https://img.shields.io/badge/version-2.205.2-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
+[![Version](https://img.shields.io/badge/version-2.206.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![npm](https://img.shields.io/npm/v/davinci-resolve-mcp.svg?label=npm&color=CB3837)](https://www.npmjs.com/package/davinci-resolve-mcp)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](docs/reference/api-coverage.md)
 [![Tools](https://img.shields.io/badge/MCP%20Tools-36%20(353%20full)-blue.svg)](#服务器模式)
@@ -12,7 +12,7 @@
 [![Python](https://img.shields.io/badge/python-3.10+-green.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
-> 本翻译对应 v2.205.2 版 README。如与英文原版有出入，以 [英文原版](README.md) 为准。
+> 本翻译对应 v2.206.0 版 README。如与英文原版有出入，以 [英文原版](README.md) 为准。
 
 一个 Model Context Protocol (MCP) 服务器，让 AI 助手通过官方脚本 API 控制 DaVinci Resolve Studio（达芬奇）。它提供完整的 API 覆盖，外加带护栏的工作流助手，涵盖剪辑、媒体池整理、渲染设置、审阅标记、调色、Fusion、Fairlight、项目生命周期任务、扩展开发，以及不碰源媒体的媒体分析。
 
@@ -165,6 +165,12 @@ DRX 调色写入**针对 Resolve Studio 做过实机校准**：调色参数默�
 有两种"缺失"是刻意保留其含义的。`verification.status: "unverified"` 表示*没有报告任何证据*，不等于"已检查且没问题"。`changes` 缺失表示这个动作没有报告增量，不等于什么都没改——在那里放一个空的 `{}`，等于对一次并未声明增量的剪辑给出一个自信而错误的回答。
 
 信封是带命名空间的，而不是平铺到顶层，因为 `status`、`operation`、`warnings`、`result` 和 `changes` 在这里本来就都是业务 key；平铺会改写后台任务的 `status: "done"` 和确认关卡的 `status: "confirmation_required"`。用 `setup(action="set_defaults", params={"result_envelope": "pure" | "legacy"})` 改变形态，单次调用用 `params={"envelope": ...}`，进程级用 `RESOLVE_MCP_RESULT_ENVELOPE`。
+
+### Agent 执行轨迹（"编辑器为什么这么做？"）
+
+多步 AI 操作会跨工具调用关联成统一的执行轨迹，聚合各工具耗时（`duration_ms`）、调用次数、累计语义增量（`items_deleted`、`items_added`）以及回读校验结果。通过 `resolve_control` 查看：`get_execution_trace(execution_id?)`、`list_recent_executions()`，或用 `begin_execution(request="...")` / `end_execution()` 圈定一段执行。
+
+轨迹保存在一个容量 100 条的内存环形缓冲里，并追加写入 `logs/execution-traces.jsonl`（就在 `server.log` 旁边，可用 `RESOLVE_MCP_TRACE_FILE` 改位置），文件到 8 MB 会轮转并保留一份上一代。`list_recent_executions` 会返回该路径以及是否可写，这样"日志是空的"和"根本没在写"就能区分开。记录的内容是工具名、动作、耗时、状态、语义增量和校验结果——不记录参数，也不记录文件路径。唯一的自由文本是你传给 `begin_execution` 的 `request`，在客户项目上请把它当成提交信息来写。
 
 ## 可选增强
 
