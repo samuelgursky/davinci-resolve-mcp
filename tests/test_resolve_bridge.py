@@ -910,23 +910,43 @@ class InstallerTargetTests(unittest.TestCase):
         self.assertIsNotNone(probe_markers, "probe has no PARENT_MARKERS to compare")
         self.assertEqual(tuple(rb.PARENT_MARKERS), probe_markers)
 
+    def _python3_home_for(self, prefix: str) -> dict:
+        """python3_home_prefix() as if launchd carried this PYTHON3HOME.
+
+        Patches launchd_env rather than the environment: the function reads
+        launchctl on purpose (a shell export is invisible to a GUI-launched
+        Resolve), and a test that went through os.environ would be exercising
+        the one path that does not matter.
+        """
+        from unittest import mock
+
+        with mock.patch.object(self.installer, "launchd_env", lambda name: prefix):
+            return self.installer.python3_home_prefix()
+
     def _darwin_preflight(self, *, frameworks=(), python3_home=None,
-                          shell_home=None, fallback_exists=False):
+                          shell_home=None, fallback_exists=False,
+                          home_usable=True, home_reason="unusable prefix"):
         """python_preflight() on a synthetic macOS machine.
 
         Pinned to darwin explicitly: the check is macOS-only, so on a Linux or
         Windows runner an unpinned version would assert the very false alarm the
         platform gate exists to suppress.
+
+        `home_usable=False` is the issue #182 state: PYTHON3HOME set, and
+        pointing somewhere Resolve cannot actually use.
         """
         import sys as _sys
         from unittest import mock
 
+        usable = python3_home is not None and home_usable
         home = {
             "value": python3_home,
             "in_launchd": python3_home is not None,
             "in_this_shell": shell_home,
             "dylib": f"{python3_home}/lib/libpython3.12.dylib" if python3_home else None,
-            "usable": python3_home is not None,
+            "interpreter": f"{python3_home}/bin/python3" if usable else None,
+            "reason": None if usable or python3_home is None else home_reason,
+            "usable": usable,
         }
         fallback = {
             "path": "/usr/local/bin/python3",
@@ -986,6 +1006,101 @@ class InstallerTargetTests(unittest.TestCase):
         self.assertTrue(preflight["resolve_will_list_python_scripts"])
         self.assertIn("launchd", preflight["advice"])
         self.assertIn("launchctl setenv", preflight["advice"])
+
+    def test_a_dylib_without_bin_python3_is_not_usable(self) -> None:
+        """Issue #182. Resolve does two things with the prefix — runs
+        `<prefix>/bin/python3` and dlopens `<prefix>/lib/libpython3.X.dylib` —
+        and validating only the second reported `usable: true` for a prefix
+        Resolve could not run. The user was told it was configured correctly and
+        then got zero Python scripts and no error, which puts the real cause in
+        the last place anyone looks."""
+        with tempfile.TemporaryDirectory() as tmp:
+            prefix = Path(tmp)
+            (prefix / "lib").mkdir()
+            (prefix / "lib" / "libpython3.13.dylib").write_bytes(b"")
+            (prefix / "bin").mkdir()
+            # What a Homebrew framework build actually ships: the versioned name
+            # only. Resolve invokes the unversioned one.
+            (prefix / "bin" / "python3.13").write_bytes(b"")
+            home = self._python3_home_for(str(prefix))
+
+        self.assertFalse(home["usable"])
+        self.assertIsNotNone(home["dylib"])
+        self.assertIsNone(home["interpreter"])
+        self.assertIn("python3.13", home["reason"])
+        self.assertIn("UNVERSIONED", home["reason"])
+
+    def test_both_halves_present_is_usable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            prefix = Path(tmp)
+            (prefix / "lib").mkdir()
+            (prefix / "lib" / "libpython3.13.dylib").write_bytes(b"")
+            (prefix / "bin").mkdir()
+            (prefix / "bin" / "python3").write_bytes(b"")
+            home = self._python3_home_for(str(prefix))
+
+        self.assertTrue(home["usable"])
+        self.assertIsNone(home["reason"])
+
+    def test_an_interpreter_with_no_dylib_is_not_usable_either(self) -> None:
+        """The other half, unchanged in effect but now explained: Resolve embeds
+        the interpreter, so a build with no shared library cannot be used."""
+        with tempfile.TemporaryDirectory() as tmp:
+            prefix = Path(tmp)
+            (prefix / "bin").mkdir()
+            (prefix / "bin" / "python3").write_bytes(b"")
+            home = self._python3_home_for(str(prefix))
+
+        self.assertFalse(home["usable"])
+        self.assertIn("dlopen", home["reason"])
+
+    def test_a_dangling_bin_python3_symlink_does_not_count(self) -> None:
+        """`.exists()` follows the link, which is the right semantics here: a
+        dangling symlink is exactly as runnable as nothing at all."""
+        with tempfile.TemporaryDirectory() as tmp:
+            prefix = Path(tmp)
+            (prefix / "lib").mkdir()
+            (prefix / "lib" / "libpython3.13.dylib").write_bytes(b"")
+            (prefix / "bin").mkdir()
+            (prefix / "bin" / "python3").symlink_to(prefix / "bin" / "gone")
+            home = self._python3_home_for(str(prefix))
+
+        self.assertFalse(home["usable"])
+
+    def test_an_unusable_python3home_fails_the_preflight(self) -> None:
+        """The reported symptom: the closing warning must fire instead of a
+        false all-clear."""
+        preflight = self._darwin_preflight(
+            python3_home="/opt/homebrew/opt/python@3.13/Frameworks/"
+                         "Python.framework/Versions/3.13",
+            home_usable=False)
+        self.assertFalse(preflight["resolve_will_list_python_scripts"])
+        self.assertIn("PYTHON3HOME", preflight["advice"])
+
+    def test_an_unusable_python3home_is_called_out_even_when_another_route_works(self) -> None:
+        """PYTHON3HOME is read FIRST, and whether Resolve falls back after
+        choosing a prefix it cannot use is inferred from string adjacency, not
+        established. Staying quiet because /usr/local/bin/python3 happens to
+        exist would rest a clean bill of health on a route Resolve may never
+        reach."""
+        preflight = self._darwin_preflight(
+            python3_home="/broken/prefix", home_usable=False, fallback_exists=True)
+        self.assertIsNotNone(preflight["advice"])
+        self.assertIn("reads PYTHON3HOME first", preflight["advice"])
+        self.assertIn("unsetenv", preflight["advice"])
+
+    def test_the_advice_says_launchctl_setenv_does_not_survive_a_reboot(self) -> None:
+        """Otherwise scripts stop listing weeks later, with the same absence of
+        any error, long after anyone connects it to this step."""
+        preflight = self._darwin_preflight()
+        self.assertIn("reboot", preflight["advice"])
+        self.assertIn("/usr/local/bin/python3", preflight["advice"])
+
+    def test_the_canary_names_the_unversioned_interpreter_requirement(self) -> None:
+        # The canary is what a user reads when nothing else worked; it has to
+        # carry the same trap the preflight now detects.
+        self.assertIn("unversioned", self.installer._LUA_CANARY)
+        self.assertIn("reboot", self.installer._LUA_CANARY)
 
     def test_launchd_env_does_not_read_our_own_environment(self) -> None:
         """The one thing launchd_env must never do. os.environ would report a hit

@@ -41,6 +41,14 @@ Existing tool call sites work unchanged. Two things to know when diagnosing it:
   canary, which always lists, so "Python not detected" is distinguishable from
   "wrong folder". The preflight is macOS-only — off macOS Resolve finds Python
   by other means, and running the check there was a false alarm (#106).
+  Two follow-ups from #182 worth having in hand when a user says the menu is
+  empty despite a set `PYTHON3HOME`: the prefix needs **both**
+  `lib/libpython3.X.dylib` and `bin/python3` under that **unversioned** name
+  (Homebrew framework builds often ship only `python3.X`, so half the check
+  passes on the very interpreter people reach for), and `launchctl setenv` does
+  not survive a reboot — a bridge that listed for weeks and then stopped, with
+  no error anywhere, is usually that. `sudo ln -s "$(command -v python3)"
+  /usr/local/bin/python3` is the persistent alternative.
 - **Windows: both script folders confirmed.** `%PROGRAMDATA%` (#109) and
   `%APPDATA%` (#112) have each been shown serving the bridge on Windows 11 free
   builds. If a user reports the menu entry missing on Windows, ask whether the

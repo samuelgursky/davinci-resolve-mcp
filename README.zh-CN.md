@@ -2,7 +2,7 @@
 
 [English](README.md) | 简体中文
 
-[![Version](https://img.shields.io/badge/version-2.205.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
+[![Version](https://img.shields.io/badge/version-2.205.1-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![npm](https://img.shields.io/npm/v/davinci-resolve-mcp.svg?label=npm&color=CB3837)](https://www.npmjs.com/package/davinci-resolve-mcp)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](docs/reference/api-coverage.md)
 [![Tools](https://img.shields.io/badge/MCP%20Tools-36%20(353%20full)-blue.svg)](#服务器模式)
@@ -12,7 +12,7 @@
 [![Python](https://img.shields.io/badge/python-3.10+-green.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
-> 本翻译对应 v2.205.0 版 README。如与英文原版有出入，以 [英文原版](README.md) 为准。
+> 本翻译对应 v2.205.1 版 README。如与英文原版有出入，以 [英文原版](README.md) 为准。
 
 一个 Model Context Protocol (MCP) 服务器，让 AI 助手通过官方脚本 API 控制 DaVinci Resolve Studio（达芬奇）。它提供完整的 API 覆盖，外加带护栏的工作流助手，涵盖剪辑、媒体池整理、渲染设置、审阅标记、调色、Fusion、Fairlight、项目生命周期任务、扩展开发，以及不碰源媒体的媒体分析。
 
@@ -60,6 +60,12 @@ launchctl setenv PYTHON3HOME "$(python3 -c 'import sys; print(sys.prefix)')"
 ```
 
 必须用 `launchctl setenv` 而不是 `export`——Resolve 从 Dock 启动，看不到你 shell 的环境变量。之后重启 Resolve。安装时会顺带装一个 Lua 金丝雀脚本，帮你区分"Python 未被检测到"和"目录放错"。
+
+有两个坑（#182）。前缀里必须**同时**有 `lib/libpython3.X.dylib` 和 `bin/python3`——而且是这个**不带版本号**的名字。Homebrew 的 framework 构建经常只提供 `bin/python3.13`，在 Resolve 眼里这只算半个 Python；安装器的预检现在会明说这一点，而不是报告前缀可用。另外，`launchctl setenv` **在重启后不会保留**；如果几周之后脚本又不列出来了且没有任何报错，通常就是这个原因。想要持久生效，就把解释器放到 Resolve 本来就会查的位置（这条需要 `sudo`，并且先确认 `/usr/local/bin` 没有排在你常用 Python 的 `PATH` 前面）：
+
+```bash
+sudo ln -s "$(command -v python3)" /usr/local/bin/python3
+```
 
 已在免费版 21.0.3.7 和 Studio 19.1.3.7 上验证（均为 macOS）。v2.70.1（issue #106）加入的 Windows 路径发布时未经验证；后续免费版 21.0.1.11（issue #109）和免费版 21.0.3.7（issue #112）的用户报告证实，Windows 11 上桥接在 `%PROGRAMDATA%` 和 `%APPDATA%` **两处**都能安装、列出并正常服务，这些路径现在是已证实而非假设。Linux 同样已获证实：免费版 20.3.2.9 的用户报告（issue #129，Fedora 43）显示桥接可安装到 `~/.local/share/DaVinciResolve/Fusion/Scripts/Utility`，用系统 Python 就能直接枚举脚本（Linux 完全没有这套查找问题），并能端到端正常服务。现在没有任何平台停留在假设上：macOS 为本项目直接验证，Windows 和 Linux 来自用户报告。
 

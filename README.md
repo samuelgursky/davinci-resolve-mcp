@@ -2,7 +2,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-[![Version](https://img.shields.io/badge/version-2.205.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
+[![Version](https://img.shields.io/badge/version-2.205.1-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![npm](https://img.shields.io/npm/v/davinci-resolve-mcp.svg?label=npm&color=CB3837)](https://www.npmjs.com/package/davinci-resolve-mcp)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](docs/reference/api-coverage.md)
 [![Tools](https://img.shields.io/badge/MCP%20Tools-36%20(353%20full)-blue.svg)](#server-modes)
@@ -79,6 +79,20 @@ Use `launchctl setenv`, not `export` — Resolve is launched from the Dock and
 never sees your shell's environment. Restart Resolve afterwards. A Lua canary is
 installed alongside so you can tell "Python not detected" apart from a wrong
 folder.
+
+Two things that bite (#182). The prefix must contain **both**
+`lib/libpython3.X.dylib` and `bin/python3` under that exact **unversioned**
+name — Homebrew's framework builds often ship only `bin/python3.13`, which is
+half a Python as far as Resolve is concerned, and the installer's preflight now
+says so instead of reporting a usable prefix. And `launchctl setenv` **does not
+survive a reboot**; if scripts stop listing weeks later with no error, that is
+why. For something persistent, put an interpreter where Resolve already looks
+(this one needs `sudo`, and check that `/usr/local/bin` does not precede your
+normal Python on `PATH`):
+
+```bash
+sudo ln -s "$(command -v python3)" /usr/local/bin/python3
+```
 
 Validated on free 21.0.3.7 and Studio 19.1.3.7, both macOS. The Windows paths
 added in v2.70.1 (issue #106) shipped unverified; reports on free 21.0.1.11

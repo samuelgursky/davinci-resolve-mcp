@@ -2,6 +2,47 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.205.1 — #182: the bridge preflight checks both halves of Resolve's Python lookup
+
+### Fixed
+
+- **A `PYTHON3HOME` prefix with a dylib but no `bin/python3` is no longer
+  reported as usable.** fusionscript.so does two things with the prefix — runs
+  `<prefix>/bin/python3` and dlopens `<prefix>/lib/libpython3.X.dylib`, whose
+  strings sit adjacent in the binary — and the preflight validated only the
+  second. It answered `python3_home.usable: true` and
+  `resolve_will_list_python_scripts: true` while Resolve listed **zero** Python
+  scripts and logged nothing, which is the worst shape this failure can take:
+  the user has been told the thing is configured correctly, so the real cause
+  is the last place they look. Reported in #182, with the root cause and the
+  fix both correct as filed.
+- **The interpreter has to be there under the unversioned name.** `python3` is
+  the literal name in the binary, and that is what makes this trap easy to hit:
+  a Homebrew framework prefix carries a perfectly good
+  `lib/libpython3.13.dylib` next to a `bin/` that has `python3.13` and no
+  `python3`. It is formula-dependent — `python@3.14` ships one, `python@3.11`
+  and `python@3.13` do not — so the same "Homebrew Python" advice works on one
+  machine and silently fails on the next. `framework_pythons()` has always
+  required `bin/python3`; this is the same rule applied to the route that
+  skipped it.
+- **A set-but-unusable `PYTHON3HOME` is now called out even when another
+  discovery route exists.** Resolve reads it first, and whether it falls back
+  after choosing a prefix it cannot use is inferred from string adjacency
+  rather than established — so resting a clean bill of health on a route
+  Resolve may never reach is the same false all-clear in a new place. The
+  preflight names the mismatch, prints the exact `ln -s` that repairs it, and
+  suggests `launchctl unsetenv` as the alternative.
+
+### Changed
+
+- **The advice says that `launchctl setenv` does not survive a reboot.** A
+  bridge that listed for weeks and then stopped, with no error anywhere, is
+  usually that, and nobody connects it back to a step they ran a month
+  earlier. `sudo ln -s "$(command -v python3)" /usr/local/bin/python3` is
+  offered as the persistent alternative, with the `PATH` caveat — presented
+  alongside the sudo-free route rather than replacing it, since avoiding a
+  system-wide install is the whole point of the #143 fix.
+
 ## What's New in v2.205.0 — a standard operation envelope on every tool result
 
 Adapted from the design contributed in PR #181.
