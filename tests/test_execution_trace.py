@@ -221,6 +221,72 @@ class ExecutionTraceUnitTest(unittest.TestCase):
         self.assertEqual(trace["changes"]["slices"], num_threads * steps_per_thread)
         self.assertEqual(trace["tools"][0]["count"], num_threads * steps_per_thread)
 
+    def test_export_execution_report_writes_markdown_audit(self):
+        import os
+        import tempfile
+
+        begin = et.begin_execution(request="Remove dead air")
+        exec_id = begin["execution_id"]
+        et.record_step(
+            tool="timeline",
+            action="delete_item",
+            params={},
+            raw_result={"success": True},
+            duration_ms=25,
+            changes={"items_deleted": 1},
+            verification={"status": "passed", "checks": [{"check": "readback", "passed": True}]},
+            warnings=["Skipped locked track"],
+        )
+        et.end_execution(exec_id, notes="Reviewed after edit")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "audit.md")
+            out = et.export_execution_report(exec_id, output_path=path)
+            self.assertTrue(out["success"])
+            self.assertEqual(out["format"], "markdown")
+            self.assertTrue(os.path.isfile(path))
+
+            with open(path, "r", encoding="utf-8") as fh:
+                text = fh.read()
+
+        self.assertIn("# Execution Audit Report", text)
+        self.assertIn("Remove dead air", text)
+        self.assertIn("timeline.delete_item", text)
+        self.assertIn("items_deleted", text)
+        self.assertIn("Skipped locked track", text)
+        self.assertIn("Reviewed after edit", text)
+
+    def test_export_execution_report_writes_json_and_protects_existing_file(self):
+        import os
+        import tempfile
+
+        trace = et.record_step("setup", "schema", {"request": "Inspect setup"}, {"success": True}, 3)
+        exec_id = trace["execution_id"]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "audit.json")
+            out = et.export_execution_report(
+                exec_id,
+                report_format="json",
+                output_path=path,
+                include_steps=False,
+            )
+            self.assertTrue(out["success"])
+            self.assertFalse(out["included_steps"])
+            with open(path, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+
+            self.assertEqual(data["execution_id"], exec_id)
+            self.assertEqual(data["request"], "Inspect setup")
+            self.assertNotIn("steps", data)
+            with self.assertRaises(FileExistsError):
+                et.export_execution_report(exec_id, report_format="json", output_path=path)
+
+    def test_export_execution_report_rejects_unknown_format(self):
+        trace = et.record_step("setup", "schema", {}, {"success": True}, 3)
+        with self.assertRaises(ValueError):
+            et.export_execution_report(trace["execution_id"], report_format="html")
+
 
 class ServerExecutionTraceIntegrationTest(unittest.TestCase):
     def setUp(self):
@@ -286,11 +352,16 @@ class ServerExecutionTraceIntegrationTest(unittest.TestCase):
         self.assertGreaterEqual(real_clear["cleared"], 1)
 
     def test_observer_actions_do_not_pollute_trace(self):
+        import os
+        import tempfile
+
         compound.resolve_control("begin_execution", {"request": "Observer test"})
         compound.setup("schema")
         # Inspecting traces multiple times
         compound.resolve_control("get_execution_trace")
         compound.resolve_control("list_recent_executions")
+        with tempfile.TemporaryDirectory() as tmp:
+            compound.resolve_control("export_execution_report", {"path": os.path.join(tmp, "audit.md")})
         trace = compound.resolve_control("end_execution")["trace"]
 
         # Only setup.schema should be recorded as a tool step, NOT get_execution_trace or list_recent_executions
@@ -298,6 +369,29 @@ class ServerExecutionTraceIntegrationTest(unittest.TestCase):
         self.assertIn("setup.schema", tool_names)
         self.assertNotIn("resolve_control.get_execution_trace", tool_names)
         self.assertNotIn("resolve_control.list_recent_executions", tool_names)
+        self.assertNotIn("resolve_control.export_execution_report", tool_names)
+
+    def test_resolve_control_exports_execution_report(self):
+        import os
+        import tempfile
+
+        compound.resolve_control("begin_execution", {"request": "Create reviewable audit"})
+        compound.setup("schema")
+        trace = compound.resolve_control("end_execution")["trace"]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "audit.md")
+            out = compound.resolve_control("export_execution_report", {
+                "execution_id": trace["execution_id"],
+                "format": "markdown",
+                "path": path,
+            })
+
+            self.assertTrue(out["success"])
+            self.assertEqual(out["execution_id"], trace["execution_id"])
+            self.assertEqual(out["path"], os.path.realpath(path))
+            self.assertGreater(out["bytes"], 0)
+            self.assertTrue(os.path.isfile(path))
 
     def test_direct_functions_exported_on_server(self):
         from src.server import (
@@ -307,6 +401,7 @@ class ServerExecutionTraceIntegrationTest(unittest.TestCase):
             begin_execution,
             end_execution,
             clear_executions,
+            export_execution_report,
         )
         self.assertTrue(callable(get_execution_trace))
         self.assertTrue(callable(get_execution))
@@ -314,6 +409,7 @@ class ServerExecutionTraceIntegrationTest(unittest.TestCase):
         self.assertTrue(callable(begin_execution))
         self.assertTrue(callable(end_execution))
         self.assertTrue(callable(clear_executions))
+        self.assertTrue(callable(export_execution_report))
 
 
 class TraceLogLocationTests(unittest.TestCase):

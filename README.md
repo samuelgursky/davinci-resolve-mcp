@@ -2,7 +2,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-[![Version](https://img.shields.io/badge/version-2.206.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
+[![Version](https://img.shields.io/badge/version-2.207.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![npm](https://img.shields.io/npm/v/davinci-resolve-mcp.svg?label=npm&color=CB3837)](https://www.npmjs.com/package/davinci-resolve-mcp)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](docs/reference/api-coverage.md)
 [![Tools](https://img.shields.io/badge/MCP%20Tools-36%20(353%20full)-blue.svg)](#server-modes)
@@ -274,6 +274,9 @@ semantic deltas (`items_deleted`, `items_added`), and readback verifications.
 Agents and editors can inspect workflows via `resolve_control`:
 `get_execution_trace(execution_id?)`, `list_recent_executions()`, or open a
 scoped execution with `begin_execution(request="...")` / `end_execution()`.
+`export_execution_report(execution_id?, format="markdown"|"json")` writes a
+reviewable audit artifact with the same summary, defaulting to
+`logs/execution-reports/<execution_id>.md`.
 
 Traces live in a 100-entry in-memory ring and are appended to
 `logs/execution-traces.jsonl` beside `server.log` — `RESOLVE_MCP_TRACE_FILE`

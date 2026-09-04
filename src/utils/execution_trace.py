@@ -26,11 +26,12 @@ import collections
 import json
 import logging
 import os
+import re
 import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Deque, Dict, List, Optional
+from typing import Any, Deque, Dict, List, Optional, Union
 
 logger = logging.getLogger("resolve-mcp.execution-trace")
 
@@ -464,6 +465,232 @@ def clear_executions() -> Dict[str, Any]:
         _RECENT_ORDER.clear()
         _ACTIVE_EXECUTION_ID = None
     return {"success": True, "cleared": count}
+
+
+# ── Audit Reports ───────────────────────────────────────────────────────────
+
+def _report_format(report_format: str) -> str:
+    fmt = str(report_format or "markdown").strip().lower()
+    if fmt in {"md", "markdown"}:
+        return "markdown"
+    if fmt == "json":
+        return "json"
+    raise ValueError("format must be markdown or json")
+
+
+def _report_extension(report_format: str) -> str:
+    return ".md" if _report_format(report_format) == "markdown" else ".json"
+
+
+def _report_filename(execution_id: str, report_format: str) -> str:
+    safe_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(execution_id or "execution")).strip("._")
+    if not safe_id:
+        safe_id = "execution"
+    return f"{safe_id}{_report_extension(report_format)}"
+
+
+def execution_report_dir() -> str:
+    """Directory used for generated execution audit reports."""
+    override = os.environ.get("RESOLVE_MCP_TRACE_REPORT_DIR")
+    if override:
+        return os.path.realpath(os.path.abspath(os.path.expanduser(override)))
+    return str(_REPO_ROOT / "logs" / "execution-reports")
+
+
+def _default_report_path(trace: Dict[str, Any], report_format: str) -> str:
+    return str(Path(execution_report_dir()) / _report_filename(trace["execution_id"], report_format))
+
+
+def _format_ms(value: Any) -> str:
+    try:
+        return f"{max(0, int(value))} ms"
+    except (TypeError, ValueError):
+        return "0 ms"
+
+
+def _scalar(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, sort_keys=True, ensure_ascii=False)
+    return str(value)
+
+
+def _markdown_row(*cells: Any) -> str:
+    escaped = []
+    for cell in cells:
+        text = _scalar(cell).replace("\n", " ").replace("|", "\\|")
+        escaped.append(text)
+    return "| " + " | ".join(escaped) + " |"
+
+
+def _execution_report_json(trace: Dict[str, Any], *, include_steps: bool = True) -> Dict[str, Any]:
+    """Return a stable, compact report object derived from safe trace summaries."""
+    out = {
+        "execution_id": trace.get("execution_id"),
+        "request": trace.get("request"),
+        "status": trace.get("status"),
+        "started_at": trace.get("started_at"),
+        "ended_at": trace.get("ended_at"),
+        "duration_ms": trace.get("duration_ms", 0),
+        "initiator": trace.get("initiator"),
+        "is_active": trace.get("is_active", False),
+        "tools": trace.get("tools", []),
+        "changes": trace.get("changes"),
+        "verification": trace.get("verification", {}),
+        "warnings": trace.get("warnings", []),
+    }
+    if trace.get("notes"):
+        out["notes"] = trace.get("notes")
+    if include_steps:
+        out["steps"] = trace.get("steps", [])
+    return out
+
+
+def _execution_report_markdown(trace: Dict[str, Any], *, include_steps: bool = True) -> str:
+    report = _execution_report_json(trace, include_steps=include_steps)
+    lines = [
+        "# Execution Audit Report",
+        "",
+        _markdown_row("Field", "Value"),
+        _markdown_row("---", "---"),
+        _markdown_row("Execution ID", report.get("execution_id")),
+        _markdown_row("Request", report.get("request")),
+        _markdown_row("Status", report.get("status")),
+        _markdown_row("Started", report.get("started_at")),
+        _markdown_row("Ended", report.get("ended_at")),
+        _markdown_row("Duration", _format_ms(report.get("duration_ms"))),
+        _markdown_row("Initiator", report.get("initiator")),
+        "",
+        "## Tool Summary",
+        "",
+    ]
+
+    tools = report.get("tools") or []
+    if tools:
+        lines.extend([
+            _markdown_row("Tool", "Calls", "Duration"),
+            _markdown_row("---", "---:", "---:"),
+        ])
+        for tool in tools:
+            lines.append(_markdown_row(tool.get("tool"), tool.get("count", 0), _format_ms(tool.get("duration_ms"))))
+    else:
+        lines.append("No tool calls recorded.")
+
+    lines.extend(["", "## Changes", ""])
+    changes = report.get("changes")
+    if isinstance(changes, dict) and changes:
+        lines.extend([
+            _markdown_row("Change", "Value"),
+            _markdown_row("---", "---"),
+        ])
+        for key in sorted(changes):
+            lines.append(_markdown_row(key, changes[key]))
+    else:
+        lines.append("No semantic changes recorded.")
+
+    verification = report.get("verification") or {}
+    lines.extend([
+        "",
+        "## Verification",
+        "",
+        _markdown_row("Field", "Value"),
+        _markdown_row("---", "---"),
+        _markdown_row("Status", verification.get("status")),
+        _markdown_row("Passed", verification.get("passed")),
+        _markdown_row("Contradiction", verification.get("contradiction")),
+        _markdown_row("Checks", len(verification.get("checks") or [])),
+    ])
+
+    warnings = report.get("warnings") or []
+    lines.extend(["", "## Warnings", ""])
+    if warnings:
+        lines.extend(f"- {_scalar(w)}" for w in warnings)
+    else:
+        lines.append("No warnings recorded.")
+
+    if report.get("notes"):
+        lines.extend(["", "## Notes", "", _scalar(report["notes"])])
+
+    if include_steps:
+        lines.extend(["", "## Steps", ""])
+        steps = report.get("steps") or []
+        if steps:
+            lines.extend([
+                _markdown_row("#", "Timestamp", "Operation", "Status", "Duration"),
+                _markdown_row("---:", "---", "---", "---", "---:"),
+            ])
+            for step in steps:
+                lines.append(_markdown_row(
+                    step.get("seq"),
+                    step.get("timestamp"),
+                    step.get("operation"),
+                    step.get("status"),
+                    _format_ms(step.get("duration_ms")),
+                ))
+        else:
+            lines.append("No steps recorded.")
+
+    lines.append("")
+    return "\n".join(lines)
+
+
+def render_execution_report(
+    trace: Dict[str, Any],
+    *,
+    report_format: str = "markdown",
+    include_steps: bool = True,
+) -> Union[str, Dict[str, Any]]:
+    """Render an execution trace as a Markdown or JSON audit report."""
+    fmt = _report_format(report_format)
+    if fmt == "json":
+        return _execution_report_json(trace, include_steps=include_steps)
+    return _execution_report_markdown(trace, include_steps=include_steps)
+
+
+def export_execution_report(
+    execution_id: Optional[str] = None,
+    *,
+    report_format: str = "markdown",
+    output_path: Optional[str] = None,
+    overwrite: bool = False,
+    include_steps: bool = True,
+) -> Optional[Dict[str, Any]]:
+    """Write an execution audit report to disk.
+
+    The export is built from trace summaries, not raw tool arguments/results.
+    """
+    trace = get_execution_trace(execution_id)
+    if not trace:
+        return None
+
+    fmt = _report_format(report_format)
+    path = output_path or _default_report_path(trace, fmt)
+    real_path = os.path.realpath(os.path.abspath(os.path.expanduser(path)))
+    if os.path.exists(real_path) and not overwrite:
+        raise FileExistsError(f"Report already exists: {real_path}")
+
+    rendered = render_execution_report(trace, report_format=fmt, include_steps=include_steps)
+    os.makedirs(os.path.dirname(real_path), exist_ok=True)
+    if fmt == "json":
+        payload = json.dumps(rendered, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+    else:
+        payload = str(rendered)
+    with open(real_path, "w", encoding="utf-8") as fh:
+        fh.write(payload)
+
+    return {
+        "success": True,
+        "execution_id": trace["execution_id"],
+        "format": fmt,
+        "path": real_path,
+        "bytes": len(payload.encode("utf-8")),
+        "included_steps": bool(include_steps),
+    }
 
 
 # ── Persistence (Best-Effort) ────────────────────────────────────────────────
