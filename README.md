@@ -276,7 +276,14 @@ Agents and editors can inspect workflows via `resolve_control`:
 scoped execution with `begin_execution(request="...")` / `end_execution()`.
 `export_execution_report(execution_id?, format="markdown"|"json")` writes a
 reviewable audit artifact with the same summary, defaulting to
-`logs/execution-reports/<execution_id>.md`.
+`logs/execution-reports/<execution_id>.md`. `path` writes it anywhere you want
+it instead — alongside a conform in a dated TransferFiles folder, say — and
+creates the directories to get there, so check the path before you send it.
+An existing file is never replaced without `overwrite: true`.
+
+A report for a run where nothing was verified says **"not established — no
+checks recorded"**, not "passed". Absence of evidence is a question still open,
+and an audit document is the last place to let a reader read it as an all-clear.
 
 Traces live in a 100-entry in-memory ring and are appended to
 `logs/execution-traces.jsonl` beside `server.log` — `RESOLVE_MCP_TRACE_FILE`

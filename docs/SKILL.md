@@ -298,6 +298,18 @@ The file rotates at 8 MB, keeping one previous generation as
 Audit reports are separate point-in-time exports; `RESOLVE_MCP_TRACE_REPORT_DIR`
 moves their default directory without moving the append-only trace log.
 
+`path` is honoured as given — the report can be written anywhere, and the
+directories are created to reach it. That is deliberate (a conform's paperwork
+belongs beside the conform, not in `logs/`), so treat it the way you would any
+other export destination and do not invent a path near source media. The
+`execution_id` route cannot escape the report directory: it is sanitised to a
+filename.
+
+A report whose run recorded no verification checks renders **"not established
+— no checks recorded"** in the Passed row, never "yes" — the same rule as
+`verification.status: "unverified"` in the envelope. Do not report such a run
+to the user as verified.
+
 ---
 
 ## Two Server Modes

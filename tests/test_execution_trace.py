@@ -536,5 +536,73 @@ class TraceLogLocationTests(unittest.TestCase):
         self.assertIsInstance(out, dict)
 
 
+class UnverifiedIsNotAPassTests(unittest.TestCase):
+    """An audit report must not present absence of evidence as a pass.
+
+    The rollup collapsed "nothing reported any evidence" into `passed: True`,
+    and the Markdown renderer printed it verbatim — so a report for a wholly
+    unverified workflow read `Status: unverified` on one line and
+    `Passed: yes` on the next. Those are inches apart and only one of them
+    gets scanned. This is the same distinction v2.206.0 documented for
+    `verification.status`, now carried into a document meant to be reviewed
+    and shared.
+    """
+
+    def setUp(self):
+        import os
+        import tempfile
+
+        from src.utils import execution_trace
+
+        self.et = execution_trace
+        self.et.clear_executions()
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        os.environ["RESOLVE_MCP_TRACE_REPORT_DIR"] = self._tmp.name
+        self.addCleanup(lambda: os.environ.pop("RESOLVE_MCP_TRACE_REPORT_DIR", None))
+
+    def _report(self, verification=None):
+        import src.server as compound
+
+        compound.resolve_control("begin_execution", {"request": "audit"})
+        compound.setup("get_defaults")
+        compound.resolve_control(
+            "end_execution", {"verification": verification} if verification else {})
+        out = compound.resolve_control("export_execution_report", {"overwrite": True})
+        with open(out["path"], encoding="utf-8") as fh:
+            return fh.read()
+
+    def test_an_unverified_run_does_not_say_it_passed(self):
+        body = self._report()
+        self.assertIn("| Status | unverified |", body)
+        self.assertNotIn("| Passed | yes |", body)
+        self.assertIn("no checks recorded", body)
+
+    def test_a_verified_run_still_says_yes(self):
+        body = self._report(
+            {"status": "passed", "checks": [{"check": "readback", "passed": True}]})
+        self.assertIn("| Passed | yes |", body)
+
+    def test_a_failed_run_says_no(self):
+        body = self._report(
+            {"status": "failed", "checks": [{"check": "readback", "passed": False}]})
+        self.assertIn("| Passed | no |", body)
+
+    def test_the_rollup_reports_unknown_rather_than_true(self):
+        # The data model, not just its rendering: agents read this field too.
+        rolled = self.et._merge_verification(
+            {"status": "unverified", "passed": None, "contradiction": False, "checks": []},
+            {"status": "unverified", "checks": []},
+        )
+        self.assertIsNone(rolled["passed"])
+        self.assertEqual(rolled["status"], "unverified")
+
+    def test_a_fresh_trace_starts_unknown(self):
+        self.et.begin_execution(request="fresh")
+        trace = self.et.get_execution_trace()
+        self.assertIsNone(trace["verification"]["passed"])
+        self.et.end_execution()
+
+
 if __name__ == "__main__":
     unittest.main()

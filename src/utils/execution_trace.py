@@ -136,8 +136,12 @@ def _merge_verification(
         status = "passed"
         passed = True
     else:
+        # None, not True. Nothing reported any evidence either way, and
+        # collapsing that into a boolean makes the rollup assert a pass it
+        # never observed — which then reaches a human as "Passed: yes" in an
+        # exported audit report.
         status = "unverified"
-        passed = True
+        passed = None
 
     return {
         "status": status,
@@ -175,7 +179,10 @@ def begin_execution(
         "changes": None,
         "verification": {
             "status": "unverified",
-            "passed": True,
+            # None, not True. "Nothing was checked" is not "everything passed",
+            # and the difference reaches a human in an exported audit report —
+            # see _execution_report_markdown.
+            "passed": None,
             "contradiction": False,
             "checks": [],
         },
@@ -314,7 +321,7 @@ def record_step(
                 "changes": None,
                 "verification": {
                     "status": "unverified",
-                    "passed": True,
+                    "passed": None,  # see above: unknown, not passed
                     "contradiction": False,
                     "checks": [],
                 },
@@ -339,7 +346,7 @@ def record_step(
                     "changes": None,
                     "verification": {
                         "status": "unverified",
-                        "passed": True,
+                        "passed": None,  # see above: unknown, not passed
                         "contradiction": False,
                         "checks": [],
                     },
@@ -601,7 +608,7 @@ def _execution_report_markdown(trace: Dict[str, Any], *, include_steps: bool = T
         _markdown_row("Field", "Value"),
         _markdown_row("---", "---"),
         _markdown_row("Status", verification.get("status")),
-        _markdown_row("Passed", verification.get("passed")),
+        _markdown_row("Passed", _verification_passed_label(verification)),
         _markdown_row("Contradiction", verification.get("contradiction")),
         _markdown_row("Checks", len(verification.get("checks") or [])),
     ])
@@ -637,6 +644,21 @@ def _execution_report_markdown(trace: Dict[str, Any], *, include_steps: bool = T
 
     lines.append("")
     return "\n".join(lines)
+
+
+def _verification_passed_label(verification: Dict[str, Any]) -> str:
+    """How the Passed row reads when nothing was actually verified.
+
+    A report that prints `Status: unverified` beside `Passed: yes` is read by a
+    human as "it passed" — the two lines are inches apart and only one of them
+    is scanned. Unverified means no evidence was reported, which is a question
+    still open, not a clean bill of health; an audit document is the last place
+    that distinction should be left to the reader.
+    """
+    passed = verification.get("passed")
+    if passed is None:
+        return "not established — no checks recorded"
+    return "yes" if passed else "no"
 
 
 def render_execution_report(
