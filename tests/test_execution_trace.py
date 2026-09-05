@@ -221,6 +221,72 @@ class ExecutionTraceUnitTest(unittest.TestCase):
         self.assertEqual(trace["changes"]["slices"], num_threads * steps_per_thread)
         self.assertEqual(trace["tools"][0]["count"], num_threads * steps_per_thread)
 
+    def test_export_execution_report_writes_markdown_audit(self):
+        import os
+        import tempfile
+
+        begin = et.begin_execution(request="Remove dead air")
+        exec_id = begin["execution_id"]
+        et.record_step(
+            tool="timeline",
+            action="delete_item",
+            params={},
+            raw_result={"success": True},
+            duration_ms=25,
+            changes={"items_deleted": 1},
+            verification={"status": "passed", "checks": [{"check": "readback", "passed": True}]},
+            warnings=["Skipped locked track"],
+        )
+        et.end_execution(exec_id, notes="Reviewed after edit")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "audit.md")
+            out = et.export_execution_report(exec_id, output_path=path)
+            self.assertTrue(out["success"])
+            self.assertEqual(out["format"], "markdown")
+            self.assertTrue(os.path.isfile(path))
+
+            with open(path, "r", encoding="utf-8") as fh:
+                text = fh.read()
+
+        self.assertIn("# Execution Audit Report", text)
+        self.assertIn("Remove dead air", text)
+        self.assertIn("timeline.delete_item", text)
+        self.assertIn("items_deleted", text)
+        self.assertIn("Skipped locked track", text)
+        self.assertIn("Reviewed after edit", text)
+
+    def test_export_execution_report_writes_json_and_protects_existing_file(self):
+        import os
+        import tempfile
+
+        trace = et.record_step("setup", "schema", {"request": "Inspect setup"}, {"success": True}, 3)
+        exec_id = trace["execution_id"]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "audit.json")
+            out = et.export_execution_report(
+                exec_id,
+                report_format="json",
+                output_path=path,
+                include_steps=False,
+            )
+            self.assertTrue(out["success"])
+            self.assertFalse(out["included_steps"])
+            with open(path, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+
+            self.assertEqual(data["execution_id"], exec_id)
+            self.assertEqual(data["request"], "Inspect setup")
+            self.assertNotIn("steps", data)
+            with self.assertRaises(FileExistsError):
+                et.export_execution_report(exec_id, report_format="json", output_path=path)
+
+    def test_export_execution_report_rejects_unknown_format(self):
+        trace = et.record_step("setup", "schema", {}, {"success": True}, 3)
+        with self.assertRaises(ValueError):
+            et.export_execution_report(trace["execution_id"], report_format="html")
+
 
 class ServerExecutionTraceIntegrationTest(unittest.TestCase):
     def setUp(self):
@@ -286,11 +352,16 @@ class ServerExecutionTraceIntegrationTest(unittest.TestCase):
         self.assertGreaterEqual(real_clear["cleared"], 1)
 
     def test_observer_actions_do_not_pollute_trace(self):
+        import os
+        import tempfile
+
         compound.resolve_control("begin_execution", {"request": "Observer test"})
         compound.setup("schema")
         # Inspecting traces multiple times
         compound.resolve_control("get_execution_trace")
         compound.resolve_control("list_recent_executions")
+        with tempfile.TemporaryDirectory() as tmp:
+            compound.resolve_control("export_execution_report", {"path": os.path.join(tmp, "audit.md")})
         trace = compound.resolve_control("end_execution")["trace"]
 
         # Only setup.schema should be recorded as a tool step, NOT get_execution_trace or list_recent_executions
@@ -298,6 +369,29 @@ class ServerExecutionTraceIntegrationTest(unittest.TestCase):
         self.assertIn("setup.schema", tool_names)
         self.assertNotIn("resolve_control.get_execution_trace", tool_names)
         self.assertNotIn("resolve_control.list_recent_executions", tool_names)
+        self.assertNotIn("resolve_control.export_execution_report", tool_names)
+
+    def test_resolve_control_exports_execution_report(self):
+        import os
+        import tempfile
+
+        compound.resolve_control("begin_execution", {"request": "Create reviewable audit"})
+        compound.setup("schema")
+        trace = compound.resolve_control("end_execution")["trace"]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "audit.md")
+            out = compound.resolve_control("export_execution_report", {
+                "execution_id": trace["execution_id"],
+                "format": "markdown",
+                "path": path,
+            })
+
+            self.assertTrue(out["success"])
+            self.assertEqual(out["execution_id"], trace["execution_id"])
+            self.assertEqual(out["path"], os.path.realpath(path))
+            self.assertGreater(out["bytes"], 0)
+            self.assertTrue(os.path.isfile(path))
 
     def test_direct_functions_exported_on_server(self):
         from src.server import (
@@ -307,6 +401,7 @@ class ServerExecutionTraceIntegrationTest(unittest.TestCase):
             begin_execution,
             end_execution,
             clear_executions,
+            export_execution_report,
         )
         self.assertTrue(callable(get_execution_trace))
         self.assertTrue(callable(get_execution))
@@ -314,6 +409,7 @@ class ServerExecutionTraceIntegrationTest(unittest.TestCase):
         self.assertTrue(callable(begin_execution))
         self.assertTrue(callable(end_execution))
         self.assertTrue(callable(clear_executions))
+        self.assertTrue(callable(export_execution_report))
 
 
 class TraceLogLocationTests(unittest.TestCase):
@@ -438,6 +534,74 @@ class TraceLogLocationTests(unittest.TestCase):
         os.environ["RESOLVE_MCP_TRACE_FILE"] = os.path.join(os.devnull, "no", "t.jsonl")
         out = self.et.record_step("timeline", "get_item_list", {}, {"success": True}, 1)
         self.assertIsInstance(out, dict)
+
+
+class UnverifiedIsNotAPassTests(unittest.TestCase):
+    """An audit report must not present absence of evidence as a pass.
+
+    The rollup collapsed "nothing reported any evidence" into `passed: True`,
+    and the Markdown renderer printed it verbatim — so a report for a wholly
+    unverified workflow read `Status: unverified` on one line and
+    `Passed: yes` on the next. Those are inches apart and only one of them
+    gets scanned. This is the same distinction v2.206.0 documented for
+    `verification.status`, now carried into a document meant to be reviewed
+    and shared.
+    """
+
+    def setUp(self):
+        import os
+        import tempfile
+
+        from src.utils import execution_trace
+
+        self.et = execution_trace
+        self.et.clear_executions()
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        os.environ["RESOLVE_MCP_TRACE_REPORT_DIR"] = self._tmp.name
+        self.addCleanup(lambda: os.environ.pop("RESOLVE_MCP_TRACE_REPORT_DIR", None))
+
+    def _report(self, verification=None):
+        import src.server as compound
+
+        compound.resolve_control("begin_execution", {"request": "audit"})
+        compound.setup("get_defaults")
+        compound.resolve_control(
+            "end_execution", {"verification": verification} if verification else {})
+        out = compound.resolve_control("export_execution_report", {"overwrite": True})
+        with open(out["path"], encoding="utf-8") as fh:
+            return fh.read()
+
+    def test_an_unverified_run_does_not_say_it_passed(self):
+        body = self._report()
+        self.assertIn("| Status | unverified |", body)
+        self.assertNotIn("| Passed | yes |", body)
+        self.assertIn("no checks recorded", body)
+
+    def test_a_verified_run_still_says_yes(self):
+        body = self._report(
+            {"status": "passed", "checks": [{"check": "readback", "passed": True}]})
+        self.assertIn("| Passed | yes |", body)
+
+    def test_a_failed_run_says_no(self):
+        body = self._report(
+            {"status": "failed", "checks": [{"check": "readback", "passed": False}]})
+        self.assertIn("| Passed | no |", body)
+
+    def test_the_rollup_reports_unknown_rather_than_true(self):
+        # The data model, not just its rendering: agents read this field too.
+        rolled = self.et._merge_verification(
+            {"status": "unverified", "passed": None, "contradiction": False, "checks": []},
+            {"status": "unverified", "checks": []},
+        )
+        self.assertIsNone(rolled["passed"])
+        self.assertEqual(rolled["status"], "unverified")
+
+    def test_a_fresh_trace_starts_unknown(self):
+        self.et.begin_execution(request="fresh")
+        trace = self.et.get_execution_trace()
+        self.assertIsNone(trace["verification"]["passed"])
+        self.et.end_execution()
 
 
 if __name__ == "__main__":

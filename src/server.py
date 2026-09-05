@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 353-tool granular server instead
 """
 
-VERSION = "2.206.0"
+VERSION = "2.207.0"
 
 import base64
 import os
@@ -74,6 +74,7 @@ from src.utils.execution_trace import (
     begin_execution,
     end_execution,
     clear_executions,
+    export_execution_report,
 )
 from src.utils.render_ids import (
     render_codec_id_from_codecs as _render_codec_id_from_codecs,
@@ -1499,6 +1500,7 @@ def _guarded_params(args, kwargs) -> Optional[Dict[str, Any]]:
 _TRACE_OBSERVER_ACTIONS = {
     "get_execution_trace", "get_execution", "list_recent_executions",
     "clear_executions", "begin_execution", "end_execution",
+    "export_execution_report",
 }
 
 
@@ -16120,6 +16122,8 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         — Open a multi-step execution trace so subsequent tool calls thread under this execution ID.
       end_execution(execution_id?, verification?, status?, notes?) -> {success, trace}
         — Conclude an execution trace and compute final rollups.
+      export_execution_report(execution_id?, format?, path?, overwrite?, include_steps?) -> {success, path, bytes}
+        — Write a Markdown or JSON audit report for an execution trace (no connection needed).
       clear_executions(dry_run?) -> {success, cleared}
         — Clear the in-memory execution trace buffer.
     """
@@ -16249,6 +16253,33 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         if not trace:
             return _err("No active or matching execution to end", code="NOT_FOUND", category="state")
         return {"success": True, "trace": trace}
+    if action == "export_execution_report":
+        exec_id = p.get("execution_id") or p.get("id")
+        report_format = p.get("format") or p.get("report_format") or "markdown"
+        include_steps = _setup_bool(p.get("include_steps", p.get("includeSteps")), True)
+        overwrite = _setup_bool(p.get("overwrite"), False)
+        try:
+            res = _execution_trace.export_execution_report(
+                execution_id=exec_id,
+                report_format=report_format,
+                output_path=p.get("path") or p.get("output_path") or p.get("outputPath"),
+                overwrite=overwrite,
+                include_steps=include_steps,
+            )
+        except FileExistsError as exc:
+            return _err(str(exc), code="REPORT_EXISTS", category="invalid_input")
+        except ValueError as exc:
+            return _err(str(exc), code="INVALID_REPORT_FORMAT", category="invalid_input")
+        except OSError as exc:
+            return _err(
+                "Could not write execution report",
+                code="REPORT_WRITE_FAILED",
+                category="io",
+                reason=str(exc),
+            )
+        if not res:
+            return _err(f"No execution trace found for id: {exec_id or 'latest'}", code="NOT_FOUND", category="state")
+        return res
     if action == "clear_executions":
         dry_run = _setup_bool(p.get("dry_run", p.get("dryRun")), False)
         if dry_run:
@@ -16470,7 +16501,7 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         if err:
             return _err(err)
         return {"success": bool(r.ExportUserPreferencesPreset(clean["name"], clean["path"]))}
-    return _unknown(action, ["launch","runtime_mode","get_version","api_truth","check_version_support","verification_stats","job_status","list_jobs","get_execution_trace","get_execution","list_recent_executions","begin_execution","end_execution","clear_executions","mcp_update_status","set_mcp_update_policy","ignore_mcp_update","snooze_mcp_update","clear_mcp_update_preferences","get_page","open_page","get_keyframe_mode","set_keyframe_mode","quit","get_fairlight_presets","set_high_priority","disable_background_tasks_for_current_session","list_user_preferences_presets","save_user_preferences_preset","load_user_preferences_preset","delete_user_preferences_preset","import_user_preferences_preset","export_user_preferences_preset","open_control_panel","control_panel_status","close_control_panel","save_state","restore_state"])
+    return _unknown(action, ["launch","runtime_mode","get_version","api_truth","check_version_support","verification_stats","job_status","list_jobs","get_execution_trace","get_execution","list_recent_executions","begin_execution","end_execution","export_execution_report","clear_executions","mcp_update_status","set_mcp_update_policy","ignore_mcp_update","snooze_mcp_update","clear_mcp_update_preferences","get_page","open_page","get_keyframe_mode","set_keyframe_mode","quit","get_fairlight_presets","set_high_priority","disable_background_tasks_for_current_session","list_user_preferences_presets","save_user_preferences_preset","load_user_preferences_preset","delete_user_preferences_preset","import_user_preferences_preset","export_user_preferences_preset","open_control_panel","control_panel_status","close_control_panel","save_state","restore_state"])
 
 
 # ─── V2 C4: Per-field corrections with provenance + changelog ────────────────

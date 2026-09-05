@@ -271,6 +271,11 @@ Example trace shape returned by `resolve_control(action="get_execution_trace")`:
   Fetches the trace for a specific ID, or the most recent execution if omitted.
 - **`list_recent_executions(limit?)`**: Returns the recent execution traces
   (newest first, default limit 20).
+- **`export_execution_report(execution_id?, format?, path?, overwrite?, include_steps?)`**:
+  Writes a Markdown or JSON audit report for a trace. The default destination is
+  `logs/execution-reports/<execution_id>.md`; pass `format: "json"` for
+  structured output, `include_steps: false` for a shorter summary, or
+  `overwrite: true` to replace an existing report.
 - **`clear_executions(dry_run?)`**: Clears the in-memory execution trace buffer.
 
 Explicit correlation is also supported per-call: pass `params={"execution_id": ...}`
@@ -290,6 +295,20 @@ The only free text is the `request` string passed to `begin_execution`.
 
 The file rotates at 8 MB, keeping one previous generation as
 `execution-traces.jsonl.1`. Both are gitignored along with the rest of `logs/`.
+Audit reports are separate point-in-time exports; `RESOLVE_MCP_TRACE_REPORT_DIR`
+moves their default directory without moving the append-only trace log.
+
+`path` is honoured as given — the report can be written anywhere, and the
+directories are created to reach it. That is deliberate (a conform's paperwork
+belongs beside the conform, not in `logs/`), so treat it the way you would any
+other export destination and do not invent a path near source media. The
+`execution_id` route cannot escape the report directory: it is sanitised to a
+filename.
+
+A report whose run recorded no verification checks renders **"not established
+— no checks recorded"** in the Passed row, never "yes" — the same rule as
+`verification.status: "unverified"` in the envelope. Do not report such a run
+to the user as verified.
 
 ---
 

@@ -2,7 +2,7 @@
 
 [English](README.md) | 简体中文
 
-[![Version](https://img.shields.io/badge/version-2.206.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
+[![Version](https://img.shields.io/badge/version-2.207.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![npm](https://img.shields.io/npm/v/davinci-resolve-mcp.svg?label=npm&color=CB3837)](https://www.npmjs.com/package/davinci-resolve-mcp)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](docs/reference/api-coverage.md)
 [![Tools](https://img.shields.io/badge/MCP%20Tools-36%20(353%20full)-blue.svg)](#服务器模式)
@@ -12,7 +12,7 @@
 [![Python](https://img.shields.io/badge/python-3.10+-green.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
-> 本翻译对应 v2.206.0 版 README。如与英文原版有出入，以 [英文原版](README.md) 为准。
+> 本翻译对应 v2.207.0 版 README。如与英文原版有出入，以 [英文原版](README.md) 为准。
 
 一个 Model Context Protocol (MCP) 服务器，让 AI 助手通过官方脚本 API 控制 DaVinci Resolve Studio（达芬奇）。它提供完整的 API 覆盖，外加带护栏的工作流助手，涵盖剪辑、媒体池整理、渲染设置、审阅标记、调色、Fusion、Fairlight、项目生命周期任务、扩展开发，以及不碰源媒体的媒体分析。
 
@@ -171,6 +171,12 @@ DRX 调色写入**针对 Resolve Studio 做过实机校准**：调色参数默�
 多步 AI 操作会跨工具调用关联成统一的执行轨迹，聚合各工具耗时（`duration_ms`）、调用次数、累计语义增量（`items_deleted`、`items_added`）以及回读校验结果。通过 `resolve_control` 查看：`get_execution_trace(execution_id?)`、`list_recent_executions()`，或用 `begin_execution(request="...")` / `end_execution()` 圈定一段执行。
 
 轨迹保存在一个容量 100 条的内存环形缓冲里，并追加写入 `logs/execution-traces.jsonl`（就在 `server.log` 旁边，可用 `RESOLVE_MCP_TRACE_FILE` 改位置），文件到 8 MB 会轮转并保留一份上一代。`list_recent_executions` 会返回该路径以及是否可写，这样"日志是空的"和"根本没在写"就能区分开。记录的内容是工具名、动作、耗时、状态、语义增量和校验结果——不记录参数，也不记录文件路径。唯一的自由文本是你传给 `begin_execution` 的 `request`，在客户项目上请把它当成提交信息来写。
+
+### 导出执行审计报告
+
+`export_execution_report(execution_id?, format="markdown"|"json")` 会把一条轨迹写成可供审阅的审计文件，默认落在 `logs/execution-reports/<execution_id>.md`。传 `path` 可以写到任何你想要的位置——比如跟着某次套底放进当天的 TransferFiles 文件夹——并且会自动创建沿途的目录，所以发出去之前请先确认路径。已存在的文件不会被覆盖，除非显式传 `overwrite: true`。
+
+如果这次运行根本没有做过校验，报告里写的是**"not established — no checks recorded"（未确立——没有记录任何检查）**，而不是"通过"。没有证据是一个仍然悬而未决的问题；审计文件恰恰是最不该让读者把它读成"一切正常"的地方。
 
 ## 可选增强
 

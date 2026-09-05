@@ -2,6 +2,34 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.207.0 — execution audit report exports
+
+### Added
+
+- **Execution traces can now be exported as reviewable audit reports.**
+  `resolve_control(action="export_execution_report")` writes the latest trace,
+  or a named `execution_id`, as Markdown or JSON. The report carries the
+  request, status, start/end timestamps, duration, tool summary, semantic
+  deltas, verification rollup, warnings, notes, and optional per-step table.
+- **Reports default beside the trace log.** When no path is passed, reports are
+  written under `logs/execution-reports/<execution_id>.md` or `.json`.
+  `RESOLVE_MCP_TRACE_REPORT_DIR` can move that default destination without
+  changing where append-only trace events are logged.
+- **Exports are observer-safe.** Creating a report is exempt from execution-step
+  recording, just like querying traces, so inspecting or exporting a trace
+  cannot mutate the trace being reviewed.
+- **Existing files are protected by default.** A caller must pass
+  `overwrite=true` to replace a report at the chosen path.
+
+### Notes
+
+- The export is built from the existing trace summary fields, not raw tool
+  arguments or raw tool results. It is meant for review and audit, not a replay
+  script.
+- Added focused unit and server integration coverage for Markdown export, JSON
+  export, step omission, invalid formats, overwrite protection, observer
+  isolation, and `resolve_control` dispatch.
+
 ## What's New in v2.206.0 — agent execution traces
 
 Adapted from the design contributed in PR #183.
