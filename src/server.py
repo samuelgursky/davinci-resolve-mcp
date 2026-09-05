@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 353-tool granular server instead
 """
 
-VERSION = "2.207.0"
+VERSION = "2.208.0"
 
 import base64
 import os
@@ -75,6 +75,11 @@ from src.utils.execution_trace import (
     end_execution,
     clear_executions,
     export_execution_report,
+)
+from src.utils import execution_lifecycle as _execution_lifecycle
+from src.utils.execution_lifecycle import (
+    inspect_operation,
+    list_lifecycle_hooks,
 )
 from src.utils.render_ids import (
     render_codec_id_from_codecs as _render_codec_id_from_codecs,
@@ -887,6 +892,37 @@ def _try_connect():
             resolve = None
             return None
 
+def _get_resolve_lifecycle_state() -> Optional[Dict[str, Any]]:
+    """Capture non-blocking pre-flight Resolve project and timeline metadata."""
+    global resolve
+    r = resolve
+    if r is None:
+        try:
+            r = _try_connect()
+        except Exception:
+            r = None
+    if r is None:
+        return None
+    try:
+        pm = r.GetProjectManager()
+        if not pm:
+            return None
+        proj = pm.GetCurrentProject()
+        if not proj:
+            return None
+        state: Dict[str, Any] = {"project_name": proj.GetName()}
+        tl = proj.GetCurrentTimeline()
+        if tl:
+            state["timeline_name"] = tl.GetName()
+            state["duration_frames"] = tl.GetEndFrame() - tl.GetStartFrame()
+            state["track_count_video"] = tl.GetTrackCount("video")
+            state["track_count_audio"] = tl.GetTrackCount("audio")
+        return state
+    except Exception:
+        return None
+
+_execution_lifecycle.get_lifecycle_pipeline().set_state_provider(_get_resolve_lifecycle_state)
+
 def _launch_resolve(headless: Optional[bool] = None):
     """Launch DaVinci Resolve and wait for it to become available.
 
@@ -1501,6 +1537,7 @@ _TRACE_OBSERVER_ACTIONS = {
     "get_execution_trace", "get_execution", "list_recent_executions",
     "clear_executions", "begin_execution", "end_execution",
     "export_execution_report",
+    "inspect_operation", "list_lifecycle_hooks",
 }
 
 
@@ -1573,14 +1610,29 @@ def _guard_missing_params(fn):
         async def wrapper(*args, **kwargs):
             action = _guarded_action_name(args, kwargs)
             params = _guarded_params(args, kwargs)
+            lifecycle = _execution_lifecycle.get_lifecycle_pipeline()
+            ctx = _execution_lifecycle.ToolCallContext(
+                tool_name=tool_name,
+                action=action,
+                params=params or {},
+            )
+            decision = lifecycle.run_before(ctx)
+            if decision and not decision.proceed and decision.short_circuit_result is not None:
+                return _build_operation_envelope(tool_name, action, params, decision.short_circuit_result, duration_ms=0)
+
             t0 = time.perf_counter()
             try:
                 result = await fn(*args, **kwargs)
             except _MissingParam as exc:
                 result = _missing_param_error(exc, action)
+            except Exception as exc:
+                duration_ms = max(0, int((time.perf_counter() - t0) * 1000))
+                lifecycle.run_on_error(ctx, exc, duration_ms)
+                raise
             duration_ms = max(0, int((time.perf_counter() - t0) * 1000))
             enveloped = _build_operation_envelope(
                 tool_name, action, params, result, duration_ms=duration_ms)
+            enveloped = lifecycle.run_after(ctx, enveloped, duration_ms)
             _record_execution_step(tool_name, action, params, result, enveloped, duration_ms)
             return enveloped
     else:
@@ -1588,14 +1640,29 @@ def _guard_missing_params(fn):
         def wrapper(*args, **kwargs):
             action = _guarded_action_name(args, kwargs)
             params = _guarded_params(args, kwargs)
+            lifecycle = _execution_lifecycle.get_lifecycle_pipeline()
+            ctx = _execution_lifecycle.ToolCallContext(
+                tool_name=tool_name,
+                action=action,
+                params=params or {},
+            )
+            decision = lifecycle.run_before(ctx)
+            if decision and not decision.proceed and decision.short_circuit_result is not None:
+                return _build_operation_envelope(tool_name, action, params, decision.short_circuit_result, duration_ms=0)
+
             t0 = time.perf_counter()
             try:
                 result = fn(*args, **kwargs)
             except _MissingParam as exc:
                 result = _missing_param_error(exc, action)
+            except Exception as exc:
+                duration_ms = max(0, int((time.perf_counter() - t0) * 1000))
+                lifecycle.run_on_error(ctx, exc, duration_ms)
+                raise
             duration_ms = max(0, int((time.perf_counter() - t0) * 1000))
             enveloped = _build_operation_envelope(
                 tool_name, action, params, result, duration_ms=duration_ms)
+            enveloped = lifecycle.run_after(ctx, enveloped, duration_ms)
             _record_execution_step(tool_name, action, params, result, enveloped, duration_ms)
             return enveloped
 
@@ -16126,6 +16193,10 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         — Write a Markdown or JSON audit report for an execution trace (no connection needed).
       clear_executions(dry_run?) -> {success, cleared}
         — Clear the in-memory execution trace buffer.
+      inspect_operation(tool?, target_action?, target_params?) -> {tool, action, risk, destructive, blast_radius, confirmation_required, snapshot_available, reasons, pre_state}
+        — Pre-flight risk assessment and blast radius inspection for any tool action before execution (no connection needed).
+      list_lifecycle_hooks() -> {success, hooks, count}
+        — List active agent tool execution lifecycle hooks and their enabled status (no connection needed).
     """
     p = _params(params)
 
@@ -16286,6 +16357,14 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
             return {"success": True, "dry_run": True, "count": len(_execution_trace.list_recent_executions(100))}
         res = _execution_trace.clear_executions()
         return res
+    if action == "inspect_operation":
+        target_tool = p.get("tool") or p.get("tool_name") or "timeline"
+        target_action = p.get("target_action") or p.get("action") or p.get("op") or "delete_clips"
+        target_params = p.get("target_params") or p.get("params") or {}
+        return _execution_lifecycle.inspect_operation(target_tool, target_action, target_params)
+    if action == "list_lifecycle_hooks":
+        hooks = _execution_lifecycle.list_lifecycle_hooks()
+        return {"success": True, "hooks": hooks, "count": len(hooks)}
 
     # Control-panel actions don't require Resolve to be running.
     if action == "open_control_panel":
@@ -16501,7 +16580,7 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         if err:
             return _err(err)
         return {"success": bool(r.ExportUserPreferencesPreset(clean["name"], clean["path"]))}
-    return _unknown(action, ["launch","runtime_mode","get_version","api_truth","check_version_support","verification_stats","job_status","list_jobs","get_execution_trace","get_execution","list_recent_executions","begin_execution","end_execution","export_execution_report","clear_executions","mcp_update_status","set_mcp_update_policy","ignore_mcp_update","snooze_mcp_update","clear_mcp_update_preferences","get_page","open_page","get_keyframe_mode","set_keyframe_mode","quit","get_fairlight_presets","set_high_priority","disable_background_tasks_for_current_session","list_user_preferences_presets","save_user_preferences_preset","load_user_preferences_preset","delete_user_preferences_preset","import_user_preferences_preset","export_user_preferences_preset","open_control_panel","control_panel_status","close_control_panel","save_state","restore_state"])
+    return _unknown(action, ["launch","runtime_mode","get_version","api_truth","check_version_support","verification_stats","job_status","list_jobs","get_execution_trace","get_execution","list_recent_executions","begin_execution","end_execution","export_execution_report","clear_executions","inspect_operation","list_lifecycle_hooks","mcp_update_status","set_mcp_update_policy","ignore_mcp_update","snooze_mcp_update","clear_mcp_update_preferences","get_page","open_page","get_keyframe_mode","set_keyframe_mode","quit","get_fairlight_presets","set_high_priority","disable_background_tasks_for_current_session","list_user_preferences_presets","save_user_preferences_preset","load_user_preferences_preset","delete_user_preferences_preset","import_user_preferences_preset","export_user_preferences_preset","open_control_panel","control_panel_status","close_control_panel","save_state","restore_state"])
 
 
 # ─── V2 C4: Per-field corrections with provenance + changelog ────────────────

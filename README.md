@@ -2,7 +2,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-[![Version](https://img.shields.io/badge/version-2.207.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
+[![Version](https://img.shields.io/badge/version-2.208.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![npm](https://img.shields.io/npm/v/davinci-resolve-mcp.svg?label=npm&color=CB3837)](https://www.npmjs.com/package/davinci-resolve-mcp)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](docs/reference/api-coverage.md)
 [![Tools](https://img.shields.io/badge/MCP%20Tools-36%20(353%20full)-blue.svg)](#server-modes)
@@ -280,6 +280,10 @@ reviewable audit artifact with the same summary, defaulting to
 it instead — alongside a conform in a dated TransferFiles folder, say — and
 creates the directories to get there, so check the path before you send it.
 An existing file is never replaced without `overwrite: true`.
+`inspect_operation(tool?, target_action?, target_params?)` evaluates pre-flight
+risk level (`low`, `medium`, `high`, `critical`), destructive potential, and blast
+radius (`item`, `track`, `timeline`, `project`, `system`) before taking action, while
+`list_lifecycle_hooks()` inspects active execution interceptors.
 
 A report for a run where nothing was verified says **"not established — no
 checks recorded"**, not "passed". Absence of evidence is a question still open,
