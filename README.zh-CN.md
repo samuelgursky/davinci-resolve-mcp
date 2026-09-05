@@ -2,7 +2,7 @@
 
 [English](README.md) | 简体中文
 
-[![Version](https://img.shields.io/badge/version-2.207.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
+[![Version](https://img.shields.io/badge/version-2.208.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![npm](https://img.shields.io/npm/v/davinci-resolve-mcp.svg?label=npm&color=CB3837)](https://www.npmjs.com/package/davinci-resolve-mcp)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](docs/reference/api-coverage.md)
 [![Tools](https://img.shields.io/badge/MCP%20Tools-36%20(353%20full)-blue.svg)](#服务器模式)
@@ -12,7 +12,7 @@
 [![Python](https://img.shields.io/badge/python-3.10+-green.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
-> 本翻译对应 v2.207.0 版 README。如与英文原版有出入，以 [英文原版](README.md) 为准。
+> 本翻译对应 v2.208.0 版 README。如与英文原版有出入，以 [英文原版](README.md) 为准。
 
 一个 Model Context Protocol (MCP) 服务器，让 AI 助手通过官方脚本 API 控制 DaVinci Resolve Studio（达芬奇）。它提供完整的 API 覆盖，外加带护栏的工作流助手，涵盖剪辑、媒体池整理、渲染设置、审阅标记、调色、Fusion、Fairlight、项目生命周期任务、扩展开发，以及不碰源媒体的媒体分析。
 
@@ -174,7 +174,7 @@ DRX 调色写入**针对 Resolve Studio 做过实机校准**：调色参数默�
 
 ### 导出执行审计报告
 
-`export_execution_report(execution_id?, format="markdown"|"json")` 会把一条轨迹写成可供审阅的审计文件，默认落在 `logs/execution-reports/<execution_id>.md`。传 `path` 可以写到任何你想要的位置——比如跟着某次套底放进当天的 TransferFiles 文件夹——并且会自动创建沿途的目录，所以发出去之前请先确认路径。已存在的文件不会被覆盖，除非显式传 `overwrite: true`。
+`export_execution_report(execution_id?, format="markdown"|"json")` 会把一条轨迹写成可供审阅的审计文件，默认落在 `logs/execution-reports/<execution_id>.md`。传 `path` 可以写到任何你想要的位置——比如跟着某次套底放进当天的 TransferFiles 文件夹——并且会自动创建沿途的目录，所以发出去之前请先确认路径。已存在的文件不会被覆盖，除非显式传 `overwrite: true`。`inspect_operation(tool?, target_action?, target_params?)` 会在执行前评估操作的风险等级（`low`、`medium`、`high`、`critical`）、破坏性以及影响范围（`item`、`track`、`timeline`、`project`、`system`），而 `list_lifecycle_hooks()` 则可以查看当前生效的生命周期拦截钩子。
 
 如果这次运行根本没有做过校验，报告里写的是**"not established — no checks recorded"（未确立——没有记录任何检查）**，而不是"通过"。没有证据是一个仍然悬而未决的问题；审计文件恰恰是最不该让读者把它读成"一切正常"的地方。
 

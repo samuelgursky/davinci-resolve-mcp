@@ -2,6 +2,27 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.208.0 — agent execution lifecycle & pre-flight risk inspection
+
+### Added
+
+- **Agent execution lifecycle pipeline & hooks:**
+  Tools passing through `_guard_missing_params` now execute within a structured
+  lifecycle pipeline, supporting pre-flight inspection (`before_tool_call`),
+  post-execution enrichment (`after_tool_call`), and failure handling (`on_error`).
+- **Pre-flight operation risk & blast radius assessment:**
+  `resolve_control(action="inspect_operation")` evaluates any tool and action
+  prior to execution, returning risk levels (`low`, `medium`, `high`, `critical`),
+  destructive flags, confirmation requirements, and blast radius scopes (`item`,
+  `track`, `timeline`, `project`, `system`).
+- **Dry-run simulation interceptor:**
+  Tools called with `dry_run: true` that lack native dry-run support are safely
+  simulated without mutating live timelines, capturing expected parameters,
+  risk assessment, and impact summaries.
+- **Lifecycle hooks introspection:**
+  `resolve_control(action="list_lifecycle_hooks")` exposes registered pipeline
+  hooks and their active states.
+
 ## What's New in v2.207.0 — execution audit report exports
 
 Contributed in PR #185.
