@@ -277,6 +277,12 @@ Example trace shape returned by `resolve_control(action="get_execution_trace")`:
   structured output, `include_steps: false` for a shorter summary, or
   `overwrite: true` to replace an existing report.
 - **`clear_executions(dry_run?)`**: Clears the in-memory execution trace buffer.
+- **`inspect_operation(tool?, target_action?, target_params?)`**: Evaluates operation risk
+  level (`low`, `medium`, `high`, `critical`), destructive potential, confirmation
+  requirements, and blast radius scope before executing an action.
+- **`list_lifecycle_hooks()`**: Returns active execution lifecycle pipeline hooks
+  (`risk_classification`, `resolve_state_inspection`, `dry_run_interception`,
+  `readback_verification`, `drift_detection`, `provenance_trace`).
 
 Explicit correlation is also supported per-call: pass `params={"execution_id": ...}`
 or `params={"trace_id": ...}` in any tool call to associate it with a specific trace.
