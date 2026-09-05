@@ -4,6 +4,8 @@ Release history for the DaVinci Resolve MCP Server. The latest release is summar
 
 ## What's New in v2.207.0 — execution audit report exports
 
+Contributed in PR #185.
+
 ### Added
 
 - **Execution traces can now be exported as reviewable audit reports.**
@@ -29,6 +31,28 @@ Release history for the DaVinci Resolve MCP Server. The latest release is summar
 - Added focused unit and server integration coverage for Markdown export, JSON
   export, step omission, invalid formats, overwrite protection, observer
   isolation, and `resolve_control` dispatch.
+
+### Fixed on the way in
+
+- **An unverified run no longer reports itself as passed.** The verification
+  rollup collapsed "nothing reported any evidence" into `passed: True`, and the
+  report printed it verbatim — so a workflow where nothing was checked produced
+  an audit document reading `Status: unverified` on one line and `Passed: yes`
+  on the next. Those sit inches apart and only one of them gets scanned. The
+  rollup now carries `None` for the unknown case and the Passed row renders
+  "not established — no checks recorded"; a real pass still says yes and a real
+  failure still says no. This is the same distinction v2.206.0 documented for
+  `verification.status`, and the export is exactly where it stops being a
+  nuance and starts being a claim on paper.
+- **The Simplified Chinese README was carrying a false version line.** Its
+  badge and "本翻译对应 vX.Y.Z 版 README" line were bumped to 2.207.0 without the
+  section itself, which is the specific failure the release process calls out —
+  a lagging translation whose version line asserts otherwise. Translated.
+- `path` is documented as honoured-as-given, creating directories to reach the
+  destination: deliberate, since a conform's paperwork belongs beside the
+  conform rather than in `logs/`, but worth stating next to a source-media
+  safety policy. The `execution_id` route is sanitised to a bare filename and
+  cannot escape the report directory — verified.
 
 ## What's New in v2.206.0 — agent execution traces
 
