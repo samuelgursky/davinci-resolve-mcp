@@ -249,6 +249,29 @@ def main() -> int:
                 audio_items = v_tl.GetItemListInTrack("audio", 1) or []
                 check("tighten variant A1 not empty", len(audio_items) >= 1,
                       f"A1 items={len(audio_items)}")
+                # The accounting must equal the timeline's OWN per-track counts.
+                # A `>= 1` check passes a variant reported as 250 items when it
+                # holds 432 — which is exactly the regression this pins: the
+                # counts used to come from the append's reply, and the in-app
+                # bridge caps that reply at max_items.
+                placed = {}
+                for track_type in ("video", "audio"):
+                    total = 0
+                    for ti in range(1, int(v_tl.GetTrackCount(track_type) or 0) + 1):
+                        total += len(v_tl.GetItemListInTrack(track_type, ti) or [])
+                    placed[track_type] = total
+                check("audio_accounting equals the per-track readback",
+                      t_acct.get("variant_video_items") == placed["video"]
+                      and t_acct.get("variant_audio_items") == placed["audio"],
+                      f"reported=({t_acct.get('variant_video_items')}, "
+                      f"{t_acct.get('variant_audio_items')}) "
+                      f"actual=({placed['video']}, {placed['audio']})")
+                # And planned == placed, or the note must say so outright.
+                agrees = (t_acct.get("variant_video_items") == t_acct.get("planned_video_ranges")
+                          and t_acct.get("variant_audio_items") == t_acct.get("planned_audio_ranges"))
+                check("planned vs placed disagreement is stated, never implied",
+                      agrees or "DISAGREES" in str(t_acct.get("note")),
+                      f"audio_accounting={t_acct}")
 
         # ── E3: swap (replace the selects timeline's first item) ──
         selects_tl, _ = s._find_timeline_by_name(proj, done1.get("timeline_name"))

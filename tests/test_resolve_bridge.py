@@ -471,6 +471,73 @@ class OperationSurfaceTests(unittest.TestCase):
         self.assertEqual(len(listing["timelines"]), 5)
         self.assertTrue(listing["truncated"])
 
+    # -- a proxied return that does not fit must SAY so ---------------------
+    #
+    # Regression: `_encode` used to shorten any list past max_items with nothing
+    # anywhere recording it, and a short list cannot be told apart from a
+    # genuinely short result. An 864-clipInfo AppendToTimeline came back as 500
+    # items, and the silence-ripple readback counted them — reporting a variant
+    # of 432 video + 432 audio as 250 + 250, which reads as dropped material.
+
+    def _counting_ops(self, produced: int):
+        class Producer:
+            def Enumerate(self_inner):
+                return [_FakeTimeline(f"T{i}") for i in range(produced)]
+
+            def GetProjectManager(self_inner):
+                return self_inner
+
+            def GetCurrentProject(self_inner):
+                return self_inner
+
+            def GetMediaPool(self_inner):
+                return self_inner
+
+        return self._ops(resolve=Producer())
+
+    def test_a_truncated_proxy_reply_reports_what_it_dropped(self) -> None:
+        ops = self._counting_ops(864)
+        ops.max_items = 500
+        reply = ops.dispatch("call", {"target": "media_pool", "method": "Enumerate"})
+        self.assertEqual(len(reply["value"]), 500)
+        truncated = reply["truncated"]
+        self.assertEqual(truncated["dropped"], 364)
+        self.assertEqual(truncated["limit"], 500)
+        self.assertEqual(truncated["containers"][0]["total"], 864)
+
+    def test_a_reply_that_fits_carries_no_truncation_key(self) -> None:
+        ops = self._counting_ops(864)
+        reply = ops.dispatch("call", {"target": "media_pool", "method": "Enumerate"})
+        self.assertEqual(len(reply["value"]), 864)
+        self.assertNotIn("truncated", reply)
+
+    def test_truncation_state_does_not_leak_between_calls(self) -> None:
+        ops = self._counting_ops(864)
+        ops.max_items = 500
+        ops.dispatch("call", {"target": "media_pool", "method": "Enumerate"})
+        ops.max_items = 2000
+        self.assertNotIn(
+            "truncated",
+            ops.dispatch("call", {"target": "media_pool", "method": "Enumerate"}),
+        )
+
+    def test_the_ceiling_never_exceeds_the_handle_table(self) -> None:
+        # A list longer than MAX_HANDLES evicts its own earliest entries while
+        # it is still being minted, so the client receives handles that are
+        # already stale. A short list beats a poisoned one.
+        from src.utils import resolve_bridge_ops as rbo
+        ops = rbo.ResolveOperations(
+            FakeResolve(), media_roots=[self.ROOT], output_roots=[self.ROOT],
+            max_items=1_000_000,
+        )
+        self.assertLessEqual(ops.max_items, rbo.ResolveOperations.MAX_HANDLES)
+
+    def test_the_default_ceiling_clears_a_timeline_scale_return(self) -> None:
+        # The reported failure sent 864 clipInfos in one append. A default that
+        # cannot carry that is the bug, not a tuning preference.
+        from src.utils import resolve_bridge_ops as rbo
+        self.assertGreater(rbo.ResolveOperations.DEFAULT_MAX_ITEMS, 864)
+
     def test_path_policy_rejects_traversal_and_relative_paths(self) -> None:
         from src.utils import resolve_bridge_ops as ops
         policy = ops.PathPolicy([self.ROOT], [self.ROOT])
