@@ -2,6 +2,33 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.146.0 — safe operations policy
+
+### Added
+
+- **Destructive operations now carry explicit security metadata** — wrapped
+  destructive tool calls receive an `operation_id` plus a `security` block with
+  a `risk_level` (`low`, `medium`, `high`, or `dangerous`). The
+  existing version-on-mutate and confirm-token gates stay intact, but clients
+  now have a stable policy surface to inspect and display before or after a
+  Resolve mutation.
+- **Safe mode blocks high-risk destructive calls by default when enabled** —
+  `setup(action="set_defaults", params={"destructive": {"safe_mode": true}})`
+  blocks high/dangerous actions before the underlying Resolve handler runs.
+  Reviewed one-off calls can proceed with
+  `allow_risky_operation=true`.
+- **Security audit JSONL for destructive calls** — allowed, blocked, and
+  pending-confirmation destructive calls write audit events to
+  `logs/security-audit.jsonl` by default. Confirmation tokens are redacted in
+  the audit payload.
+
+### Changed
+
+- **`setup` exposes destructive defaults** — `destructive.require_confirm_token`,
+  `destructive.safe_mode`, `destructive.audit_log`, and
+  `destructive.audit_log_path` are now visible through `schema`, persisted by
+  `set_defaults`, and reset by `clear_defaults`.
+
 ## What's New in v2.145.1 — bridge config override, honored end to end
 
 ### Fixed
