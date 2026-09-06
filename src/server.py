@@ -16193,7 +16193,8 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         — Write a Markdown or JSON audit report for an execution trace (no connection needed).
       clear_executions(dry_run?) -> {success, cleared}
         — Clear the in-memory execution trace buffer.
-      inspect_operation(tool?, target_action?, target_params?) -> {tool, action, risk, destructive, blast_radius, confirmation_required, snapshot_available, reasons, pre_state}
+      inspect_operation(tool?, target_action?, target_params?) -> {tool, action, risk, destructive, blast_radius, confirmation_required, snapshot_available, recognised, reasons, pre_state, pre_state_available}
+        — Name-based heuristic, NOT a simulation: it never touches the project and does not validate params. recognised=false means no rule matched; snapshot_available=null means rollback was not determined, not that none exists.
         — Pre-flight risk assessment and blast radius inspection for any tool action before execution (no connection needed).
       list_lifecycle_hooks() -> {success, hooks, count}
         — List active agent tool execution lifecycle hooks and their enabled status (no connection needed).

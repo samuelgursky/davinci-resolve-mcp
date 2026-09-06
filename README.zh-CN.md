@@ -174,7 +174,9 @@ DRX 调色写入**针对 Resolve Studio 做过实机校准**：调色参数默�
 
 ### 导出执行审计报告
 
-`export_execution_report(execution_id?, format="markdown"|"json")` 会把一条轨迹写成可供审阅的审计文件，默认落在 `logs/execution-reports/<execution_id>.md`。传 `path` 可以写到任何你想要的位置——比如跟着某次套底放进当天的 TransferFiles 文件夹——并且会自动创建沿途的目录，所以发出去之前请先确认路径。已存在的文件不会被覆盖，除非显式传 `overwrite: true`。`inspect_operation(tool?, target_action?, target_params?)` 会在执行前评估操作的风险等级（`low`、`medium`、`high`、`critical`）、破坏性以及影响范围（`item`、`track`、`timeline`、`project`、`system`），而 `list_lifecycle_hooks()` 则可以查看当前生效的生命周期拦截钩子。
+`export_execution_report(execution_id?, format="markdown"|"json")` 会把一条轨迹写成可供审阅的审计文件，默认落在 `logs/execution-reports/<execution_id>.md`。传 `path` 可以写到任何你想要的位置——比如跟着某次套底放进当天的 TransferFiles 文件夹——并且会自动创建沿途的目录，所以发出去之前请先确认路径。已存在的文件不会被覆盖，除非显式传 `overwrite: true`。`inspect_operation(tool?, target_action?, target_params?)` 会在执行前评估操作的风险等级（`low`、`medium`、`high`、`critical`）、破坏性以及影响范围（`item`、`track`、`timeline`、`project`、`system`），而 `list_lifecycle_hooks()` 则可以查看当前生效的生命周期钩子。
+
+需要强调的是：这是一套基于动作名称的启发式判断，**不是模拟执行**——它完全不碰项目，也不会校验你传的参数。`recognised: false` 表示没有任何规则命中，那些等级只是按名字给出的默认值，而不是对这次操作的结论；`snapshot_available: null` 表示"是否能回滚未确定"，而不是"不能回滚"。所有随包启用的钩子都只做观察，没有任何一个会替换工具的返回值——因此 `dry_run` 永远会走到真正的处理函数，不会有人替一个本身不支持 dry-run 的动作凭空编一份预览出来。
 
 如果这次运行根本没有做过校验，报告里写的是**"not established — no checks recorded"（未确立——没有记录任何检查）**，而不是"通过"。没有证据是一个仍然悬而未决的问题；审计文件恰恰是最不该让读者把它读成"一切正常"的地方。
 

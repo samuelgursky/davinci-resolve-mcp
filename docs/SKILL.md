@@ -280,9 +280,21 @@ Example trace shape returned by `resolve_control(action="get_execution_trace")`:
 - **`inspect_operation(tool?, target_action?, target_params?)`**: Evaluates operation risk
   level (`low`, `medium`, `high`, `critical`), destructive potential, confirmation
   requirements, and blast radius scope before executing an action.
+
+  **It is a heuristic over action names, not a simulation.** It does not touch
+  the project, does not validate your parameters, and cannot tell you whether
+  the clip ids you are holding exist. Read three fields before trusting it:
+  `recognised: false` means no rule matched and the levels are name-based
+  defaults rather than a finding; `snapshot_available: null` means rollback
+  availability was not determined, never that there is none; and
+  `pre_state_available` separates "no project open" from "state never read".
+  For an actual preview, use the action's own `dry_run` where it has one.
 - **`list_lifecycle_hooks()`**: Returns active execution lifecycle pipeline hooks
-  (`risk_classification`, `resolve_state_inspection`, `dry_run_interception`,
-  `readback_verification`, `drift_detection`, `provenance_trace`).
+  (`risk_classification`, `resolve_state_inspection`, `readback_verification`,
+  `drift_detection`, `provenance_trace`). All of them observe; none replaces a
+  tool result. `dry_run` therefore always reaches the real handler — a tool
+  either implements it or does not, and nothing synthesises a preview on its
+  behalf.
 
 Explicit correlation is also supported per-call: pass `params={"execution_id": ...}`
 or `params={"trace_id": ...}` in any tool call to associate it with a specific trace.

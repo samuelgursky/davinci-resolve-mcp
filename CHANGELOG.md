@@ -4,6 +4,8 @@ Release history for the DaVinci Resolve MCP Server. The latest release is summar
 
 ## What's New in v2.208.0 — agent execution lifecycle & pre-flight risk inspection
 
+Adapted from the design contributed in PR #187.
+
 ### Added
 
 - **Agent execution lifecycle pipeline & hooks:**
@@ -15,13 +17,46 @@ Release history for the DaVinci Resolve MCP Server. The latest release is summar
   prior to execution, returning risk levels (`low`, `medium`, `high`, `critical`),
   destructive flags, confirmation requirements, and blast radius scopes (`item`,
   `track`, `timeline`, `project`, `system`).
-- **Dry-run simulation interceptor:**
-  Tools called with `dry_run: true` that lack native dry-run support are safely
-  simulated without mutating live timelines, capturing expected parameters,
-  risk assessment, and impact summaries.
 - **Lifecycle hooks introspection:**
   `resolve_control(action="list_lifecycle_hooks")` exposes registered pipeline
   hooks and their active states.
+
+### Notes on the adaptation
+
+- **The dry-run simulation interceptor is not included.** As contributed, any
+  call carrying `dry_run: true` outside a hardcoded four-entry allowlist was
+  short-circuited and answered with a synthesised `{"success": true,
+  "simulated": true}`. `src/server.py` has 273 `dry_run` references, so the
+  allowlist was not close: `setup.set_defaults` and
+  `resolve_control.clear_executions` both have real, tested dry-run paths and
+  were hijacked. It also answered `success: true` to
+  `set_defaults(result_envelope="banana")` — a dry run of an operation that
+  cannot succeed — and to adding a marker with no timeline in existence.
+  `dry_run` is the call an editor makes *because* they do not trust the next
+  one; a version of it that always succeeds is worse than none, because it is
+  believed. Nothing about dry-run behaviour changes in this release: every
+  `dry_run` reaches the handler that owns it.
+- **The pipeline can gate a call, but nothing shipped does.**
+  `HookDecision(proceed=False)` and the public `register_hook` remain, so a
+  deliberately registered hook can intercept. Every default hook only observes,
+  and `test_no_default_hook_short_circuits` keeps it that way.
+- **`inspect_operation` no longer contradicts itself about rollback.** It
+  reported `snapshot_available` two ways in one response — `false` inside
+  `risk`, and `true` at the top level whenever any pre-state could be read.
+  Reading a project name is not a restorable snapshot. It is now a single
+  `null`, meaning "not determined", with `pre_state_available` reporting
+  separately whether live state was read at all.
+- **An unrecognised operation is no longer assessed as safe.** Any action
+  matching no rule fell into a general-mutation bucket and returned `medium` /
+  `destructive: false` / `confirmation_required: false` — a confident answer
+  about an operation the classifier had never heard of, including ones that do
+  not exist. Responses now carry `recognised: false` and say in `reasons` that
+  the levels are name-based defaults rather than a finding. The guard exists
+  for hallucinated calls; answering one with reassurance was the failure it was
+  built to prevent.
+- The docs now state plainly that `inspect_operation` is a heuristic over
+  action names, not a simulation: it never touches the project and does not
+  validate parameters.
 
 ## What's New in v2.207.0 — execution audit report exports
 

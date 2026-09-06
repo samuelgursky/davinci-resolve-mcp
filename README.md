@@ -285,6 +285,13 @@ risk level (`low`, `medium`, `high`, `critical`), destructive potential, and bla
 radius (`item`, `track`, `timeline`, `project`, `system`) before taking action, while
 `list_lifecycle_hooks()` inspects active execution interceptors.
 
+It is a heuristic over action names, not a simulation — it never touches the
+project and does not validate your parameters, so `recognised: false` means the
+levels are defaults rather than a finding, and `snapshot_available: null` means
+rollback availability was not determined rather than absent. Every shipped hook
+observes; none replaces a tool's result, so `dry_run` always reaches the real
+handler and nothing synthesises a preview for an action that has none.
+
 A report for a run where nothing was verified says **"not established — no
 checks recorded"**, not "passed". Absence of evidence is a question still open,
 and an audit document is the last place to let a reader read it as an all-clear.

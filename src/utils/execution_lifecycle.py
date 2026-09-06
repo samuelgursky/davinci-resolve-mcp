@@ -51,7 +51,13 @@ class RiskAssessment:
     destructive: bool = False
     blast_radius: BlastRadius = BlastRadius.ITEM
     confirmation_required: bool = False
-    snapshot_available: bool = False
+    #: None = not determined. The classifier reads action names; it does not
+    #: know whether timeline_versioning would archive a predecessor, and False
+    #: would assert "no rollback" as a finding it never made.
+    snapshot_available: Optional[bool] = None
+    #: False when no rule matched, i.e. the fields below are name-based
+    #: defaults rather than an assessment of this specific operation.
+    recognised: bool = True
     reasons: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -61,6 +67,7 @@ class RiskAssessment:
             "blast_radius": self.blast_radius.value,
             "confirmation_required": self.confirmation_required,
             "snapshot_available": self.snapshot_available,
+            "recognised": self.recognised,
             "reasons": list(self.reasons),
         }
 
@@ -143,6 +150,7 @@ class RiskClassificationHook(LifecycleHook):
         level = RiskLevel.LOW
         radius = BlastRadius.ITEM
         conf_required = False
+        recognised = True
 
         pair = (tool_name, action)
 
@@ -167,18 +175,30 @@ class RiskClassificationHook(LifecycleHook):
             destructive = False
             radius = BlastRadius.ITEM
         else:
-            # General mutation
+            # Everything the rules do not recognise. This is a heuristic over
+            # action NAMES, so "unrecognised" covers both a real action nobody
+            # listed and an action that does not exist — and it must not come
+            # back as a confident "medium, not destructive". The guard exists
+            # for hallucinated calls; answering one with reassurance is the
+            # failure it was built to prevent.
             level = RiskLevel.MEDIUM
             destructive = action.startswith("reset_") or action.startswith("clear_")
             radius = BlastRadius.ITEM
+            recognised = False
+            reasons.append(
+                f"'{tool_name}.{action}' matches no risk rule. This assessment is a "
+                "name-based default, not a finding — treat the risk as unestablished "
+                "and check the tool's own documented behaviour before proceeding."
+            )
 
         return RiskAssessment(
             level=level,
             destructive=destructive,
             blast_radius=radius,
             confirmation_required=conf_required,
-            snapshot_available=False,
+            snapshot_available=None,
             reasons=reasons,
+            recognised=recognised,
         )
 
     def before_tool_call(self, ctx: ToolCallContext) -> Optional[HookDecision]:
@@ -204,58 +224,6 @@ class ResolveStateInspectionHook(LifecycleHook):
         except Exception as exc:
             logger.debug(f"Pre-flight state inspection skipped: {exc}")
         return None
-
-
-class DryRunInterceptionHook(LifecycleHook):
-    """Intercepts dry_run requests for operations that lack native dry-run support.
-
-    Allows AI agents to safely simulate the impact, risk, and blast radius of any
-    Resolve tool action without executing destructive modifications.
-    """
-    name = "dry_run_interception"
-
-    # Actions that already implement their own internal dry-run logic
-    NATIVE_DRY_RUN_ACTIONS: Set[Tuple[str, str]] = {
-        ("timeline", "ripple_insert"),
-        ("timeline", "apply_edit_plan"),
-        ("edit_engine", "preview_selects"),
-        ("media_pool", "import_media"),
-    }
-
-    def before_tool_call(self, ctx: ToolCallContext) -> Optional[HookDecision]:
-        params = ctx.params
-        if not isinstance(params, dict):
-            return None
-
-        is_dry_run = params.get("dry_run") is True or params.get("dryRun") is True
-        if not is_dry_run:
-            return None
-
-        pair = (ctx.tool_name, ctx.action)
-        if pair in self.NATIVE_DRY_RUN_ACTIONS:
-            # Let the native tool handler perform its specific simulation
-            return None
-
-        # Short-circuit simulation for all non-native dry-run operations
-        simulated_response = {
-            "success": True,
-            "dry_run": True,
-            "simulated": True,
-            "tool": ctx.tool_name,
-            "action": ctx.action,
-            "operation": f"{ctx.tool_name}.{ctx.action}",
-            "risk": ctx.risk.to_dict(),
-            "blast_radius": ctx.risk.blast_radius.value,
-            "params_submitted": {k: v for k, v in params.items() if k not in {"dry_run", "dryRun"}},
-            "pre_state": ctx.pre_state or {},
-            "impact_summary": (
-                f"Simulated {ctx.action} on {ctx.tool_name}. "
-                f"Risk: {ctx.risk.level.value.upper()}. "
-                f"Destructive: {ctx.risk.destructive}. "
-                f"Blast Radius: {ctx.risk.blast_radius.value}."
-            ),
-        }
-        return HookDecision(proceed=False, short_circuit_result=simulated_response)
 
 
 class ReadbackVerificationHook(LifecycleHook):
@@ -368,9 +336,26 @@ class LifecyclePipeline:
         self._register_default_hooks()
 
     def _register_default_hooks(self):
+        """The hooks that ship enabled. All of them OBSERVE; none short-circuit.
+
+        `HookDecision(proceed=False)` exists so a deliberately registered hook
+        can gate a call, and `register_hook` is public for that. Nothing
+        shipping uses it, on purpose: a hook that replaces a tool's result is
+        answering on behalf of code that never ran.
+
+        The original of this pipeline shipped a dry-run interceptor that did
+        exactly that — any `dry_run: true` call outside a four-entry allowlist
+        was short-circuited with a synthesised `success: true`. Against 273
+        `dry_run` references in `src/server.py` it hijacked actions with real
+        dry-run paths (`setup.set_defaults`, `resolve_control.clear_executions`),
+        and it answered `success: true` for an invalid enum value and for adding
+        a marker with no timeline in existence. `dry_run` is the one thing an
+        editor reaches for before a destructive edit; a version of it that
+        always succeeds is worse than none, because it is trusted.
+        `test_no_default_hook_short_circuits` keeps it that way.
+        """
         self._hooks.append(RiskClassificationHook())
         self._hooks.append(ResolveStateInspectionHook())
-        self._hooks.append(DryRunInterceptionHook())
         self._hooks.append(ReadbackVerificationHook())
         self._hooks.append(DriftDetectionHook())
         self._hooks.append(ProvenanceTraceHook())
@@ -470,9 +455,19 @@ class LifecyclePipeline:
             "destructive": assessment.destructive,
             "blast_radius": assessment.blast_radius.value,
             "confirmation_required": assessment.confirmation_required,
-            "snapshot_available": assessment.snapshot_available or (pre_state is not None),
+            # One value, from one place. This previously reported
+            # `assessment.snapshot_available or (pre_state is not None)` at the
+            # top level while `risk.snapshot_available` stayed False — the same
+            # response answering "can I roll this back?" both ways. Reading a
+            # project name is not a restorable snapshot, and the classifier
+            # never sets the flag, so the honest answer is "not determined".
+            "snapshot_available": assessment.snapshot_available,
             "reasons": assessment.reasons,
+            "recognised": assessment.recognised,
             "pre_state": pre_state,
+            # Whether pre_state reflects a live Resolve at all, so a caller can
+            # tell "no project open" from "never asked".
+            "pre_state_available": pre_state is not None,
         }
 
 

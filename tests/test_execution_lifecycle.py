@@ -15,7 +15,6 @@ from src.server import resolve_control
 from src.utils.execution_lifecycle import (
     BlastRadius,
     DriftDetectionHook,
-    DryRunInterceptionHook,
     HookDecision,
     LifecycleHook,
     LifecyclePipeline,
@@ -115,23 +114,77 @@ class TestExecutionLifecycle(unittest.TestCase):
         self.pipeline.run_on_error(ctx, err, duration_ms=2500)
         hook.on_error.assert_called_once_with(ctx, err, 2500)
 
-    def test_dry_run_interception_hook(self):
-        guard = DryRunInterceptionHook()
+    def test_an_unrecognised_operation_is_not_reported_as_assessed(self):
+        """The guard exists for hallucinated calls; it must not reassure one.
 
-        # Non-dry run returns None (proceed)
-        ctx_normal = ToolCallContext("timeline", "delete_clips", {"timeline_item_ids": ["c1"]})
-        decision = guard.before_tool_call(ctx_normal)
-        self.assertIsNone(decision)
+        Any action matching no rule fell into a "general mutation" bucket and
+        came back `medium` / `destructive: false` / `confirmation_required:
+        false` — a confident answer about an operation the classifier had never
+        heard of, including ones that do not exist.
+        """
+        from src.utils.execution_lifecycle import inspect_operation
 
-        # Dry run intercepts and provides simulation
-        ctx_dry = ToolCallContext("timeline", "delete_clips", {"timeline_item_ids": ["c1"], "dry_run": True})
-        decision_dry = guard.before_tool_call(ctx_dry)
-        self.assertIsNotNone(decision_dry)
-        self.assertFalse(decision_dry.proceed)
-        self.assertTrue(decision_dry.short_circuit_result["dry_run"])
-        self.assertTrue(decision_dry.short_circuit_result["simulated"])
-        self.assertEqual(decision_dry.short_circuit_result["tool"], "timeline")
-        self.assertEqual(decision_dry.short_circuit_result["action"], "delete_clips")
+        res = inspect_operation("not_a_tool", "not_an_action", {})
+        self.assertFalse(res["recognised"])
+        self.assertTrue(any("matches no risk rule" in r for r in res["reasons"]))
+
+        known = inspect_operation("timeline", "delete_clips", {"timeline_item_ids": ["c1"]})
+        self.assertTrue(known["recognised"])
+        self.assertTrue(known["destructive"])
+
+    def test_snapshot_availability_is_never_inferred_from_pre_state(self):
+        # "I could read the project name" is not "I can put this back".
+        from src.utils.execution_lifecycle import classify_operation_risk
+
+        assessment = classify_operation_risk("timeline", "delete_clips", {})
+        self.assertIsNone(assessment.snapshot_available)
+        self.assertIsNone(assessment.to_dict()["snapshot_available"])
+
+    def test_no_default_hook_short_circuits(self):
+        """Nothing shipping may answer on behalf of code that never ran.
+
+        The pipeline can gate a call — `HookDecision(proceed=False)` and the
+        public `register_hook` exist for that. But every hook registered by
+        default only observes. The original pipeline shipped a dry-run
+        interceptor that short-circuited any `dry_run: true` call outside a
+        four-entry allowlist with a synthesised `success: true`, and `dry_run`
+        is precisely the call an editor makes *because* they do not trust the
+        next one.
+        """
+        pipeline = LifecyclePipeline()
+        probes = [
+            ("timeline", "delete_clips", {"timeline_item_ids": ["c1"], "dry_run": True}),
+            ("setup", "set_defaults", {"result_envelope": "pure", "dry_run": True}),
+            ("media_pool", "delete_clips", {"dry_run": True, "confirm_token": "t"}),
+            ("project_manager", "delete_project", {"dry_run": True}),
+            ("timeline", "get_item_list", {"dry_run": True}),
+        ]
+        for tool, action, params in probes:
+            with self.subTest(op=f"{tool}.{action}"):
+                decision = pipeline.run_before(ToolCallContext(tool, action, params))
+                if decision is not None:
+                    self.assertTrue(
+                        decision.proceed,
+                        f"a default hook short-circuited {tool}.{action}")
+                    self.assertIsNone(decision.short_circuit_result)
+
+    def test_a_dry_run_still_reaches_the_real_handler(self):
+        """The end-to-end version: the tool's own dry-run path must run.
+
+        `setup.set_defaults` validates its input and refuses a bad value. Under
+        the interceptor it answered `success: true` to `result_envelope:
+        "banana"` — a dry run of an operation that cannot succeed, reported as
+        succeeding.
+        """
+        import src.server as compound
+
+        out = compound.setup("set_defaults", {"result_envelope": "banana", "dry_run": True})
+        self.assertIn("error", out)
+        self.assertNotIn("simulated", out)
+
+        ok = compound.setup("set_defaults", {"result_envelope": "pure", "dry_run": True})
+        self.assertTrue(ok.get("dry_run"))
+        self.assertNotIn("simulated", ok)
 
     def test_resolve_control_inspect_operation(self):
         res = resolve_control(
@@ -228,7 +281,12 @@ class TestExecutionLifecycle(unittest.TestCase):
             self.assertEqual(res["pre_state"]["project_name"], "Alpha")
             self.assertEqual(res["pre_state"]["timeline_name"], "Test Cut")
             self.assertEqual(res["pre_state"]["duration_frames"], 240)
-            self.assertTrue(res["snapshot_available"])
+            # Live pre-state was read — which is NOT the same as "a snapshot
+            # exists to roll back to". This previously asserted
+            # snapshot_available, deriving a rollback guarantee from having
+            # read a project name.
+            self.assertTrue(res["pre_state_available"])
+            self.assertIsNone(res["snapshot_available"])
 
             # Verify end-to-end execution lifecycle run with trace recording
             resolve_control(action="begin_execution", params={"request": "Integration cut with bridge"})
@@ -261,8 +319,8 @@ class TestExecutionLifecycle(unittest.TestCase):
         self.assertIn("hooks", res)
         hook_names = [h["name"] for h in res["hooks"]]
         self.assertIn("risk_classification", hook_names)
-        self.assertIn("dry_run_interception", hook_names)
         self.assertIn("readback_verification", hook_names)
+        self.assertNotIn("dry_run_interception", hook_names)
     def test_disabled_hook_is_skipped(self):
         hook = MagicMock(spec=LifecycleHook)
         hook.name = "disabled_hook"
@@ -296,16 +354,6 @@ class TestExecutionLifecycle(unittest.TestCase):
         self.assertEqual(res, envelope)
 
         self.pipeline.run_on_error(ctx, ValueError("Original err"), duration_ms=5)
-
-    def test_dry_run_interception_native_actions_and_invalid_params(self):
-        guard = DryRunInterceptionHook()
-        # Invalid params (not dict)
-        ctx_none = ToolCallContext("timeline", "delete_clips", None)
-        self.assertIsNone(guard.before_tool_call(ctx_none))
-
-        # Native dry-run action (let native tool handle)
-        ctx_native = ToolCallContext("timeline", "ripple_insert", {"dry_run": True})
-        self.assertIsNone(guard.before_tool_call(ctx_native))
 
     def test_readback_verification_with_non_dict_result(self):
         hook = ReadbackVerificationHook()
