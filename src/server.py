@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 353-tool granular server instead
 """
 
-VERSION = "2.208.1"
+VERSION = "2.209.0"
 
 import base64
 import os
@@ -1248,7 +1248,12 @@ def _ai_governance_gate(op: str, p: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 def _destructive_preference_provider(key: str) -> Any:
     """Reader for C6 preferences out of the existing media-analysis prefs file."""
     try:
-        return _read_media_analysis_preferences().get(key)
+        prefs = _read_media_analysis_preferences()
+        if key.startswith("destructive."):
+            destructive = prefs.get("destructive")
+            if isinstance(destructive, dict):
+                return destructive.get(key.split(".", 1)[1])
+        return prefs.get(key)
     except Exception:
         return None
 
@@ -15425,6 +15430,101 @@ def _setup_defaults_snapshot() -> Dict[str, Any]:
         "general": _setup_general_defaults(),
         "media_analysis": _setup_media_analysis_defaults(),
         "updates": _setup_updates_defaults(),
+        "destructive": _setup_destructive_defaults(),
+    }
+
+
+def _setup_destructive_defaults() -> Dict[str, Any]:
+    prefs = _read_media_analysis_preferences()
+    destructive = prefs.get("destructive") if isinstance(prefs.get("destructive"), dict) else {}
+    return {
+        "require_confirm_token": _setup_bool(destructive.get("require_confirm_token"), True),
+        "safe_mode": _setup_bool(destructive.get("safe_mode"), False),
+        "audit_log": _setup_bool(destructive.get("audit_log"), True),
+        "audit_log_path": destructive.get("audit_log_path") or os.path.join(project_dir, "logs", "security-audit.jsonl"),
+        "preferences_path": _media_analysis_preferences_path(),
+    }
+
+
+def _setup_set_destructive_defaults(destructive_defaults: Dict[str, Any], dry_run: bool) -> Dict[str, Any]:
+    if not destructive_defaults:
+        return {"changed": False, "recognized": False}
+
+    alias_to_key = {
+        "require_confirm_token": "require_confirm_token",
+        "requireconfirmtoken": "require_confirm_token",
+        "confirm_token": "require_confirm_token",
+        "confirmtoken": "require_confirm_token",
+        "safe_mode": "safe_mode",
+        "safemode": "safe_mode",
+        "audit_log": "audit_log",
+        "auditlog": "audit_log",
+        "audit_log_path": "audit_log_path",
+        "auditlogpath": "audit_log_path",
+    }
+    requested: Dict[str, Any] = {}
+    for key, value in destructive_defaults.items():
+        normalized_key = alias_to_key.get(_setup_text_key(key).replace("_", ""))
+        if not normalized_key:
+            normalized_key = alias_to_key.get(_setup_text_key(key))
+        if normalized_key:
+            requested[normalized_key] = value
+    if not requested:
+        return {"changed": False, "recognized": False}
+
+    try:
+        preferences = _read_media_analysis_preferences_strict()
+    except ConfigParseError as exc:
+        return _err(f"Refusing to update destructive defaults: {exc}. The preferences file exists but is unparseable; fix or delete it to avoid wiping saved settings.")
+
+    before = _setup_destructive_defaults()
+    next_preferences = dict(preferences)
+    destructive = dict(next_preferences.get("destructive") if isinstance(next_preferences.get("destructive"), dict) else {})
+    updates: Dict[str, Dict[str, Any]] = {}
+
+    def clear_requested(raw: Any) -> bool:
+        return raw is None or (not isinstance(raw, bool) and _setup_text_key(raw) in _SETUP_CHOICE_CLEAR_VALUES)
+
+    for key, raw_value in requested.items():
+        if clear_requested(raw_value):
+            destructive.pop(key, None)
+            updates[key] = {"before": before.get(key), "after": _setup_destructive_defaults().get(key), "cleared": True}
+        elif key in {"require_confirm_token", "safe_mode", "audit_log"}:
+            normalized = _setup_bool(raw_value, before.get(key, False))
+            destructive[key] = normalized
+            updates[key] = {"before": before.get(key), "after": normalized}
+        elif key == "audit_log_path":
+            path = os.path.realpath(os.path.abspath(os.path.expanduser(str(raw_value))))
+            destructive[key] = path
+            updates[key] = {"before": before.get(key), "after": path}
+
+    if dry_run:
+        return {
+            "changed": True,
+            "recognized": True,
+            "updates": updates,
+            "before": before,
+            "after": {**before, **{key: row.get("after") for key, row in updates.items()}},
+            "dry_run": True,
+        }
+
+    updated_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    for key, row in updates.items():
+        if not row.get("cleared"):
+            destructive[f"{key}_updated_at"] = updated_at
+        else:
+            destructive.pop(f"{key}_updated_at", None)
+    next_preferences["destructive"] = destructive
+    _write_media_analysis_preferences(next_preferences)
+    after = _setup_destructive_defaults()
+    return {
+        "changed": before != after,
+        "recognized": True,
+        "updates": updates,
+        "before": before,
+        "after": after,
+        "updated_at": updated_at,
+        "preferences_path": _media_analysis_preferences_path(),
     }
 
 
@@ -15939,6 +16039,25 @@ def _setup_clear_defaults(keys: Any, dry_run: bool) -> Dict[str, Any]:
             return result["media_analysis"]
         result["cleared"].extend(media_clear_keys[key] for key in media_payload)
 
+    destructive_clear_keys = {
+        "require_confirm_token": "destructive.require_confirm_token",
+        "safe_mode": "destructive.safe_mode",
+        "audit_log": "destructive.audit_log",
+        "audit_log_path": "destructive.audit_log_path",
+    }
+    destructive_payload: Dict[str, Any] = {}
+    if clear_all or "destructive" in normalized_keys:
+        destructive_payload = {key: "clear" for key in destructive_clear_keys}
+    else:
+        for key, label in destructive_clear_keys.items():
+            if key in normalized_keys or label in normalized_keys:
+                destructive_payload[key] = "clear"
+    if destructive_payload:
+        result["destructive"] = _setup_set_destructive_defaults(destructive_payload, dry_run)
+        if result["destructive"].get("error"):
+            return result["destructive"]
+        result["cleared"].extend(destructive_clear_keys[key] for key in destructive_payload)
+
     if clear_all or normalized_keys & {"updates", "updates.mode", "update_mode", "mcp_update_policy"}:
         result["updates"] = _setup_set_updates_defaults({"mode": "prompt"}, dry_run)
         if result["updates"].get("error"):
@@ -15993,12 +16112,13 @@ def setup(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any
     Actions:
       schema() -> {defaults, actions}
       get_defaults() -> {defaults}
-      set_defaults(defaults?|media_analysis?|updates?|dry_run?) -> {defaults, changes}
+      set_defaults(defaults?|media_analysis?|updates?|destructive?|dry_run?) -> {defaults, changes}
       clear_defaults(keys?, dry_run?) -> {defaults, cleared}
 
     Current defaults:
       media_analysis.*: analysis, metadata, marker, reporting, and workflow defaults
       updates.*: MCP update policy, interval, and snooze defaults
+      destructive.*: confirm-token, safe-mode, and audit-log defaults
     """
     p = _params(params)
     if action in {"schema", "capabilities", "options"}:
@@ -16069,6 +16189,26 @@ def setup(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any
                     "current": _get_envelope_mode(),
                     "storage": _server_preferences_path(),
                 },
+                "destructive.require_confirm_token": {
+                    "description": "Require one-time confirmation tokens for registered high-risk destructive actions.",
+                    "values": [True, False],
+                    "storage": _media_analysis_preferences_path(),
+                },
+                "destructive.safe_mode": {
+                    "description": "When enabled, safe mode blocks high/dangerous destructive actions unless allow_risky_operation=true is passed.",
+                    "values": [True, False],
+                    "storage": _media_analysis_preferences_path(),
+                },
+                "destructive.audit_log": {
+                    "description": "Write JSONL security audit records for destructive operations.",
+                    "values": [True, False],
+                    "storage": _media_analysis_preferences_path(),
+                },
+                "destructive.audit_log_path": {
+                    "description": "Absolute path for the JSONL security audit log.",
+                    "values": "absolute or expandable path",
+                    "storage": _media_analysis_preferences_path(),
+                },
             },
         }
 
@@ -16097,6 +16237,7 @@ def setup(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any
                 for key, value in merged.items()
                 if key not in {"updates", "mcp_updates", "mcpUpdates", "dry_run", "dryRun"}
                 and key not in _general_keys
+                and key != "destructive"
             },
             **({
                 "timed_markers_default": _first_param(
@@ -16146,6 +16287,43 @@ def setup(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any
                 )
             } if any(key in merged for key in ("snooze_hours", "snoozeHours", "update_snooze_hours", "updateSnoozeHours")) else {}),
         }
+        destructive_defaults = {
+            **_setup_nested(merged, "destructive"),
+            **({
+                "require_confirm_token": _first_param(
+                    merged,
+                    "require_confirm_token",
+                    "requireConfirmToken",
+                    "confirm_token",
+                    "confirmToken",
+                    default=None,
+                )
+            } if any(key in merged for key in ("require_confirm_token", "requireConfirmToken", "confirm_token", "confirmToken")) else {}),
+            **({
+                "safe_mode": _first_param(
+                    merged,
+                    "safe_mode",
+                    "safeMode",
+                    default=None,
+                )
+            } if any(key in merged for key in ("safe_mode", "safeMode")) else {}),
+            **({
+                "audit_log": _first_param(
+                    merged,
+                    "audit_log",
+                    "auditLog",
+                    default=None,
+                )
+            } if any(key in merged for key in ("audit_log", "auditLog")) else {}),
+            **({
+                "audit_log_path": _first_param(
+                    merged,
+                    "audit_log_path",
+                    "auditLogPath",
+                    default=None,
+                )
+            } if any(key in merged for key in ("audit_log_path", "auditLogPath")) else {}),
+        }
 
         general_result = _setup_set_general_defaults(general_defaults, dry_run)
         if general_result.get("error"):
@@ -16156,9 +16334,16 @@ def setup(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any
         update_result = _setup_set_updates_defaults(update_defaults, dry_run)
         if update_result.get("error"):
             return update_result
-        recognized = (bool(general_result.get("recognized"))
-                      or bool(media_result.get("recognized"))
-                      or bool(update_result.get("recognized")))
+        destructive_result = _setup_set_destructive_defaults(destructive_defaults, dry_run)
+        if destructive_result.get("error"):
+            return destructive_result
+        recognized = (
+            bool(general_result.get("recognized"))
+            or
+            bool(media_result.get("recognized"))
+            or bool(update_result.get("recognized"))
+            or bool(destructive_result.get("recognized"))
+        )
         if not recognized:
             return _err("set_defaults did not receive a recognized default to set")
 
@@ -16168,6 +16353,7 @@ def setup(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any
                 "general": general_result,
                 "media_analysis": media_result,
                 "updates": update_result,
+                "destructive": destructive_result,
             },
             defaults=_setup_defaults_snapshot(),
         )

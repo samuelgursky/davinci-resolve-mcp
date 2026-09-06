@@ -29,7 +29,7 @@ logger = logging.getLogger("resolve-mcp.execution-lifecycle")
 
 class RiskLevel(str, enum.Enum):
     """Categorized risk level for tool operations."""
-    LOW = "low"            # Read-only queries, info probes, status checks
+    LOW = "low"            # Read-only queries, info probes, and known-reversible edits
     MEDIUM = "medium"      # Reversible edits, markers, non-destructive properties
     HIGH = "high"          # Deletions, ripples, timeline restructuring, batch edits
     CRITICAL = "critical"  # Project deletion, database resets, permanent loss
@@ -139,6 +139,26 @@ class RiskClassificationHook(LifecycleHook):
         ("edit_engine", "auto_cut_silence"),
         ("edit_engine", "ripple_trim"),
         ("project_manager", "save_project_as"),
+        ("media_pool", "delete_folders"),
+        ("timeline", "delete_track"),
+        ("timeline", "lift_range"),
+        ("timeline", "overwrite_range"),
+        ("timeline", "apply_cuts"),
+        ("graph", "reset_all_grades"),
+    }
+
+    #: Mutating, but bounded and trivially reversible — a marker or a clip
+    #: colour. Without this table the name heuristic files them under MEDIUM
+    #: and flags them unrecognised, i.e. it warns that the risk is unestablished
+    #: for the actions whose risk is the best established of any we dispatch.
+    _LOW_RISK_ACTIONS: Set[Tuple[str, str]] = {
+        ("timeline_markers", "add"),
+        ("timeline_markers", "update_custom_data"),
+        ("timeline_item_markers", "add"),
+        ("timeline_item_markers", "add_flag"),
+        ("timeline_item_markers", "clear_flags"),
+        ("timeline_item_markers", "set_clip_color"),
+        ("timeline_item_markers", "clear_clip_color"),
     }
 
     _READ_ONLY_PREFIXES = ("get_", "list_", "query_", "probe_", "inspect_", "export_", "check_")
@@ -170,6 +190,11 @@ class RiskClassificationHook(LifecycleHook):
                 radius = BlastRadius.ITEM
             conf_required = True
             reasons.append(f"Destructive timeline edit: {action}")
+        elif pair in cls._LOW_RISK_ACTIONS:
+            level = RiskLevel.LOW
+            destructive = True
+            radius = BlastRadius.ITEM
+            reasons.append(f"Bounded reversible edit: {action}")
         elif any(action.startswith(p) for p in cls._READ_ONLY_PREFIXES) or action in {"read", "status", "info"}:
             level = RiskLevel.LOW
             destructive = False

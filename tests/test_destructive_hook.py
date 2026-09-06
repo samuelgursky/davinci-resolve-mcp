@@ -5,10 +5,14 @@ No Resolve required.
 
 from __future__ import annotations
 
+import json
+import os
+import tempfile
 import unittest
 from unittest import mock
 
 from src.utils import destructive_hook
+from src.utils.execution_lifecycle import classify_operation_risk
 
 
 class ActionFiltering(unittest.TestCase):
@@ -94,6 +98,168 @@ class StrictMode(unittest.TestCase):
         self.assertFalse(destructive_hook.is_strict_required(
             "timeline_item", "set_property", {"key": "Name", "value": "x"},
         ))
+
+
+class SecurityPolicy(unittest.TestCase):
+    def setUp(self) -> None:
+        self.saved_provider = destructive_hook._PROVIDER
+        self.saved_pref_provider = destructive_hook._PREFERENCE_PROVIDER
+        self.saved_pending_check = destructive_hook._PENDING_CONFIRM_CHECK
+        self.tmp = tempfile.TemporaryDirectory()
+        self.audit_path = os.path.join(self.tmp.name, "security-audit.jsonl")
+
+    def tearDown(self) -> None:
+        destructive_hook._PROVIDER = self.saved_provider
+        destructive_hook._PREFERENCE_PROVIDER = self.saved_pref_provider
+        destructive_hook._PENDING_CONFIRM_CHECK = self.saved_pending_check
+        self.tmp.cleanup()
+
+    def _prefs(self, *, safe_mode: bool = False):
+        def provider(key: str):
+            values = {
+                "destructive.safe_mode": safe_mode,
+                "destructive.audit_log": True,
+                "destructive.audit_log_path": self.audit_path,
+            }
+            return values.get(key)
+        destructive_hook.register_preference_provider(provider)
+
+    def _audit_events(self):
+        with open(self.audit_path, "r", encoding="utf-8") as handle:
+            return [json.loads(line) for line in handle if line.strip()]
+
+    def test_risk_level_classifier_names_low_medium_and_high(self) -> None:
+        self.assertEqual(
+            destructive_hook.risk_level_for_action("timeline_markers", "add", {}),
+            "low",
+        )
+        self.assertEqual(
+            destructive_hook.risk_level_for_action("timeline_item", "set_name", {}),
+            "medium",
+        )
+        self.assertEqual(
+            destructive_hook.risk_level_for_action("timeline", "delete_track", {}),
+            "high",
+        )
+        self.assertEqual(
+            destructive_hook.risk_level_for_action("timeline", "delete_clips", {"ripple": True}),
+            "high",
+        )
+
+    def test_risk_level_comes_from_the_lifecycle_classifier(self) -> None:
+        """One classifier, not two.
+
+        A second risk table inside destructive_hook would let the safe-mode gate
+        and `inspect_operation` report different levels for the same call — the
+        gate refusing what pre-flight inspection had just called reversible.
+        """
+        for tool, action, params in (
+            ("timeline_markers", "add", {}),
+            ("timeline", "delete_track", {}),
+            ("media_pool", "delete_clips", {}),
+            ("timeline", "delete_clips", {"ripple": True}),
+            ("timeline_item", "set_name", {}),
+        ):
+            with self.subTest(action=f"{tool}.{action}"):
+                self.assertEqual(
+                    destructive_hook.risk_level_for_action(tool, action, params),
+                    classify_operation_risk(tool, action, params).level.value,
+                )
+
+    def test_unclassified_destructive_actions_report_risk_as_unestablished(self) -> None:
+        """`medium` from the name heuristic is a default, not a finding.
+
+        Safe mode deliberately does not block these — 80 of 108 registered
+        destructive actions are unclassified, so gating them would block most
+        ordinary edits. The flag is how a caller tells the two apart.
+        """
+        self._prefs(safe_mode=True)
+        destructive_hook.register_project_root_provider(lambda: None)
+        destructive_hook.register_pending_confirm_check(lambda *_args: False)
+
+        @destructive_hook.destructive_op("timeline")
+        def fake_timeline(action: str, params=None):
+            return {"success": True}
+
+        result = fake_timeline("add_track", {"trackType": "video"})
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["security"]["risk_level"], "medium")
+        self.assertFalse(result["security"]["risk_established"])
+        [event] = self._audit_events()
+        self.assertEqual(event["status"], "allowed")
+        self.assertFalse(event["risk_established"])
+
+    def test_classified_actions_report_risk_as_established(self) -> None:
+        self._prefs(safe_mode=False)
+        destructive_hook.register_project_root_provider(lambda: None)
+        destructive_hook.register_pending_confirm_check(lambda *_args: False)
+
+        @destructive_hook.destructive_op("timeline_markers")
+        def fake_markers(action: str, params=None):
+            return {"success": True}
+
+        result = fake_markers("add", {"frame": 3})
+        self.assertTrue(result["security"]["risk_established"])
+
+    def test_safe_mode_blocks_high_risk_before_handler_runs(self) -> None:
+        self._prefs(safe_mode=True)
+        destructive_hook.register_project_root_provider(lambda: None)
+        calls: list[str] = []
+
+        @destructive_hook.destructive_op("timeline")
+        def fake_timeline(action: str, params=None):
+            calls.append(action)
+            return {"success": True}
+
+        result = fake_timeline("delete_track", {"confirm_token": "secret"})
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error"]["code"], "SAFE_MODE_BLOCKED")
+        self.assertEqual(result["security"]["risk_level"], "high")
+        self.assertEqual(calls, [])
+        [event] = self._audit_events()
+        self.assertEqual(event["status"], "blocked")
+        self.assertEqual(event["reason"], "safe_mode")
+        self.assertEqual(event["params"]["confirm_token"], "<redacted>")
+
+    def test_safe_mode_allows_low_risk_and_audits(self) -> None:
+        self._prefs(safe_mode=True)
+        destructive_hook.register_project_root_provider(lambda: None)
+        destructive_hook.register_pending_confirm_check(lambda *_args: False)
+
+        @destructive_hook.destructive_op("timeline_markers")
+        def fake_markers(action: str, params=None):
+            return {"success": True, "added": 1}
+
+        result = fake_markers("add", {"frame": 12})
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["security"]["risk_level"], "low")
+        [event] = self._audit_events()
+        self.assertEqual(event["status"], "allowed")
+        self.assertEqual(event["risk_level"], "low")
+
+    def test_high_risk_can_be_explicitly_allowed_in_safe_mode(self) -> None:
+        self._prefs(safe_mode=True)
+        destructive_hook.register_project_root_provider(lambda: None)
+        calls: list[str] = []
+
+        @destructive_hook.destructive_op("media_pool")
+        def fake_media_pool(action: str, params=None):
+            calls.append(action)
+            return {"success": True}
+
+        result = fake_media_pool(
+            "delete_clips",
+            {"confirm_token": "secret", "allow_risky_operation": True},
+        )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(calls, ["delete_clips"])
+        self.assertEqual(result["security"]["risk_level"], "critical")
+        [event] = self._audit_events()
+        self.assertEqual(event["status"], "allowed")
 
 
 class WrapperWithProvider(unittest.TestCase):

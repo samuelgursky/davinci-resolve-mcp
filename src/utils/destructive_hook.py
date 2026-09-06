@@ -25,12 +25,24 @@ every tool that owns destructive actions is decorated.
 from __future__ import annotations
 
 import functools
+import json
 import logging
+import os
+import time
+import uuid
 from typing import Any, Callable, Dict, FrozenSet, Optional, Tuple
 
 from src.utils import analysis_runs, brain_edits, media_pool_changes, timeline_versioning
+from src.utils.execution_lifecycle import RiskAssessment, RiskLevel, classify_operation_risk
 
 logger = logging.getLogger("resolve-mcp.destructive-hook")
+
+
+#: Risk levels safe mode refuses. Names come from `RiskLevel`; a second
+#: vocabulary here would let the gate and the reported level disagree.
+SAFE_MODE_BLOCKED_RISK_LEVELS: FrozenSet[str] = frozenset({
+    RiskLevel.HIGH.value, RiskLevel.CRITICAL.value,
+})
 
 
 # ── Destructive action registry ──────────────────────────────────────────────
@@ -300,6 +312,26 @@ def is_strict_required(tool_name: str, action: str, params: Optional[Dict[str, A
     return False
 
 
+def assess_action_risk(
+    tool_name: str, action: str, params: Optional[Dict[str, Any]] = None,
+) -> RiskAssessment:
+    """Classify a call for the safe-operations policy.
+
+    Classification lives in `execution_lifecycle`, which the pre-flight
+    inspection surface already uses. Deriving it a second time here would let
+    `inspect_operation` and the safe-mode gate disagree about the same call —
+    the gate blocking what inspection called reversible, or the reverse.
+    """
+    return classify_operation_risk(tool_name, action, params or {})
+
+
+def risk_level_for_action(
+    tool_name: str, action: str, params: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Return the security risk level for a call, as a `RiskLevel` value."""
+    return assess_action_risk(tool_name, action, params).level.value
+
+
 # ── Provider hooks ───────────────────────────────────────────────────────────
 
 _ProjectRootProvider = Callable[[], Optional[Tuple[Any, Any, str, Optional[str]]]]
@@ -358,6 +390,163 @@ def _read_preference(key: str, default: Any = None) -> Any:
         logger.debug("preference provider for %s raised: %s", key, exc)
         return default
     return default if value is None else value
+
+
+def _coerce_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "off"}:
+            return False
+        return default
+    return bool(value)
+
+
+def _safe_mode_enabled() -> bool:
+    return _coerce_bool(_read_preference("destructive.safe_mode", False), False)
+
+
+def _audit_enabled() -> bool:
+    return _coerce_bool(_read_preference("destructive.audit_log", True), True)
+
+
+def _audit_log_path() -> str:
+    configured = _read_preference("destructive.audit_log_path", None)
+    if configured:
+        return os.path.expanduser(str(configured))
+    project_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    return os.path.join(project_dir, "logs", "security-audit.jsonl")
+
+
+def _safe_params_for_audit(params: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not isinstance(params, dict):
+        return None
+    redacted = dict(params)
+    for key in ("confirm_token", "confirmToken"):
+        if key in redacted:
+            redacted[key] = "<redacted>"
+    return redacted
+
+
+def _audit_security_event(
+    *,
+    operation_id: str,
+    tool_name: str,
+    action: str,
+    risk_level: str,
+    status: str,
+    params: Optional[Dict[str, Any]],
+    recognised: bool = True,
+    reason: Optional[str] = None,
+    project_root: Optional[str] = None,
+    analysis_run_id: Optional[str] = None,
+) -> None:
+    if not _audit_enabled():
+        return
+    event = {
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "operation_id": operation_id,
+        "tool": tool_name,
+        "action": action,
+        "risk_level": risk_level,
+        "risk_established": recognised,
+        "status": status,
+        "reason": reason,
+        "analysis_run_id": analysis_run_id,
+        "project_root": project_root,
+        "params": _safe_params_for_audit(params),
+    }
+    path = _audit_log_path()
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(event, sort_keys=True, default=str) + "\n")
+    except Exception as exc:
+        logger.warning("security audit log write failed: %s", exc)
+
+
+def _security_block_response(
+    *,
+    operation_id: str,
+    tool_name: str,
+    action: str,
+    risk_level: str,
+    recognised: bool = True,
+) -> Dict[str, Any]:
+    return {
+        "success": False,
+        "status": "blocked_by_security_policy",
+        "operation_id": operation_id,
+        "security": {
+            "risk_level": risk_level,
+            "risk_established": recognised,
+            "safe_mode": True,
+            "blocked": True,
+            "policy": "destructive.safe_mode",
+        },
+        "error": {
+            "message": (
+                f"Safe mode blocked {risk_level}-risk action "
+                f"'{tool_name}.{action}'. "
+                "Re-call with params.allow_risky_operation=true, or disable "
+                "destructive.safe_mode in setup defaults."
+            ),
+            "code": "SAFE_MODE_BLOCKED",
+            "category": "destructive_blocked",
+            "retryable": False,
+            "remediation": (
+                "Pass allow_risky_operation=true for this call after review, or "
+                "set destructive.safe_mode=false if this session should allow "
+                "high-risk destructive actions."
+            ),
+        },
+    }
+
+
+def _annotate_security(
+    result: Any,
+    *,
+    operation_id: str,
+    risk_level: str,
+    blocked: bool = False,
+    recognised: bool = True,
+) -> Any:
+    if isinstance(result, dict):
+        result.setdefault("operation_id", operation_id)
+        result.setdefault("security", {
+            "risk_level": risk_level,
+            "risk_established": recognised,
+            "safe_mode": _safe_mode_enabled(),
+            "blocked": blocked,
+        })
+    return result
+
+
+def _safe_mode_allows(
+    risk_level: str,
+    params: Optional[Dict[str, Any]],
+    recognised: bool = True,
+) -> bool:
+    """Whether safe mode lets this call through.
+
+    Only an established HIGH or CRITICAL is blocked. Failing closed on
+    `recognised=False` was measured and rejected: 80 of the 108 registered
+    destructive actions match no risk rule today, `timeline.add_track` and
+    `timeline.duplicate` among them, so it would block three quarters of all
+    edits and teach users to leave safe mode off — weaker in practice than a
+    narrow gate they keep on. The unclassified actions are reported via
+    `risk_established` instead, and want classifying rather than blanket-gating.
+    """
+    if not _safe_mode_enabled():
+        return True
+    if risk_level not in SAFE_MODE_BLOCKED_RISK_LEVELS:
+        return True
+    if isinstance(params, dict) and params.get("allow_risky_operation") is True:
+        return True
+    return False
 
 
 def _resolve_versioning_context() -> Optional[Tuple[Any, Any, str, Optional[str]]]:
@@ -441,6 +630,29 @@ def destructive_op(tool_name: str) -> Callable[[Callable[..., Any]], Callable[..
             if not is_destructive(tool_name, action, params):
                 return fn(action, params, *args, **kwargs)
 
+            operation_id = f"op_{uuid.uuid4().hex[:12]}"
+            assessment = assess_action_risk(tool_name, action, params)
+            risk_level = assessment.level.value
+            risk_recognised = assessment.recognised
+            if not _safe_mode_allows(risk_level, params, risk_recognised):
+                _audit_security_event(
+                    operation_id=operation_id,
+                    tool_name=tool_name,
+                    action=action,
+                    risk_level=risk_level,
+                    status="blocked",
+                    params=params,
+                    reason="safe_mode",
+                    recognised=risk_recognised,
+                )
+                return _security_block_response(
+                    operation_id=operation_id,
+                    tool_name=tool_name,
+                    action=action,
+                    risk_level=risk_level,
+                    recognised=risk_recognised,
+                )
+
             # F4 — token-issuance calls don't mutate; skip the archive entirely
             # so that token preview/cancel paths don't litter the version chain.
             # The wrapper still annotates `_versioning` on the result so callers
@@ -453,30 +665,76 @@ def destructive_op(tool_name: str) -> Callable[[Callable[..., Any]], Callable[..
                     will_gate = False
                 if will_gate:
                     result = fn(action, params, *args, **kwargs)
+                    _audit_security_event(
+                        operation_id=operation_id,
+                        tool_name=tool_name,
+                        action=action,
+                        risk_level=risk_level,
+                        status="pending_confirmation",
+                        params=params,
+                        reason="confirm_token_required",
+                        recognised=risk_recognised,
+                    )
                     if isinstance(result, dict):
                         result.setdefault("_versioning", {
                             "analysis_run_id": None,
                             "archived": False,
                             "skipped_reason": "pending_confirm_token",
                         })
-                    return result
+                    return _annotate_security(
+                        result,
+                        operation_id=operation_id,
+                        risk_level=risk_level,
+                        recognised=risk_recognised,
+                    )
 
             strict = is_strict_required(tool_name, action, params)
 
             ctx = _resolve_versioning_context()
             if ctx is None:
                 if strict:
-                    return {
+                    _audit_security_event(
+                        operation_id=operation_id,
+                        tool_name=tool_name,
+                        action=action,
+                        risk_level=risk_level,
+                        status="blocked",
+                        params=params,
+                        reason="strict_missing_version_context",
+                        recognised=risk_recognised,
+                    )
+                    return _annotate_security({
                         "success": False,
                         "error": (
                             f"strict mode: '{tool_name}.{action}' refuses to run because the "
                             "version-on-mutate context (project_root) couldn't be resolved. "
                             "Open a project in Resolve, or pass strict=false to override."
                         ),
-                    }
+                    },
+                    operation_id=operation_id,
+                    risk_level=risk_level,
+                    blocked=True,
+                    recognised=risk_recognised,
+                )
                 # No Resolve / no project — let the underlying handler run; it
                 # will either succeed (e.g. in dry-run) or surface its own error.
-                return fn(action, params, *args, **kwargs)
+                result = fn(action, params, *args, **kwargs)
+                _audit_security_event(
+                    operation_id=operation_id,
+                    tool_name=tool_name,
+                    action=action,
+                    risk_level=risk_level,
+                    status="allowed",
+                    params=params,
+                    reason="no_version_context",
+                    recognised=risk_recognised,
+                )
+                return _annotate_security(
+                    result,
+                    operation_id=operation_id,
+                    risk_level=risk_level,
+                    recognised=risk_recognised,
+                )
 
             resolve_h, project_h, project_root, project_name = ctx
             run_id = _extract_analysis_run_id(params, project_root=project_root)
@@ -488,6 +746,17 @@ def destructive_op(tool_name: str) -> Callable[[Callable[..., Any]], Callable[..
             # wrapper only handles the timeline path.
             if tool_name == "media_pool":
                 result = fn(action, params, *args, **kwargs)
+                _audit_security_event(
+                    operation_id=operation_id,
+                    tool_name=tool_name,
+                    action=action,
+                    risk_level=risk_level,
+                    status="allowed",
+                    params=params,
+                    project_root=project_root,
+                    analysis_run_id=run_id,
+                    recognised=risk_recognised,
+                )
                 try:
                     media_pool_changes.log_media_pool_change(
                         project_root=project_root,
@@ -505,7 +774,12 @@ def destructive_op(tool_name: str) -> Callable[[Callable[..., Any]], Callable[..
                         "category": "media_pool",
                         "initiator": initiator,
                     })
-                return result
+                return _annotate_security(
+                    result,
+                    operation_id=operation_id,
+                    risk_level=risk_level,
+                    recognised=risk_recognised,
+                )
 
             before_value: Optional[float] = None
             timeline_before_name: Optional[str] = None
@@ -555,7 +829,19 @@ def destructive_op(tool_name: str) -> Callable[[Callable[..., Any]], Callable[..
                 if archive_exc is not None or (
                     not archive_result.get("archived") and not skipped_ok
                 ):
-                    return {
+                    _audit_security_event(
+                        operation_id=operation_id,
+                        tool_name=tool_name,
+                        action=action,
+                        risk_level=risk_level,
+                        status="blocked",
+                        params=params,
+                        reason="strict_archive_failed",
+                        project_root=project_root,
+                        analysis_run_id=run_id,
+                        recognised=risk_recognised,
+                    )
+                    return _annotate_security({
                         "success": False,
                         "error": (
                             f"strict mode: refused '{tool_name}.{action}' because the "
@@ -568,10 +854,26 @@ def destructive_op(tool_name: str) -> Callable[[Callable[..., Any]], Callable[..
                             "archived": False,
                             "strict_block": True,
                         },
-                    }
+                    },
+                    operation_id=operation_id,
+                    risk_level=risk_level,
+                    blocked=True,
+                    recognised=risk_recognised,
+                )
 
             # Run the underlying handler regardless of hook outcome.
             result = fn(action, params, *args, **kwargs)
+            _audit_security_event(
+                operation_id=operation_id,
+                tool_name=tool_name,
+                action=action,
+                risk_level=risk_level,
+                status="allowed",
+                params=params,
+                project_root=project_root,
+                analysis_run_id=run_id,
+                recognised=risk_recognised,
+            )
 
             after_value: Optional[float] = None
             timeline_after_name: Optional[str] = timeline_before_name
@@ -617,7 +919,12 @@ def destructive_op(tool_name: str) -> Callable[[Callable[..., Any]], Callable[..
                     "before_value": before_value,
                     "after_value": after_value,
                 })
-            return result
+            return _annotate_security(
+                result,
+                operation_id=operation_id,
+                risk_level=risk_level,
+                recognised=risk_recognised,
+            )
 
         wrapper.__wrapped_tool_name__ = tool_name  # type: ignore[attr-defined]
         wrapper.__is_destructive_wrapped__ = True  # type: ignore[attr-defined]
