@@ -2,6 +2,30 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.209.1 — the test suite no longer writes to the security audit log
+
+### Fixed
+
+- **Running the suite appended fabricated events to `logs/security-audit.jsonl`.**
+  The destructive-op audit log added in v2.209.0 defaults to that path, which is
+  correct for an install and wrong for a test run: any test exercising a
+  `@destructive_op`-wrapped handler wrote a genuine-looking record.
+  `tests/test_tool_argument_validation` walks every tool, so a single run added
+  24 synthetic `delete_timelines` / `reset_all_grades` / `apply_cuts` entries,
+  and repeated runs accumulated 216.
+
+  A security log is read to establish what actually happened, so synthetic rows
+  in it are worse than a missing feature — at the point someone needs to trust
+  the file they are indistinguishable from real events. `tests/offline_guard`
+  now redirects the audit path to a temp file for the whole run, covering both
+  the pytest and `python -m unittest` entry points, and only replaces the
+  *default*: a test that configures `destructive.audit_log_path` still gets its
+  own path. A regression test asserts the active path is never inside the repo.
+
+  No released behaviour changes — the default remains `logs/security-audit.jsonl`
+  for real installs. Anyone who ran the v2.209.0 suite should expect synthetic
+  rows in their local file; they carry temp-directory `project_root` values.
+
 ## What's New in v2.209.0 — safe operations policy
 
 ### Added

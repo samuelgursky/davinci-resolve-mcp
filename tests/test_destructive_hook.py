@@ -417,5 +417,27 @@ class AutoRunIdleTimeoutPreferenceTest(unittest.TestCase):
         self.assertEqual(seen["timeout"], 90.0)
 
 
+class SecurityAuditLogIsolation(unittest.TestCase):
+    """The suite must not write into the operator's real audit trail.
+
+    Running the tests once appended 24 fabricated destructive-op records to
+    `logs/security-audit.jsonl`; repeated runs accumulated 216. Entries in a
+    security log are read as a record of what happened, so synthetic ones are
+    not merely untidy — they are indistinguishable from real events at the
+    moment someone needs to trust the file. `tests/offline_guard` redirects the
+    path for the whole run; this pins that it stays redirected.
+    """
+
+    def test_audit_path_is_not_inside_the_repository(self) -> None:
+        repo_logs = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs"
+        )
+        path = os.path.abspath(destructive_hook._audit_log_path())
+        self.assertFalse(
+            path.startswith(os.path.abspath(repo_logs)),
+            f"suite would write audit records into the real trail at {path}",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

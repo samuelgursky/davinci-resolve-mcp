@@ -23,6 +23,7 @@ hollowing out the tests that call it on purpose.
 from __future__ import annotations
 
 import os
+import tempfile
 
 #: Every launch the suite attempted, so a failure names the test rather than
 #: leaving an application open with no explanation.
@@ -123,8 +124,69 @@ def install() -> bool:
     server._launch_resolve = blocked_launch
     server.get_resolve = offline_get_resolve
     server.resolve_is_running = offline_resolve_is_running
+
+    _redirect_security_audit_log()
+
     setattr(server, _INSTALLED_FLAG, True)
     return True
+
+
+def _redirect_security_audit_log() -> None:
+    """Send destructive-op audit records to a temp file for the duration.
+
+    The audit log defaults to `logs/security-audit.jsonl` under the repo, which
+    is the right default for a real install and the wrong one for a test run:
+    exercising a `@destructive_op`-wrapped handler appends a genuine-looking
+    record. `test_tool_argument_validation` walks every tool, so one suite run
+    wrote 24 fabricated `delete_timelines` / `reset_all_grades` / `apply_cuts`
+    events into the operator's trail, and repeated runs accumulated 216.
+
+    A security log is read to answer "what actually happened here", so synthetic
+    entries in it are worse than a missing feature — they are indistinguishable
+    from real ones at the point someone needs to trust the file. Redirected
+    centrally rather than per test, because the next test to wrap a destructive
+    handler would otherwise reintroduce it.
+    """
+    try:
+        from src.utils import destructive_hook
+    except Exception:
+        return
+
+    original = destructive_hook._audit_log_path
+    _originals["_audit_log_path"] = original
+    handle = tempfile.NamedTemporaryFile(
+        prefix="security-audit-test-", suffix=".jsonl", delete=False
+    )
+    handle.close()
+    _originals["_audit_log_tempfile"] = handle.name
+
+    def audit_log_path_offline() -> str:
+        # Only the *default* is replaced. A test that configures
+        # `destructive.audit_log_path` — the audit tests do, to read back what
+        # they wrote — must still get its own path, or this guard would break
+        # the tests covering the feature it is protecting.
+        if destructive_hook._read_preference("destructive.audit_log_path", None):
+            return original()
+        return handle.name
+
+    destructive_hook._audit_log_path = audit_log_path_offline
+
+
+def _restore_security_audit_log() -> None:
+    if "_audit_log_path" not in _originals:
+        return
+    try:
+        from src.utils import destructive_hook
+
+        destructive_hook._audit_log_path = _originals.pop("_audit_log_path")
+    except Exception:
+        _originals.pop("_audit_log_path", None)
+    path = _originals.pop("_audit_log_tempfile", None)
+    if path and os.path.exists(path):
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
 
 
 def uninstall() -> None:
@@ -138,6 +200,7 @@ def uninstall() -> None:
     server._launch_resolve = _originals["_launch_resolve"]
     server.get_resolve = _originals["get_resolve"]
     server.resolve_is_running = _originals["resolve_is_running"]
+    _restore_security_audit_log()
     setattr(server, _INSTALLED_FLAG, False)
 
 
