@@ -6606,6 +6606,26 @@ def _variant_item_placement(item) -> Dict[str, Any]:
     }
 
 
+def _snapshot_track_item_counts(snapshot: Dict[str, Any]) -> Dict[str, int]:
+    """Per-track-type item counts read from a conform snapshot of a live timeline.
+
+    This is the ONLY honest answer to "what did the assembly actually place".
+    The obvious alternative — counting what `MediaPool.AppendToTimeline`
+    returned — is a witness derived from the same call it would be checking, and
+    it lies in two measured ways: the in-app bridge caps any proxied list at
+    `max_items` (an 864-clipInfo append came back as 500 items, so a variant
+    holding 432 video + 432 audio was reported as 250 + 250), and Resolve drops
+    colliding records from the reply without an error (see the api_truth entry
+    "MediaPool.AppendToTimeline (overlapping records — earlier item wins)").
+    Re-reading the timeline per track cannot be fooled by either.
+    """
+    counts: Dict[str, int] = {}
+    for track_type, block in (snapshot.get("tracks") or {}).items():
+        rows = (block or {}).get("tracks") or []
+        counts[str(track_type)] = sum(int(row.get("item_count") or 0) for row in rows)
+    return counts
+
+
 def _variant_audio_summary(built):
     """Video/audio range counts for an assembled variant, warning when it carries
     no audio. create_variant_from_ranges places exactly the ranges given, so a
@@ -6616,6 +6636,61 @@ def _variant_audio_summary(built):
     if audio == 0:
         summary["warning"] = "video-only (no audio): add ranges with track_type='audio' to carry sound"
     return summary
+
+
+def _variant_audio_accounting(variant: Dict[str, Any], *, planned_video: int,
+                              planned_audio: int) -> Dict[str, Any]:
+    """The planned-vs-placed block on a tighten / silence-ripple readback.
+
+    Shared by execute_tighten and execute_silence_ripple so the two cannot
+    drift: they answer the same operator question, "did every range I planned
+    actually land in the variant".
+
+    Placed counts come from the assembler's post-assembly re-read of the
+    timeline, never from what `AppendToTimeline` returned — see
+    `_snapshot_track_item_counts` for why the append's reply is not evidence.
+    A count that is short for a *reporting* reason and a count that is short
+    because material was dropped must never look the same here: on a silence
+    ripple the operator's whole fear is dropped material, so a disagreement is
+    stated outright rather than left to be discovered by hand-auditing tracks.
+    """
+    placed = variant.get("placed_item_counts")
+    video = (placed or {}).get("video")
+    audio = (placed or {}).get("audio")
+    accounting: Dict[str, Any] = {
+        "planned_audio_ranges": planned_audio,
+        "planned_video_ranges": planned_video,
+        "variant_audio_items": audio,
+        "variant_video_items": video,
+        "counts_source": "post-assembly per-track read of the variant timeline",
+    }
+    if video is None or audio is None:
+        accounting["note"] = (
+            "Placed item counts are UNAVAILABLE — the variant could not be re-read "
+            "after assembly. Verify with timeline_item get_items_in_track before "
+            "using this variant."
+        )
+        return accounting
+    disagreements = []
+    if video != planned_video:
+        disagreements.append(f"video {video}/{planned_video}")
+    if audio != planned_audio:
+        disagreements.append(f"audio {audio}/{planned_audio}")
+    if disagreements:
+        accounting["note"] = (
+            "PLACED COUNT DISAGREES WITH THE PLAN (placed/planned: "
+            + ", ".join(disagreements)
+            + ") — ranges did not land. Resolve drops colliding records from an "
+            "append without erroring; check readback.gaps_overlaps and the "
+            "tracks themselves before using this variant."
+        )
+    elif planned_audio:
+        accounting["note"] = "Variant carries audio mirrored from the video cuts."
+    else:
+        accounting["note"] = (
+            "Variant is VIDEO-ONLY (silent) — re-plan with include_audio=True for sound."
+        )
+    return accounting
 
 
 def _timeline_create_variant_from_ranges(proj, source_tl, p: Dict[str, Any]) -> Dict[str, Any]:
@@ -6768,16 +6843,21 @@ def _timeline_create_variant_from_ranges(proj, source_tl, p: Dict[str, Any]) -> 
     if p.get("cdl"):
         target_ids = [row.get("timeline_item_id") for row in items_out if row.get("timeline_item_id") and row.get("range", {}).get("media_type") == 1]
         look_result = _timeline_apply_look_to_items(new_tl, {"target_ids": target_ids, "cdl": p.get("cdl")})
+    # One snapshot, two consumers: gap detection and the placed-item counts.
+    # `items` above is only as complete as the append's REPLY, so it is not
+    # evidence of what landed — `placed_item_counts` re-reads the timeline.
+    snapshot = _timeline_conform_snapshot(new_tl, {})
     return {
         "success": True,
         "name": new_tl.GetName(),
         "id": new_tl.GetUniqueId(),
         "items": items_out,
+        "placed_item_counts": _snapshot_track_item_counts(snapshot),
         "placement_mismatches": placement_mismatches,
         "audio": _variant_audio_summary(built),
         "markers": marker_results,
         "look": look_result,
-        "gaps_overlaps": _detect_gaps_overlaps_from_snapshot(_timeline_conform_snapshot(new_tl, {}), {}),
+        "gaps_overlaps": _detect_gaps_overlaps_from_snapshot(snapshot, {}),
     }
 
 
@@ -24172,24 +24252,11 @@ def edit_engine(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
                     structural_diff if include_details
                     else _compact_structural_diff(structural_diff)
                 ),
-                "audio_accounting": {
-                    "planned_audio_ranges": audio_keep_ranges,
-                    "planned_video_ranges": video_keep_ranges,
-                    # variant_* count placed items; variant["audio"] counts requested ranges.
-                    "variant_audio_items": sum(
-                        1 for it in (variant.get("items") or [])
-                        if (it.get("range") or {}).get("media_type") == 2
-                    ),
-                    "variant_video_items": sum(
-                        1 for it in (variant.get("items") or [])
-                        if (it.get("range") or {}).get("media_type") == 1
-                    ),
-                    "note": (
-                        "Variant carries audio mirrored from the video cuts."
-                        if audio_keep_ranges
-                        else "Variant is VIDEO-ONLY (silent) — re-plan with include_audio=True for sound."
-                    ),
-                },
+                # variant_* count PLACED items, re-read from the variant;
+                # variant["audio"] counts requested ranges.
+                "audio_accounting": _variant_audio_accounting(
+                    variant, planned_video=video_keep_ranges, planned_audio=audio_keep_ranges,
+                ),
             },
             "plan_id": plan.get("plan_id"),
         }
@@ -24308,23 +24375,9 @@ def edit_engine(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
                     structural_diff if include_details
                     else _compact_structural_diff(structural_diff)
                 ),
-                "audio_accounting": {
-                    "planned_audio_ranges": audio_keep_ranges,
-                    "planned_video_ranges": video_keep_ranges,
-                    "variant_audio_items": sum(
-                        1 for it in (variant.get("items") or [])
-                        if (it.get("range") or {}).get("media_type") == 2
-                    ),
-                    "variant_video_items": sum(
-                        1 for it in (variant.get("items") or [])
-                        if (it.get("range") or {}).get("media_type") == 1
-                    ),
-                    "note": (
-                        "Variant carries audio mirrored from the video cuts."
-                        if audio_keep_ranges
-                        else "Variant is VIDEO-ONLY (silent) — re-plan with include_audio=True for sound."
-                    ),
-                },
+                "audio_accounting": _variant_audio_accounting(
+                    variant, planned_video=video_keep_ranges, planned_audio=audio_keep_ranges,
+                ),
             },
             "plan_id": plan.get("plan_id"),
         }
