@@ -29,6 +29,34 @@ from src.utils import script_templates  # noqa: E402
 from src.server import script_plugin  # noqa: E402
 
 
+def _subprocess_can_import_resolve_script() -> bool:
+    """Can the interpreter run_inline spawns import DaVinciResolveScript?
+
+    `run_inline` prepends boilerplate that imports it and runs the result in a
+    subprocess, so the stub this module puts in `sys.modules` never reaches it.
+    Where Resolve is not installed the snippet dies on that import before its
+    own first line and stdout is empty — for a reason that has nothing to do
+    with what these two tests check.
+
+    The probe uses the server's own subprocess environment rather than a bare
+    one: that env is what puts Resolve's Modules directory on the path, and a
+    bare interpreter would report "not importable" on a machine where these
+    tests pass perfectly well.
+    """
+    from src.server import _python_env_for_resolve
+
+    return subprocess.run(
+        [sys.executable, "-c", "import DaVinciResolveScript"],
+        env=_python_env_for_resolve(),
+        capture_output=True, timeout=60).returncode == 0
+
+
+_NEEDS_RESOLVE_SCRIPT_MODULE = unittest.skipUnless(
+    _subprocess_can_import_resolve_script(),
+    "run_inline's boilerplate imports DaVinciResolveScript in a subprocess; "
+    "not installed on this machine")
+
+
 def _luac_path():
     for cmd in ('luac', 'luac5.4', 'luac5.3', 'luac5.1'):
         try:
@@ -681,6 +709,7 @@ class TestScriptExecution(unittest.TestCase):
 
     # ── run_inline Python ──────────────────────────────────────────────────
 
+    @_NEEDS_RESOLVE_SCRIPT_MODULE
     def test_run_inline_python_captures_stdout(self):
         r = script_plugin('run_inline', {
             'source': "print('inline says hi')\n", 'language': 'py',
@@ -693,6 +722,7 @@ class TestScriptExecution(unittest.TestCase):
         # output OR an importable error — the framework works either way.
         self.assertIn('inline says hi', r.get('stdout', ''))
 
+    @_NEEDS_RESOLVE_SCRIPT_MODULE
     def test_run_inline_python_can_compute(self):
         r = script_plugin('run_inline', {
             'source': "print(2 + 3)\n", 'language': 'py',

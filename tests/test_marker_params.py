@@ -1,14 +1,18 @@
 import unittest
 
 import src.server as compound
+from tests._envelope_helpers import domain_payload
 from tests._error_envelope_helpers import err_message
 
 
 def _strip_versioning(d):
-    """Return a copy of a result dict with the destructive_hook _versioning key removed."""
-    if not isinstance(d, dict):
-        return d
-    return {k: v for k, v in d.items() if k != "_versioning"}
+    """Return a copy of a result dict with the additive private envelopes removed.
+
+    `_versioning` (destructive hook) and `_operation` (operation envelope) both
+    ride alongside the domain payload without shadowing it; these tests are
+    about the domain shape.
+    """
+    return domain_payload(d)
 
 
 class TimelineStub:

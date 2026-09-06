@@ -45,7 +45,21 @@ export function detectFormat(filePath, explicit) {
 
 /** Map a parseDRT() result → uniform [{id,name,eventCount,index}]. Shared with the drt tool. */
 export function summarizeDrtTimelines(parsed) {
-  return (parsed.timelines || []).map((tl, index) => {
+  const tls = parsed.timelines || [];
+  // E127: a compound container is NESTED in every timeline/compound whose
+  // tracks place a clip named after it — the picker should offer the parent.
+  const nestedIn = new Map();
+  for (const tl of tls) {
+    for (const t of tl.videoTracks || []) {
+      for (const c of t.clips || []) {
+        if (c.compound) {
+          if (!nestedIn.has(c.compound)) nestedIn.set(c.compound, []);
+          if (!nestedIn.get(c.compound).includes(tl.name)) nestedIn.get(c.compound).push(tl.name);
+        }
+      }
+    }
+  }
+  return tls.map((tl, index) => {
     const vids = (tl.videoTracks || []).reduce((n, t) => n + (t.clips ? t.clips.length : 0), 0);
     const auds = (tl.audioTracks || []).reduce((n, t) => n + (t.clips ? t.clips.length : 0), 0);
     return {
@@ -53,6 +67,8 @@ export function summarizeDrtTimelines(parsed) {
       name: tl.name || `Sequence ${index + 1}`,
       eventCount: vids + auds,
       index,
+      ...(tl.kind ? { kind: tl.kind } : {}),
+      nestedIn: nestedIn.get(tl.name) || [],
     };
   });
 }

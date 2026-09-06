@@ -80,7 +80,8 @@ Each dispatches on an `action`. Highlights:
   `export_cdl`, `merge`, plus the **grading/QC catalog** below.
 - **`drp` / `drt`** — project / timeline file authoring + editing + grade injection + structural diff.
 - **`conform`** — offline conform/relink QC engine (frame-oracle math, not filename matching),
-  reverse-clip DB repair, sequence lineage store + diff, per-cut frame QC.
+  reverse-clip DB repair, sequence lineage store + diff, per-cut frame QC (sampled clear of
+  transition windows; ingests Resolve's own FCP7 export — `-1` edges → junctions, no ticks needed).
 - **`color_trace`** — cross-project clip matching → a trace plan for carrying grades across a re-conform.
 - **`project_read` / `project_db`** — read/patch the Resolve project DB (SQLite or Postgres).
   Includes `list_subtitle_styles` / `set_subtitle_style` — caption font family/size/weight/italic
@@ -97,7 +98,9 @@ Each dispatches on an `action`. Highlights:
 - **`media`** — media front-end / AE: `ingest_verify` (hash seal/verify/dupes-by-hash), `media_inventory`
   (fps/codec/colorspace/TC + card gaps), `sync` (TC picture↔sound + drift/MOS), `relink_manifest`,
   `rename_plan` (refuses camera originals) / `reel_normalize`, `turnover_package`, `project_hygiene`.
-- **`editorial`** — editorial integrity: `parse_interchange` (EDL/OTIO/XMEML natively, AAF via pyaaf2,
+- **`editorial`** — editorial integrity: `parse_interchange` (EDL/OTIO/XMEML natively — XMEML audio
+  cross-fades, numbered audio lanes and generatoritem `fillcolor` (fade-to-white / colour
+  mattes) included — AAF via pyaaf2,
   **.prproj via gunzip+XML** — pass the file PATH for the binary ones), `list_sequences` (one picker entry
   point across xml/edl/otio/drt/drp/aaf/prproj), `convert_to_interchange` (author OTIO/EDL/DRT that Resolve
   imports, from events or a parsed source — **the .prproj→Resolve conform bridge**, no Premiere needed;
@@ -105,7 +108,11 @@ Each dispatches on an `action`. Highlights:
   the `otio` and `edl` targets only — this flat `drt` target has no per-clip speed field and reports
   every retime it flattens in `flattened`; for a `.drt` that AUTHORS retimes (plus dissolves,
   multi-track, audio) use `drt.assemble_from_interchange` instead),
-  `turnover_changelist` (moved/retimed/replaced/new/gone + timing silent-lie guards), `conform_manifest`,
+  `turnover_changelist` (moved/retimed/trimmed/replaced/new/gone PLUS the junction diff —
+  `transition_added`/`transition_dropped`/`transition_changed` with fade in/out, outgoing/incoming, span and
+  duration/type/pre-roll deltas; CMX carrier lines and BL fade legs fold into the junctions instead of
+  reading as gone/new sources; events pair instance-to-instance by closest record position — + timing
+  silent-lie guards incl. lost transitions and dropped audio on any A-track), `conform_manifest`,
   `marker_roundtrip`.
 - **`provenance`** — provenance / audit: `gallery_lineage`, `grade_provenance` ("why is this graded this
   way"), `cdl_export` (+ `cdl_diff`, round-trip asserted), `revision_tracking`, `episode_report`.
@@ -195,8 +202,11 @@ plausible-looking short event list. Three limits are deliberate:
 - **Effect-only layers produce no events.** A layer wrapping `ScopeReference` (subtitle burns, blends,
   mattes) applies to what shows through from below and references no media of its own. OTIO materializes
   such layers as tracks of gaps, so its track count can exceed the number of layers with media.
-- **Only `NestedScope` layers are numbered.** Non-nested slots keep the flat `V`/`A` label, which is what
-  `editorial.mjs`'s `track === 'A'` audio-follows-video heuristic reads.
+- **Flat slots number per media kind in slot order** (`A`, `A2`, `A3` … / `V`, `V2` …): an Avid
+  turnover carries dialog, music and effects as SEPARATE flat sound MobSlots, and labelling them all
+  `A` stacked every bed onto one lane where the bridge refuses the overlap (measured, E109). The first
+  slot of a kind keeps the bare letter; `NestedScope` layers keep their own layer numbering. This is
+  what `editorial.mjs`'s `/^A\d*$/` audio-follows-video heuristic reads (`A`, `A2`, … all count as audio).
 
 ## Provenance & license
 Vendored libraries are clean offline format-interop and deterministic compute code: no secrets, no

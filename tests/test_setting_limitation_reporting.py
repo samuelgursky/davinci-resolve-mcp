@@ -10,6 +10,7 @@ caller into retrying value forms for a key that has no writable path.
 import unittest
 
 import src.server as compound
+from tests._envelope_helpers import domain_payload
 
 
 class FakeProject:
@@ -64,10 +65,13 @@ class RefusedProjectSettingTest(_ProjectStubTest):
         self.assertNotIn("known_limitation", out)
 
     def test_a_successful_write_carries_nothing_extra(self):
+        # "Nothing extra" is about the ledger: a write that was not refused
+        # must not be annotated with an explanation it did not earn. The
+        # additive `_operation` envelope is not an annotation of this write.
         out = compound.project_settings(
             "set_setting", {"name": "timelineFrameRate", "value": "60"})
 
-        self.assertEqual(out, {"success": True})
+        self.assertEqual(domain_payload(out), {"success": True})
 
     def test_the_write_is_still_attempted_before_the_ledger_is_consulted(self):
         # The ledger annotates a real refusal; it must never stand in for one.
@@ -81,7 +85,7 @@ class RefusedProjectSettingTest(_ProjectStubTest):
         self.project.refuse.clear()
         out = compound.project_settings(
             "set_setting", {"name": "timelinePlaybackFrameRate", "value": "60"})
-        self.assertEqual(out, {"success": True})
+        self.assertEqual(domain_payload(out), {"success": True})
 
 
 class RefusedTimelineSettingTest(unittest.TestCase):

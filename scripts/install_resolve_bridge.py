@@ -286,10 +286,14 @@ _LUA_CANARY = """-- Installed by davinci-resolve-mcp as an enumeration canary.
 -- Resolve is listing Lua and silently skipping Python: it cannot find a Python 3.
 -- It looks at PYTHON3HOME, then /usr/local/bin/python3 -- and nowhere else, which
 -- is why Homebrew, pyenv, uv and conda interpreters go unseen. Either point it at
--- the one you have (no sudo):
+-- the one you have (no sudo, but does NOT survive a reboot):
 --   launchctl setenv PYTHON3HOME "$(python3 -c 'import sys; print(sys.prefix)')"
--- (launchctl, not export -- Resolve never sees your shell), or install a
--- python.org build, which creates /usr/local/bin/python3. Restart Resolve after.
+-- (launchctl, not export -- Resolve never sees your shell; and the prefix needs
+-- BOTH lib/libpython3.X.dylib and bin/python3 under that unversioned name --
+-- Homebrew framework builds often ship only python3.X), or put one where Resolve
+-- already looks, which persists:
+--   sudo ln -s "$(command -v python3)" /usr/local/bin/python3
+-- A python.org build creates that symlink for you. Restart Resolve after.
 print("Resolve is enumerating scripts. If the Python probe is missing, Resolve")
 print("cannot find a Python 3: set PYTHON3HOME with launchctl setenv, or install")
 print("a python.org build. Homebrew/pyenv/uv/conda are not looked at directly.")
@@ -335,12 +339,28 @@ def launchd_env(name: str) -> str | None:
 
 
 def python3_home_prefix() -> dict:
-    """Is PYTHON3HOME set for Resolve, and does it point at a loadable Python 3?
+    """Is PYTHON3HOME set for Resolve, and does it point at a usable Python 3?
 
-    "Loadable" means the `lib/libpython3.X.dylib` that fusionscript.so dlopens.
-    An interpreter that cannot supply one is reported as set-but-unusable rather
-    than counted, because the silent-non-enumeration symptom is identical and the
-    remedy is not.
+    Usable means BOTH halves of what fusionscript.so does with the prefix, whose
+    strings sit adjacent in the binary:
+
+        python3 -c 'import sys; ...sys.prefix...'   # run <prefix>/bin/python3
+        /libpython                                  # dlopen <prefix>/lib/libpython3.X.dylib
+
+    Checking only the dylib reported `usable: true` for a prefix Resolve cannot
+    run, and then Resolve listed zero Python scripts — the exact false all-clear
+    this function's docstring already warned about, since "the silent
+    non-enumeration symptom is identical and the remedy is not" (issue #182).
+
+    The interpreter must be there under the **unversioned** name. That is the
+    literal name in the binary, and it is what makes this trap so easy to hit:
+    a Homebrew framework prefix has `bin/python3.13` but no `bin/python3`
+    (formula-dependent — python@3.14 ships one, python@3.11 and python@3.13 do
+    not), while carrying a perfectly good `lib/libpython3.13.dylib`. Half the
+    check passes on exactly the interpreter most likely to be tried.
+
+    `framework_pythons()` has always required `bin/python3`; this is the same
+    rule applied to the route that skipped it.
     """
     value = launchd_env("PYTHON3HOME")
     result = {
@@ -348,18 +368,68 @@ def python3_home_prefix() -> dict:
         "in_launchd": value is not None,
         "in_this_shell": os.environ.get("PYTHON3HOME") or None,
         "dylib": None,
+        "interpreter": None,
+        "reason": None,
         "usable": False,
     }
     if not value:
         return result
+
+    prefix = Path(value)
     try:
-        dylibs = sorted(Path(value).glob("lib/libpython3.*.dylib"))
+        dylibs = sorted(prefix.glob("lib/libpython3.*.dylib"))
     except OSError:
         dylibs = []
+    interpreter = prefix / "bin" / "python3"
+    try:
+        # .exists() follows symlinks, so a dangling one reads as absent — which
+        # is what it is to a Resolve trying to execute it.
+        has_interpreter = interpreter.exists()
+    except OSError:
+        has_interpreter = False
+
     if dylibs:
         result["dylib"] = str(dylibs[0])
-        result["usable"] = True
+    if has_interpreter:
+        result["interpreter"] = str(interpreter)
+    result["usable"] = bool(dylibs) and has_interpreter
+
+    if result["usable"]:
+        return result
+    if dylibs and not has_interpreter:
+        versioned = sorted(
+            child.name for child in _safe_iterdir(prefix / "bin")
+            if child.name.startswith("python3.")
+            and not child.name.endswith("-config")
+        )
+        result["reason"] = (
+            f"{prefix}/lib has a libpython dylib but {interpreter} does not "
+            f"exist. Resolve runs the UNVERSIONED name `python3`"
+            + (f"; this prefix ships only {', '.join(versioned)}. " if versioned else ". ")
+            + "Homebrew framework builds are the common case. Either symlink it "
+            f"inside the prefix (ln -s {versioned[0] if versioned else 'python3.X'} "
+            f"{prefix}/bin/python3), or point PYTHON3HOME at a prefix that has both."
+        )
+    elif has_interpreter and not dylibs:
+        result["reason"] = (
+            f"{interpreter} exists but {prefix}/lib has no libpython3.X.dylib "
+            "for Resolve to dlopen. A static or non-shared build cannot be "
+            "embedded; point PYTHON3HOME at a prefix built with a shared library."
+        )
+    else:
+        result["reason"] = (
+            f"{prefix} has neither bin/python3 nor lib/libpython3.X.dylib. "
+            "Check the path — it should be a Python `sys.prefix`, which "
+            "`python3 -c 'import sys; print(sys.prefix)'` prints."
+        )
     return result
+
+
+def _safe_iterdir(directory: Path) -> list[Path]:
+    try:
+        return sorted(directory.iterdir())
+    except OSError:
+        return []
 
 
 def fallback_python3() -> dict:
@@ -414,7 +484,27 @@ def python_preflight() -> dict:
     # the order the binary's strings imply, and it is the one the user chose.
     found = home["usable"] or fallback["exists"] or bool(frameworks)
     advice = None
-    if not found:
+    if home["in_launchd"] and not home["usable"]:
+        # A set-but-broken PYTHON3HOME has to be said out loud even when another
+        # route exists. PYTHON3HOME is read FIRST, and whether Resolve falls
+        # back after choosing a prefix it cannot use is not established — the
+        # ordering here is inferred from string adjacency in fusionscript.so,
+        # not from decompiled control flow. Reporting a clean bill of health on
+        # the strength of a route Resolve may never reach is the failure this
+        # whole check exists to prevent (issue #182).
+        advice = (
+            "PYTHON3HOME is set for Resolve but does not point at a Python 3 it "
+            f"can use.\n{home['reason']}\n"
+            + ("Another discovery route is present on this machine, but Resolve "
+               "reads PYTHON3HOME first and it is NOT established that it falls "
+               "back after picking a prefix it cannot use. Fix the prefix or "
+               "unset it (launchctl unsetenv PYTHON3HOME) rather than relying "
+               "on the fallback.\n" if found else "")
+            + "Restart Resolve after changing it. The Lua canary installed "
+            "alongside lists regardless, so 'Python not detected' stays "
+            "distinguishable from 'wrong folder'."
+        )
+    elif not found:
         advice = (
             "Resolve cannot find a Python 3, so it will silently ignore every "
             ".py script in its Scripts folders — they will simply not appear in "
@@ -428,8 +518,16 @@ def python_preflight() -> dict:
             "print(sys.prefix)')\"\n"
             "     Use launchctl, NOT export — Resolve is launched from the Dock "
             "and never sees your shell's environment. The prefix must contain "
-            "lib/libpython3.X.dylib.\n"
-            "  2. Or install a python.org build, which creates "
+            "BOTH lib/libpython3.X.dylib and bin/python3 under that exact "
+            "unversioned name. Note that launchctl setenv does not survive a "
+            "reboot: if scripts stop listing weeks later with no error, this is "
+            "why.\n"
+            "  2. Or symlink an interpreter where Resolve already looks, which "
+            "is a file on disk and does persist (needs sudo):\n"
+            "       sudo ln -s \"$(command -v python3)\" /usr/local/bin/python3\n"
+            "     Check that /usr/local/bin does not precede your normal Python "
+            "on PATH before doing this.\n"
+            "  3. Or install a python.org build, which creates "
             "/usr/local/bin/python3 for you.\n"
             "Restart Resolve either way, then re-check. The Lua canary installed "
             "alongside will list regardless, so you can tell 'Python not "

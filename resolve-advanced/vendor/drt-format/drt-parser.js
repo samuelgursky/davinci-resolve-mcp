@@ -39,6 +39,91 @@ function extractInt(xml, tag) {
 
 const CLIP_TAGS = ['Sm2TiVideoClip', 'Sm2VideoClip', 'Sm2TiAudioClip', 'Sm2AudioClip'];
 
+// Resolve stores several scalars as 16-hex-char blobs (E139, measured on a
+// 19.1.3.7 EXPORT_DRT): <FrameRate> / <MediaFrameRate> = one little-endian
+// IEEE double + 8 pad bytes (24.0 = 0000000000003840…); <MediaExtents> = two
+// little-endian doubles, start SECONDS then duration SECONDS; <Resolution> =
+// two big-endian uint64, width then height.
+function leDouble(hex, offset = 0) {
+  const h = String(hex || '').replace(/[^0-9a-fA-F]/g, '');
+  if (h.length < offset + 16) return null;
+  const v = Buffer.from(h.slice(offset, offset + 16), 'hex').readDoubleLE(0);
+  return Number.isFinite(v) ? v : null;
+}
+function beUint64(hex, offset = 0) {
+  const h = String(hex || '').replace(/[^0-9a-fA-F]/g, '');
+  if (h.length < offset + 16) return null;
+  const v = Number(Buffer.from(h.slice(offset, offset + 16), 'hex').readBigUInt64BE(0));
+  return Number.isFinite(v) ? v : null;
+}
+// <MediaTimemapBA> (E139/E140): tag byte 0x02 + one double = a LINEAR (100%)
+// clip whose double is the media length in seconds; a keyed Sm2TimeMap
+// (00000001…) is a speed map. E140 decodes it through the DRP library's
+// decodeTimemap (the same reader the .drp side uses): the keyframe slope is
+// the speed ratio (0.8 on all four retimed clips of a real reel — Premiere's
+// 80 for the same cuts), XMax 60000 with a zero slope is the FREEZE sentinel,
+// a negative slope is a reverse. A map the decoder cannot read is 'unknown',
+// never a faked 100%.
+const FREEZE_XMAX_SENTINEL = 60000;
+function decodeTimemapField(hex) {
+  const h = String(hex || '').replace(/[^0-9a-fA-F]/g, '').toLowerCase();
+  if (!h) return null;
+  if (h.startsWith('02')) {
+    return { form: 'identity', kind: h.length === 18 ? 'linear' : 'linear-multi', speed: 1, reverse: false };
+  }
+  let d;
+  try {
+    d = require('../drp-format/media-timemap').decodeTimemap(h);
+  } catch {
+    return { form: 'retimed', kind: 'unknown', speed: null, reverse: false };
+  }
+  if (!d || d.form !== 'retimed') return { form: 'retimed', kind: 'unknown', speed: null, reverse: false };
+  const slope = d.segments && d.segments.length ? d.segments[0].speed : null;
+  const points = [d.origin || { recordSec: 0, sourceSec: 0 }, ...(d.keyframes || [])];
+  const base = { form: 'retimed', recordDurationSec: d.recordDurationSec ?? null, sourceDurationSec: d.sourceDurationSec ?? null, keyframeForm: d.keyframeForm || null, points };
+  if (d.recordDurationSec === FREEZE_XMAX_SENTINEL && slope === 0) {
+    // A flat map over the 60000 sentinel is a FREEZE at the source second the
+    // map holds (Y) — with or without an <In> (E144, render-witnessed: the
+    // E66 harvest carries Y = 0 and In 24, and its render is static at the
+    // source's frame 0: inter-frame change 0.02 vs 0.42 in the source). The
+    // EDL M2 000.0 harvest holds Y = 1.0 with an empty <In>.
+    const y = points[0] ? points[0].sourceSec : 0;
+    return { ...base, kind: 'freeze', speed: 0, reverse: false, freezeSec: y };
+  }
+  if (!Number.isFinite(slope) || slope === 0 || Math.abs(slope) > 100) return { ...base, kind: 'unknown', speed: null, reverse: false };
+  return {
+    ...base,
+    kind: d.variable ? 'variable' : 'constant',
+    speed: Math.abs(slope),
+    reverse: slope < 0,
+    ...(d.variable ? { segments: d.segments } : {}),
+  };
+}
+// Sm2TiTransition alignment (E139, witnessed against the cut points of 11
+// real dissolves): 2 = centred on the cut, 3 = ends at the cut (the
+// one-sided 8-frame fade-in on a real reel is type 3 / Position 1).
+const ALIGNMENT_BY_TYPE = { 1: 'start', 2: 'center', 3: 'end' };
+
+function extractTransitionsFromTrackXml(trackXml) {
+  const out = [];
+  const re = /<(Sm2TiTransition)\b[^>]*?DbId="([^"]+)"[^>]*>([\s\S]*?)<\/\1>/g;
+  let m;
+  while ((m = re.exec(trackXml)) !== null) {
+    const inner = m[3];
+    const alignmentType = extractInt(inner, 'AlignmentType');
+    out.push({
+      transitionId: m[2],
+      type: extractScalar(inner, 'PrettyType') || 'Cross Dissolve',
+      start: extractInt(inner, 'Start'),
+      duration: extractInt(inner, 'Duration'),
+      alignmentType,
+      alignment: alignmentType != null ? ALIGNMENT_BY_TYPE[alignmentType] || null : null,
+      position: extractInt(inner, 'Position'),
+    });
+  }
+  return out;
+}
+
 function extractClipsFromTrackXml(trackXml, trackType) {
   const clips = [];
   const tagAlt = CLIP_TAGS.filter((t) => t.toLowerCase().includes(trackType)).join('|');
@@ -56,12 +141,22 @@ function extractClipsFromTrackXml(trackXml, trackType) {
       const stripped = bodyMatch[1].replace(/[^0-9a-fA-F]/g, '');
       if (stripped.length > 0) bodyHex = stripped;
     }
+    const inRaw = extractScalar(inner, 'In');
+    const mst = extractScalar(inner, 'MediaStartTime');
     clips.push({
       clipId: m[3],
+      name: extractScalar(inner, 'Name'),
       start,
       duration,
       mediaFilePath,
       bodyHex,
+      // E139: the clip's SOURCE in-point in frames (<In>); a real export writes
+      // an EMPTY <In/> on audio clips and on generator tails — null, not 0.
+      in: inRaw === null || inRaw === '' ? null : (Number.isFinite(Number.parseInt(inRaw, 10)) ? Number.parseInt(inRaw, 10) : null),
+      mediaStartTime: mst === null || mst === '' ? null : (Number.isFinite(Number(mst)) ? Number(mst) : null),
+      mediaFrameRate: leDouble(extractScalar(inner, 'MediaFrameRate')),
+      timemap: decodeTimemapField(extractScalar(inner, 'MediaTimemapBA')),
+      prettyType: extractScalar(inner, 'PrettyType') || null,
     });
   }
   return clips;
@@ -89,27 +184,101 @@ function extractTracks(seqXml, trackVecTag, trackTagBase, trackType) {
       trackId,
       trackType,
       clips: extractClipsFromTrackXml(trackInner, trackType),
+      transitions: extractTransitionsFromTrackXml(trackInner),
     });
   }
   return tracks;
 }
 
-function parseSeqContainer(seqXml, sequenceName) {
-  return {
-    name: extractScalar(seqXml, 'Name') || sequenceName,
+/**
+ * The pool folder's own naming of every sequence (E127, measured against
+ * Resolve 19.1.3.7's EXPORT_DRT of a compound timeline): a SeqContainer XML
+ * carries NO timeline name — its first <Name> is the first CLIP's — while
+ * MediaPool/Master/MpFolder.xml holds an Sm2MpTimelineClip (a timeline) or
+ * Sm2MpCompoundClip (a compound) whose EMBEDDED <Sm2Sequence DbId=X> equals
+ * the container's track-level <Sequence>X</Sequence>. Map X → {name, kind}.
+ */
+async function loadPoolSequenceNames(zip) {
+  const map = new Map();
+  const entries = [];
+  zip.forEach((p, e) => { if (!e.dir && /(^|\/)MpFolder[^/]*\.xml$/.test(p)) entries.push(p); });
+  for (const p of entries) {
+    const xml = await zip.file(p).async('string');
+    const re = /<(Sm2MpTimelineClip|Sm2MpCompoundClip) DbId="([^"]+)">([\s\S]*?)<\/\1>/g;
+    let m;
+    while ((m = re.exec(xml)) !== null) {
+      const body = m[3];
+      const name = extractScalar(body, 'Name');
+      const seqRe = /<Sm2Sequence DbId="([^"]+)">([\s\S]*?)<\/Sm2Sequence>/g;
+      let sm;
+      while ((sm = seqRe.exec(body)) !== null) {
+        if (map.has(sm[1])) continue;
+        // E139: the embedded Sm2Sequence is also where a real export keeps the
+        // timeline's frame rate, record extents and resolution — the
+        // SeqContainer carries none of them.
+        const sb = sm[2];
+        const ext = extractScalar(sb, 'MediaExtents');
+        const res = extractScalar(sb, 'Resolution');
+        map.set(sm[1], {
+          name,
+          kind: m[1] === 'Sm2MpCompoundClip' ? 'compound' : 'timeline',
+          frameRate: leDouble(extractScalar(sb, 'FrameRate')),
+          startSeconds: ext ? leDouble(ext, 0) : null,
+          durationSeconds: ext ? leDouble(ext, 16) : null,
+          width: res ? beUint64(res, 0) : null,
+          height: res ? beUint64(res, 16) : null,
+        });
+      }
+    }
+  }
+  return map;
+}
+
+// E139: a real export's record start lives ONLY in the pool sequence's
+// MediaExtents (seconds) — frames = round(seconds × fps); the timecode is
+// derived at that rate (non-drop; the export writes no drop flag here).
+function poolStartFrame(pool) {
+  if (!pool || pool.startSeconds == null || !pool.frameRate) return null;
+  return Math.round(pool.startSeconds * pool.frameRate);
+}
+function poolStartTimecode(pool) {
+  const f = poolStartFrame(pool);
+  if (f == null) return null;
+  const fps = Math.round(pool.frameRate);
+  const ff = f % fps, totalS = Math.floor(f / fps);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${pad(Math.floor(totalS / 3600))}:${pad(Math.floor(totalS / 60) % 60)}:${pad(totalS % 60)}:${pad(ff)}`;
+}
+
+function parseSeqContainer(seqXml, sequenceName, poolNames = new Map()) {
+  const seqId = extractScalar(seqXml, 'Sequence');
+  const pool = seqId ? poolNames.get(seqId) : null;
+  const compoundNames = new Set([...poolNames.values()].filter((v) => v.kind === 'compound' && v.name).map((v) => v.name));
+  const parsed = {
+    // The pool's name for this sequence when the export carries one; the
+    // first <Name> in the container is a CLIP name and only a fallback.
+    name: (pool && pool.name) || extractScalar(seqXml, 'Name') || sequenceName,
+    kind: pool ? pool.kind : null,
     sequence: sequenceName,
-    frameRate: extractScalar(seqXml, 'FrameRate'),
-    startTimecode: extractScalar(seqXml, 'StartTC'),
-    startFrame: extractInt(seqXml, 'StartFrame'),
+    frameRate: extractScalar(seqXml, 'FrameRate') ?? (pool && pool.frameRate != null ? pool.frameRate : null),
+    startTimecode: extractScalar(seqXml, 'StartTC') ?? poolStartTimecode(pool),
+    startFrame: extractInt(seqXml, 'StartFrame') ?? poolStartFrame(pool),
     resolution: (() => {
       const w = extractInt(seqXml, 'ResolutionWidth');
       const h = extractInt(seqXml, 'ResolutionHeight');
-      if (w === null || h === null) return null;
+      if (w === null || h === null) return pool && pool.width && pool.height ? `${pool.width}x${pool.height}` : null;
       return `${w}x${h}`;
     })(),
-    videoTracks: extractTracks(seqXml, 'VideoTrackVec', 'Sm2TiVideoTrack', 'video'),
+    videoTracks: extractTracks(seqXml, 'VideoTrackVec', 'Sm2TiVideoTrack', 'video').map((t) => ({
+      ...t,
+      // A media-less clip named after a compound in the pool IS that compound
+      // placed on this track (E127) — tag it so consumers do not read it as a
+      // missing source.
+      clips: (t.clips || []).map((c) => (c.mediaFilePath == null && c.name && compoundNames.has(c.name) ? { ...c, compound: c.name } : c)),
+    })),
     audioTracks: extractTracks(seqXml, 'AudioTrackVec', 'Sm2TiAudioTrack', 'audio'),
   };
+  return parsed;
 }
 
 async function loadMetadata(zip) {
@@ -146,10 +315,11 @@ async function parseDRT(drtPathOrBuffer, options = {}) {
     throw new Error('parseDRT: no SeqContainer*.xml entries found — is this a DRT/DRP?');
   }
 
+  const poolNames = await loadPoolSequenceNames(zip);
   const timelines = [];
   for (const p of seqEntries) {
     const xml = await zip.file(p).async('string');
-    timelines.push(parseSeqContainer(xml, p));
+    timelines.push(parseSeqContainer(xml, p, poolNames));
   }
 
   const metadata = await loadMetadata(zip);
@@ -161,4 +331,4 @@ async function parseDRT(drtPathOrBuffer, options = {}) {
   };
 }
 
-module.exports = { parseDRT, listSeqContainerEntries };
+module.exports = { parseDRT, listSeqContainerEntries, loadPoolSequenceNames };

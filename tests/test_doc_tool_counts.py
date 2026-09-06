@@ -19,7 +19,8 @@ green 2560-test run and would only have surfaced in the publish gate, which runs
 a script.
 
 Fix drift by updating the docs to the printed counts, not by loosening this test.
-The counts are cross-checked against the runtime tool registry and agree: 34 / 353.
+Keep this guard free of hand-written expected counts; it computes the authoritative
+values from the source tree so the assertion moves with the implementation.
 
 Decorators are counted from the **parsed syntax tree**, not by matching the text
 `@mcp.tool(`. A regex counts the string wherever it appears, including inside a
@@ -84,6 +85,7 @@ class DocToolCountsDriftTest(unittest.TestCase):
             ("docs/install.md", f"`src/server.py` | {comp} |"),
             ("docs/install.md", f"`src/resolve_mcp_server.py` | {gran} |"),
             ("docs/install.md", f"full {gran}-tool server"),
+            ("install.py", f'{comp} compound · {gran} full · 3 platforms'),
             ("src/resolve_mcp_server.py", f"({gran} granular tools)"),
             ("tests/test_import.py", f"assert total == {gran}"),
             # test_import.py hard-codes the compound count too. Adding a 35th

@@ -10,7 +10,7 @@
  *     elements?: [
  *       { type: 'title',     track, startFrame, durationFrames?, text?, font?, style?, size?,
  *                            color?, vJustify?, hJustify? },
- *       { type: 'generator', track, startFrame, durationFrames?, generatorName? },
+ *       { type: 'generator', track, startFrame, durationFrames?, generatorName?, color? ({r,g,b} 0..1 — Solid Color fill, E110) },
  *     ],
  *     transitions?: [ { track, atFrame, durationFrames? } ],  // need two abutting clips at atFrame
  *   }
@@ -266,6 +266,7 @@ async function assembleTimeline(spec = {}) {
       ({ buffer } = await placeGenerator(buffer, {
         generatorName: el.generatorName, trackIndex: el.track,
         startFrame: el.startFrame, durationFrames: el.durationFrames, templateVersion,
+        color: el.color,
       }));
     } else {
       throw new Error(`assembleTimeline: elements[${i}] unknown type "${el.type}" (title|generator)`);

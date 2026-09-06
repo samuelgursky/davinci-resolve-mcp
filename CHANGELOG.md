@@ -2,21 +2,20 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
-## What's New in v2.146.0 — safe operations policy
+## What's New in v2.209.0 — safe operations policy
 
 ### Added
 
 - **Destructive operations now carry explicit security metadata** — wrapped
   destructive tool calls receive an `operation_id` plus a `security` block with
-  a `risk_level` (`low`, `medium`, `high`, or `dangerous`). The
-  existing version-on-mutate and confirm-token gates stay intact, but clients
-  now have a stable policy surface to inspect and display before or after a
-  Resolve mutation.
+  a `risk_level` (`low`, `medium`, `high`, or `dangerous`). The existing
+  version-on-mutate and confirm-token gates stay intact, but callers now have a
+  stable policy surface to inspect and display before or after a Resolve
+  mutation.
 - **Safe mode blocks high-risk destructive calls by default when enabled** —
   `setup(action="set_defaults", params={"destructive": {"safe_mode": true}})`
   blocks high/dangerous actions before the underlying Resolve handler runs.
-  Reviewed one-off calls can proceed with
-  `allow_risky_operation=true`.
+  Reviewed one-off calls can proceed with `allow_risky_operation=true`.
 - **Security audit JSONL for destructive calls** — allowed, blocked, and
   pending-confirmation destructive calls write audit events to
   `logs/security-audit.jsonl` by default. Confirmation tokens are redacted in
@@ -28,6 +27,1619 @@ Release history for the DaVinci Resolve MCP Server. The latest release is summar
   `destructive.safe_mode`, `destructive.audit_log`, and
   `destructive.audit_log_path` are now visible through `schema`, persisted by
   `set_defaults`, and reset by `clear_defaults`.
+
+## What's New in v2.208.1 — #188: variant item counts come from the timeline
+
+### Fixed
+
+- **A silence ripple under-reported what it built, by exactly half.**
+  `execute_silence_ripple` returned `variant_video_items: 250` and
+  `variant_audio_items: 250` for a variant that really held 432 of each. The
+  bridge's `ResolveOperations._encode` truncated every proxied container to
+  `max_items` (500) with no signal anywhere, and `plan_silence_ripple`
+  interleaves video and audio — so a 432-range plan became 864 clipInfos in one
+  `AppendToTimeline`, Resolve placed and returned all 864, and the first 500
+  encoded are precisely 250 video plus 250 audio. The same response's
+  `readback.after.clip_count` said 864 and was right the whole time, because it
+  re-reads per track: two numbers from two sources in one payload, one of them
+  silently short. "Planned 432, got 250" reads exactly like 182 ranges failing
+  to land, which on a silence ripple is the operator's central fear, and
+  establishing that it was benign cost a full review cycle of hand-auditing
+  both tracks. Reported and fixed in #188 by @mart0vip.
+- **Dropped elements are now reported, never silent.** `op_call` and
+  `op_get_attribute` carry a `truncated` block naming the count, limit and
+  containers; the client records it on `transport.truncations` and logs the
+  method. It warns rather than raises deliberately — the native call has
+  already run by the time the reply is encoded, so raising would turn a
+  completed 864-item assembly into an error and orphan the timeline. A short
+  list that looks complete was the failure mode; the bound itself is
+  legitimate.
+- **The item ceiling no longer exceeds the handle table.** `max_items` was
+  clamped to 5000 against a 4096-entry `MAX_HANDLES`, so a long enough list
+  evicted its own earliest handles while it was still being minted and handed
+  the client ids that were already `stale_handle`. It now clamps to
+  `MAX_HANDLES`, with the default raised 500 → 2000.
+- **Counts come from the timeline, not the append reply.**
+  `create_variant_from_ranges` reports `placed_item_counts` from the
+  post-assembly per-track re-read it was already taking for gap detection — no
+  extra Resolve calls — and `execute_silence_ripple` and `execute_tighten` now
+  share one accounting helper, tighten having carried the identical bug. A
+  planned-vs-placed disagreement is stated outright instead of left to a hand
+  audit.
+- Beyond reporting: under the old ceiling a `cdl` applied to a large variant
+  only reached the first 250 video items.
+
+## What's New in v2.208.0 — agent execution lifecycle & pre-flight risk inspection
+
+Adapted from the design contributed in PR #187.
+
+### Added
+
+- **Agent execution lifecycle pipeline & hooks:**
+  Tools passing through `_guard_missing_params` now execute within a structured
+  lifecycle pipeline, supporting pre-flight inspection (`before_tool_call`),
+  post-execution enrichment (`after_tool_call`), and failure handling (`on_error`).
+- **Pre-flight operation risk & blast radius assessment:**
+  `resolve_control(action="inspect_operation")` evaluates any tool and action
+  prior to execution, returning risk levels (`low`, `medium`, `high`, `critical`),
+  destructive flags, confirmation requirements, and blast radius scopes (`item`,
+  `track`, `timeline`, `project`, `system`).
+- **Lifecycle hooks introspection:**
+  `resolve_control(action="list_lifecycle_hooks")` exposes registered pipeline
+  hooks and their active states.
+
+### Notes on the adaptation
+
+- **The dry-run simulation interceptor is not included.** As contributed, any
+  call carrying `dry_run: true` outside a hardcoded four-entry allowlist was
+  short-circuited and answered with a synthesised `{"success": true,
+  "simulated": true}`. `src/server.py` has 273 `dry_run` references, so the
+  allowlist was not close: `setup.set_defaults` and
+  `resolve_control.clear_executions` both have real, tested dry-run paths and
+  were hijacked. It also answered `success: true` to
+  `set_defaults(result_envelope="banana")` — a dry run of an operation that
+  cannot succeed — and to adding a marker with no timeline in existence.
+  `dry_run` is the call an editor makes *because* they do not trust the next
+  one; a version of it that always succeeds is worse than none, because it is
+  believed. Nothing about dry-run behaviour changes in this release: every
+  `dry_run` reaches the handler that owns it.
+- **The pipeline can gate a call, but nothing shipped does.**
+  `HookDecision(proceed=False)` and the public `register_hook` remain, so a
+  deliberately registered hook can intercept. Every default hook only observes,
+  and `test_no_default_hook_short_circuits` keeps it that way.
+- **`inspect_operation` no longer contradicts itself about rollback.** It
+  reported `snapshot_available` two ways in one response — `false` inside
+  `risk`, and `true` at the top level whenever any pre-state could be read.
+  Reading a project name is not a restorable snapshot. It is now a single
+  `null`, meaning "not determined", with `pre_state_available` reporting
+  separately whether live state was read at all.
+- **An unrecognised operation is no longer assessed as safe.** Any action
+  matching no rule fell into a general-mutation bucket and returned `medium` /
+  `destructive: false` / `confirmation_required: false` — a confident answer
+  about an operation the classifier had never heard of, including ones that do
+  not exist. Responses now carry `recognised: false` and say in `reasons` that
+  the levels are name-based defaults rather than a finding. The guard exists
+  for hallucinated calls; answering one with reassurance was the failure it was
+  built to prevent.
+- The docs now state plainly that `inspect_operation` is a heuristic over
+  action names, not a simulation: it never touches the project and does not
+  validate parameters.
+
+## What's New in v2.207.0 — execution audit report exports
+
+Contributed in PR #185.
+
+### Added
+
+- **Execution traces can now be exported as reviewable audit reports.**
+  `resolve_control(action="export_execution_report")` writes the latest trace,
+  or a named `execution_id`, as Markdown or JSON. The report carries the
+  request, status, start/end timestamps, duration, tool summary, semantic
+  deltas, verification rollup, warnings, notes, and optional per-step table.
+- **Reports default beside the trace log.** When no path is passed, reports are
+  written under `logs/execution-reports/<execution_id>.md` or `.json`.
+  `RESOLVE_MCP_TRACE_REPORT_DIR` can move that default destination without
+  changing where append-only trace events are logged.
+- **Exports are observer-safe.** Creating a report is exempt from execution-step
+  recording, just like querying traces, so inspecting or exporting a trace
+  cannot mutate the trace being reviewed.
+- **Existing files are protected by default.** A caller must pass
+  `overwrite=true` to replace a report at the chosen path.
+
+### Notes
+
+- The export is built from the existing trace summary fields, not raw tool
+  arguments or raw tool results. It is meant for review and audit, not a replay
+  script.
+- Added focused unit and server integration coverage for Markdown export, JSON
+  export, step omission, invalid formats, overwrite protection, observer
+  isolation, and `resolve_control` dispatch.
+
+### Fixed on the way in
+
+- **An unverified run no longer reports itself as passed.** The verification
+  rollup collapsed "nothing reported any evidence" into `passed: True`, and the
+  report printed it verbatim — so a workflow where nothing was checked produced
+  an audit document reading `Status: unverified` on one line and `Passed: yes`
+  on the next. Those sit inches apart and only one of them gets scanned. The
+  rollup now carries `None` for the unknown case and the Passed row renders
+  "not established — no checks recorded"; a real pass still says yes and a real
+  failure still says no. This is the same distinction v2.206.0 documented for
+  `verification.status`, and the export is exactly where it stops being a
+  nuance and starts being a claim on paper.
+- **The Simplified Chinese README was carrying a false version line.** Its
+  badge and "本翻译对应 vX.Y.Z 版 README" line were bumped to 2.207.0 without the
+  section itself, which is the specific failure the release process calls out —
+  a lagging translation whose version line asserts otherwise. Translated.
+- `path` is documented as honoured-as-given, creating directories to reach the
+  destination: deliberate, since a conform's paperwork belongs beside the
+  conform rather than in `logs/`, but worth stating next to a source-media
+  safety policy. The `execution_id` route is sanitised to a bare filename and
+  cannot escape the report directory — verified.
+
+## What's New in v2.206.0 — agent execution traces
+
+Adapted from the design contributed in PR #183.
+
+### Added
+
+- **Execution traces answer "why did the editor do this?"** v2.205.0's
+  `_operation` envelope describes one call; a real editorial pass is a loop of
+  them. When an agent removes 17 pauses, seventeen individual returns each show
+  one deletion. A trace correlates them into a single execution carrying the
+  request that started it, the tools invoked and how often, cumulative
+  `duration_ms`, the summed semantic deltas (`items_deleted: 17`), and a
+  verification rollup that keeps a contradiction distinct.
+- **Six actions on `resolve_control`** — `begin_execution`, `end_execution`,
+  `get_execution_trace`, `get_execution`, `list_recent_executions`,
+  `clear_executions` — with the compound tool count unchanged at 36. Any call
+  passing an explicit `execution_id` is correlated automatically; queries are
+  exempt from step recording, so observing a trace cannot alter it.
+- **`duration_ms` on the `_operation` envelope**, measured with
+  `time.perf_counter()` around the call.
+
+### Notes on the adaptation
+
+- **The trace log is anchored to the repo, not the working directory.** It was
+  derived from `os.getcwd()` and returned None when `./logs` did not exist —
+  and the generated client configs set no `cwd`, so on a standard install
+  persistence silently did nothing, with no signal either way. It now sits
+  beside `server.log`, the way `media-analysis-preferences.json` and
+  `server-preferences.json` already do, and the directory is created on first
+  write rather than being a precondition.
+- **`list_recent_executions` reports where the log is and whether it is
+  writable.** The append is best-effort and must never fail a real edit, which
+  means a broken destination is otherwise invisible — "the file is empty" and
+  "nothing is being written" looked identical from the caller's side.
+- **The log rotates at 8 MB, keeping one generation.** The in-memory ring was
+  capped at 100 executions; the file had no bound at all, at one append per
+  tool call, on machines that run for months.
+- **The persistence is described accurately.** It is a synchronous buffered
+  append on the calling thread — measured at ~0.07ms per call, immaterial
+  beside any Resolve round-trip, but "non-blocking" was the wrong word for it.
+  It runs outside the lock, so a slow filesystem cannot serialize concurrent
+  tool calls.
+- **What is recorded is now documented**: tool, action, timing, status,
+  semantic deltas, verification — no parameters, no file paths, no clip or
+  project names. The one free-text field is the `request` passed to
+  `begin_execution`, which on client work deserves the care of a commit
+  message.
+- Verified through the real stdio JSON-RPC tool layer: 36 tools register, a
+  begin/call/end cycle produces one correlated trace, and the reported
+  persistence path is the one actually written.
+
+## What's New in v2.205.2 — #184: background analysis actually starts
+
+### Fixed
+
+- **`background=true` / `async_job=true` silently never ran.**
+  `start_batch_job` derived the runner's project root with
+  `str(plan["output_root"])`, but that field holds the *mapping*
+  `resolve_output_root()` returns, not a path. `str()` on it produced a dict
+  repr — and because that repr is a **non-empty** string it satisfied the
+  `if wants_runner and job_id and project_root` guard, so the runner was handed
+  a "directory" naming nothing on disk. It found no job store, returned
+  `job_not_found`, and the caller was told to go debug a job that existed and
+  was perfectly healthy. Reported and fixed in #184 by @turapins, who also
+  established that `batch_cli` and the analysis dashboard already read the
+  field as a mapping — `server.py` was the single consumer out of step, so the
+  fix belonged there rather than in the mapping's shape.
+
+## What's New in v2.205.1 — #182: the bridge preflight checks both halves of Resolve's Python lookup
+
+### Fixed
+
+- **A `PYTHON3HOME` prefix with a dylib but no `bin/python3` is no longer
+  reported as usable.** fusionscript.so does two things with the prefix — runs
+  `<prefix>/bin/python3` and dlopens `<prefix>/lib/libpython3.X.dylib`, whose
+  strings sit adjacent in the binary — and the preflight validated only the
+  second. It answered `python3_home.usable: true` and
+  `resolve_will_list_python_scripts: true` while Resolve listed **zero** Python
+  scripts and logged nothing, which is the worst shape this failure can take:
+  the user has been told the thing is configured correctly, so the real cause
+  is the last place they look. Reported in #182, with the root cause and the
+  fix both correct as filed.
+- **The interpreter has to be there under the unversioned name.** `python3` is
+  the literal name in the binary, and that is what makes this trap easy to hit:
+  a Homebrew framework prefix carries a perfectly good
+  `lib/libpython3.13.dylib` next to a `bin/` that has `python3.13` and no
+  `python3`. It is formula-dependent — `python@3.14` ships one, `python@3.11`
+  and `python@3.13` do not — so the same "Homebrew Python" advice works on one
+  machine and silently fails on the next. `framework_pythons()` has always
+  required `bin/python3`; this is the same rule applied to the route that
+  skipped it.
+- **A set-but-unusable `PYTHON3HOME` is now called out even when another
+  discovery route exists.** Resolve reads it first, and whether it falls back
+  after choosing a prefix it cannot use is inferred from string adjacency
+  rather than established — so resting a clean bill of health on a route
+  Resolve may never reach is the same false all-clear in a new place. The
+  preflight names the mismatch, prints the exact `ln -s` that repairs it, and
+  suggests `launchctl unsetenv` as the alternative.
+
+### Changed
+
+- **The advice says that `launchctl setenv` does not survive a reboot.** A
+  bridge that listed for weeks and then stopped, with no error anywhere, is
+  usually that, and nobody connects it back to a step they ran a month
+  earlier. `sudo ln -s "$(command -v python3)" /usr/local/bin/python3` is
+  offered as the persistent alternative, with the `PATH` caveat — presented
+  alongside the sudo-free route rather than replacing it, since avoiding a
+  system-wide install is the whole point of the #143 fix.
+
+## What's New in v2.205.0 — a standard operation envelope on every tool result
+
+Adapted from the design contributed in PR #181.
+
+### Added
+
+- **`_operation` on every compound tool return.** Agents orchestrating
+  multi-turn edits had to answer the same three questions after every call —
+  did it happen, was it verified, what changed — in a different vocabulary per
+  tool (`readback.missing`, `succeeded`/`failed`, `partial`,
+  `status: "confirmation_required"`). Those are now normalized into one block:
+  `status` (`success` / `partial` / `blocked` / `failed`), `operation`,
+  `execution_id`, `verification`, `changes` and `warnings`.
+- **A contradiction stays its own verification status.** "Resolve reported
+  success and the readback disagrees" is a different thing for a caller to act
+  on than "the call failed", and this repo's most valuable reliability signal;
+  it does not collapse into a failure. `readback.as_verification_dict` renders
+  a `verify_by_readback` result in the same shape.
+- **`setup(action="set_defaults", params={"result_envelope": ...})`** — `dual`
+  (default), `pure`, or `legacy`, persisted to `logs/server-preferences.json`
+  and restored at startup. Override per call with `params={"envelope": ...}` or
+  per process with `RESOLVE_MCP_RESULT_ENVELOPE`.
+
+### Notes on the adaptation
+
+- **The envelope is namespaced, not flattened.** Five of its key names —
+  `status` (22 sites), `operation` (20), `warnings` (15), `result` (8),
+  `changes` (2) — are already domain keys on this server, so merging the
+  envelope into the top level silently rewrote them: `resolve_control`
+  `job_status` reported `"success"` instead of `"done"` (an agent polling a
+  job would never see it finish), a confirm gate's `"confirmation_required"`
+  became `"blocked"` — renaming the very signal the envelope exists to make
+  unambiguous — and a transcription's `"Transcribed"` was lost. The payload is
+  now passed through untouched and the envelope rides under `_operation`,
+  following the existing `_versioning` convention. A guard test fails the
+  suite if any module starts returning `_operation` as a domain key.
+- **An unreported delta is absent, not zero.** `changes: {}` reads as "this
+  operation changed nothing", which is false about an edit that simply never
+  declared its deltas — the silent-lie class this codebase treats as a bug.
+  The key is omitted instead, and `verification: "unverified"` likewise means
+  "no evidence reported", not "checked and clean".
+- **Status inference keys only on conventions this repo actually uses.**
+  `blocked` reads like a gate flag but is a domain key holding the *list of
+  targets that could not be resolved*; a successful `bulk_match_to_hero` dry
+  run carries a non-empty one. Reading it as a gate reported a confirmation
+  that was never requested.
+- **Semantic deltas are declared by the action, not guessed from key names.**
+  A mapping like `properties_restored_items` → `properties_updated` turns a
+  ripple insert's internal bookkeeping into an edit the caller never made.
+  `timeline.ripple_insert` declares its own; the rest report none rather than
+  a fabricated zero.
+- Verified through the real stdio JSON-RPC tool layer, not just at module
+  level: 36 tools register, the envelope arrives, the payload is intact.
+
+## What's New in v2.204.0 — #179: the managed install can boot the advanced server
+
+### Fixed
+
+- **The managed install now contains the tree the advanced bin imports.**
+  `setup` registered `davinci-resolve-advanced` in every generated client
+  config, pointing at `<managed root>/bin/davinci-resolve-advanced-mcp.mjs` —
+  but the bootstrapper's sync list never copied `resolve-advanced/`, which
+  that bin imports. The process died with `ERR_MODULE_NOT_FOUND` before the
+  MCP handshake, and every client reported the same uninformative "subprocess
+  closed stdout before responding". `resolve-advanced/` is now synced, and a
+  regression test drives the real sync into a temp root rather than restating
+  the list, so dropping it again fails the suite. Reported in #179.
+- **Its Node dependencies are installed there too.** Syncing the tree alone
+  was only half the fix: the managed root has no `node_modules`, so
+  `@modelcontextprotocol/sdk`, `zod`, `jszip`, `fzstd` and `zstd-codec` still
+  failed to resolve. `setup` now runs `npm install --omit=dev --omit=optional`
+  under the managed `resolve-advanced/` before install.py writes any config.
+  Optional native deps (`better-sqlite3`, `sharp`, `pg`) stay optional — the
+  server already reports those gaps itself through `capabilities`, and a
+  failed native build must not take the whole setup down. Verified end to
+  end: a fresh managed install now completes the MCP handshake and registers
+  all 18 advanced tools.
+- **A config is only written for a layout that can boot.** When
+  `resolve-advanced/` or its deps are absent, `build_advanced_entry` now emits
+  an `npx -y --package davinci-resolve-mcp@<version>` command instead of a
+  managed bin path that cannot start. `resolve-advanced/package.json` is the
+  single source of truth for which deps have to be present — install.py and
+  the bin both read it rather than restating the list.
+- **An unbootable advanced server names its own fix.** The bin preflights its
+  server tree and dependencies and exits with what is missing and how to
+  repair it, instead of an `ERR_MODULE_NOT_FOUND` stack. The diagnostic goes
+  to stderr — stdout is the JSON-RPC channel, where it would corrupt the
+  handshake rather than explain it. `--version` and `--help` keep answering
+  from a broken install, since those are what a user reaches for when the
+  server will not start.
+
+### Added
+
+- **`davinci-resolve-mcp sync`** — refresh the managed install and provision
+  the advanced server's Node deps without running the full interactive setup.
+  `--no-deps` syncs files only. Re-syncing preserves the provisioned
+  `node_modules`; a dev checkout's own `node_modules` is never copied into a
+  managed install, since its optional native deps are built for the
+  developer's platform and ABI.
+
+## What's New in v2.203.0 — E151: verify_roundtrip fits a source offset from the majority
+
+### Fixed
+
+- **`verify_roundtrip` fits a source's offset from the majority of its
+  cuts.** The per-source timecode offset was whatever the FIRST paired cut
+  said, so on a real reel two shifted cuts of fifty-five set the expectation
+  and fifty-three unchanged cuts read as `source-frames` drift. The offset is
+  now the source's dominant one across all its pairs (net of record shift),
+  and each cut is judged against that. On that reel: 137 → 76 mismatches,
+  the remainder the per-cut scatter of an eye-matched re-conform; the other
+  reels lose two false drifts each.
+
+## What's New in v2.202.0 — E150: a rebase needs a real majority; retime rounding is the same window
+
+### Fixed
+
+- **A timecode rebase needs a majority of ALL the source's cuts.** The rule
+  measured its majority over the cuts whose windows differed, so on a real
+  reel two shifted cuts out of fifty-four became that source's base and
+  turned fifty-two UNCHANGED cuts into false trims (a control with a free
+  floor). The majority is now over every paired cut of the source (at least
+  two, and more than half). On that reel: 187 → 237 of 335 cuts retained; the
+  reels where a rebase is real keep it.
+- **One source frame of rounding on a retimed pair is the same window.**
+  Premiere's exact 80% and Resolve's keyframe slope (0.79999, frame-quantized
+  seconds) land one frame apart (41923 vs 41922). On a pair where either side
+  is retimed a source edge within `srcTolerance` (default 1 frame) compares
+  equal; a 100% pair keeps the exact compare; two frames is still a trim.
+
+## What's New in v2.201.0 — E149: a rename is inferred from overlapping windows
+
+### Added
+
+- **A rename is inferred from overlapping windows when the only cut of a
+  source was re-centred.** Alias inference demanded an identical record
+  window under two names, so a source with a single cut sitting inside a
+  re-centred dissolve could never be aliased: it read as `gone` plus `new`
+  plus a dropped and an added dissolve — three such junctions on a real reel.
+  A second tier now adopts a rename from unpaired cuts on the same track
+  whose windows overlap under clearly-the-same names (LCS similarity ≥ 0.8),
+  reported with `byOverlap`. A different shot in an overlapping window stays
+  a replacement. On the reel: the three phantom drop/add pairs are gone, the
+  cuts pair, and one of the junctions folds outright.
+
+## What's New in v2.200.0 — E148: the timing guards read through the changelist's aliases
+
+### Fixed
+
+- **The timing guards read the old cut through the changelist's aliases.**
+  `turnover_changelist` ran its silent-lie guards on raw source names, so an
+  offline→online rename (proxies `4K-2K` → masters `4K`) flagged every
+  dissolve as `transition_dropped` — 11 bogus flags on a real reel, none once
+  the changelist's inferred aliases applied. `timingGuards` now accepts the
+  same `sourceAliases` the changelist reports (explicit or inferred) and the
+  tool passes them through. A dissolve that really vanished still flags
+  through the aliases.
+
+## What's New in v2.199.0 — E147: verify_roundtrip pairs cuts by window
+
+### Fixed
+
+- **`verify_roundtrip` pairs cuts by record window, not by index.** One clip
+  the export had lost used to shift every later cut by one and read as 48
+  track/source/record mismatches on a real reel. Cuts now pair the way the
+  changelist pairs them — same track and source, closest record position,
+  each consumed once — so a clip the export lost is one `missing` (with its
+  window), an export-only clip one `extra`, and a different shot in the same
+  window a `source` mismatch found by window. `count` stays informational.
+  On the real reel the bridge-timeline verify went from 57 mismatches to 19,
+  every one of them the conform's own: the lost clip and the tail it
+  shortened, the eye-matched re-conform onto other media, the reversed tail
+  leader.
+
+`pairEvents` is now exported from the editorial module for the verify to
+share.
+
+## What's New in v2.198.0 — E146: verify_roundtrip consults the changelist's laws
+
+### Added
+
+- **`verify_roundtrip` consults the changelist's laws.** A round-trip verify
+  of a real offline→online reel reported 216 mismatches, 191 of them the
+  proxies' `4K-2K` names against the masters' `4K`. The verify now runs the
+  changelist first and adopts its inferred source renames (reported in
+  `sourceAliases` beside any explicit ones), excuses a record edge the
+  changelist folded into a `junction_realigned` (reported in
+  `junctionRealigned`, like fade reshapes), treats a black generator by any
+  name as black on both sides, and reports a named generator the export
+  does not carry (a counting leader) as `generatorsNotInExport` instead of
+  an index cascade over every cut that follows it. `inferAliases: false`
+  turns the adoption off. On the real reel: 216 → 57 mismatches against the
+  bridge-authored timeline and 205 → 21 against the hand conform, what
+  remains being the conform's own differences (the eye-matched re-conform
+  onto other media, and the hand conform's four retimed layers) plus one
+  missing clip's index cascade.
+
+## What's New in v2.197.0 — E145: a named generator is a black leg or a named hole
+
+### Fixed
+
+- **A named generator no longer refuses the whole reel.** Once E141 named
+  Premiere's synthetic items by their title, a Universal Counting Leader
+  arrived at the bridge as an event with no file and no source-map entry,
+  and `eventsToAssembleSpec` refused the entire 228-cut reel as an "unmapped
+  source reel". Now a black generator (Black Video, black, slug) authors as
+  the BL leg it is — a Solid Color that renders black — and any other named
+  generator with no Resolve equivalent is dropped with a reason in
+  `report.unresolvedGenerators` (name, track, record window), a hole the
+  ledger names, the way unresolved compounds already are. A source map that
+  maps the generator's name to a rendered file places it like media. An
+  unmapped real reel still refuses.
+
+On the real turnover: reels 02, 03 and 04 now conform offline through the
+bridge — 226 / 147 / 257 video cuts, every dissolve and retime authored,
+two leaders per reel reported as holes, black authored as black.
+
+## What's New in v2.196.0 — E144: Resolve's own retimes decode; a flat map is a freeze
+
+### Fixed
+
+- **Resolve's own retimes decode.** Every retime Resolve 19.1.3.7 makes
+  itself — an XMEML import, a UI speed change, an EDL `M2` freeze, a speed
+  ramp — writes `KeyframesBA` in the keyed-dict form (keyframes
+  `{interp,YOut,YIn,Y,XOut,XIn,X}` under keys `0`, `1`, …), which the DRP
+  time-map reader rejected ("unsupported wire type 7"), so E140 called them
+  unknown. The reader now decodes both forms; keyframe 0 at X=0 is the
+  origin and its Y the source second the map starts on (4.0 s on a real ramp
+  harvest). Verbatim harvest blobs: a 50% constant reads 50, a ramp reads
+  its two segments (0.5 then 2.0) with the right source window, both freezes
+  read the second they hold.
+- **A source window is the map, evaluated.** A DRT event's `srcIn`/`srcOut`
+  now come from evaluating the piecewise-linear map at `In` and `In +
+  duration` (origin included), which makes ramps, reverses and rebased maps
+  come out right without special cases.
+- **A flat map over the 60000 sentinel is a freeze even with a source-in.**
+  The E66 harvest (an XMEML import of a plain 100% clip) came back with a
+  flat map at Y=0 and `In` 24, and its render is static at the source's frame
+  0: inter-frame change 0.02 against 0.42 in the source. Resolve's XMEML
+  importer froze the clip silently; the event now says frozen at frame 0 and
+  keeps the ignored `In` as `recordDomainIn`. (The first draft of this fix
+  called that map a harmless identity because it fit the prose; the render
+  said otherwise.)
+
+### Measured (filed in api-limitations)
+
+- The keyed-dict keyframe form on Resolve-made retimes, and the freeze
+  law with a present `<In>`.
+
+## What's New in v2.195.0 — E143: a retimed DRT clip's source-in is record-domain
+
+### Fixed
+
+- **A retimed DRT clip's source-in is record-domain.** On a keyed
+  `Sm2TimeMap` Resolve's `<In>` indexes the source stretched by 1/speed (the
+  DRP library measured this live and writes `In = srcIn / speed` for exactly
+  that reason), so the first source frame a retimed clip shows is `In × speed`,
+  not `In`. E140 read `In` as a source frame, wrong by `(1/speed − 1) × In`:
+  10,537 frames on a real 80% clip. The DRT event now carries `srcIn = In ×
+  speed` (reverse: measured from the source tail), `srcOut` following at that
+  speed, and the raw value as `recordDomainIn`.
+- **Which meant a wrong "match".** Against the Premiere pix-lock, the hand
+  conform's four 80% layers had read as unchanged because its `In` values
+  equalled Premiere's source frames numerically — the very mistake: typing a
+  source frame straight into `In` of an 80% clip shows a frame 20% of `In`
+  earlier. Read correctly: the bridge-authored timeline (`In` 52682) matches
+  Premiere frame for frame on all four layers, and the hand conform (`In`
+  42145) shows source 33715 — 8,430 frames early — which the changelist now
+  reports as four trims. The media volume was offline in this session, so the
+  render witness for those four layers is owed; the law itself stands on the
+  DRP library's live measurement.
+
+### Measured (filed in api-limitations)
+
+- The record-domain `<In>` law on retimed clips, with both real timelines as
+  witnesses.
+
+## What's New in v2.194.0 — E142: a cut re-aligned inside a dissolve is the same picture
+
+### Added
+
+- **A cut re-aligned inside an unchanged dissolve is the same picture.**
+  Premiere keeps a fractional dissolve alignment (its cut sat 12 frames into a
+  46-frame span); Resolve's conform re-centres it (23). The dissolve covers
+  the same record frames from the same media either way, but the changelist
+  read each one as a `moved` incoming plus a `trimmed` outgoing. When a
+  transition's span is unchanged and the cut inside it moved with the
+  incoming's source-in and the outgoing's source-out sliding by the same
+  delta (scaled by the clip's speed for a retimed clip, read through a TC
+  rebase), the pair folds into ONE `junction_realigned` — a consequence, not
+  an edit — both sides count as retained, and the junction diff no longer
+  reports the pre-roll change as a second fact. A dissolve whose span moved,
+  or a cut whose source did not slide with it, stays a real move.
+- **Two labels of one transition family are a relabel.** `Cross Dissolve
+  (Legacy)` in Premiere and `Cross Dissolve` in Resolve are the same effect;
+  they now land in `transitionRelabels` instead of `transition_changed`. A
+  different family (a push, a wipe) is still a type change.
+- **Shape `equivalent`.** A diff whose only changes are consequences (junctions
+  re-aligned, labels) now says so, with a note, instead of `edit`.
+
+On the real reel (Premiere REEL_02 pix-lock vs the Resolve conform): 206 of
+228 cuts retained (189 before), 9 junctions re-aligned, 10 relabels, one real
+move (a dissolve whose span moved), one real transition change, 19 trims on
+the eye-matched files, the second mix track, the reversed tail leader and
+frozen black — symmetric in both directions.
+
+## What's New in v2.193.0 — E141: relink-aware changelist
+
+### Added
+
+- **`turnover_changelist` is relink-aware.** A real offline→online turnover
+  (the Premiere REEL_02 pix-lock against the Resolve conform of the same reel)
+  paired 15 of 228 cuts: the offline media was named `… 4K-2K … .mov`
+  (proxies) where the online cut used `… 4K … .mov` (masters) and `.mp4`
+  became `.mov`, so 203 identical cuts read as `replaced`. Now `sourceAliases`
+  (`{from,to}` exact or `{pattern,replace}` regex) rename old sources before
+  pairing, and a systematic rename is INFERRED from unpaired cuts that share
+  a record window — adopted only when one-to-one both ways and either
+  recurring or clearly the same name (LCS similarity ≥ 0.6), so a different
+  shot dropped into the same window stays `replaced`. The result reports
+  every alias with its cut count, similarity and whether it was inferred.
+- **A per-source timecode rebase is not N trims.** Masters carry a different
+  timecode base than the proxies: the same cuts read as `trimmed` by one
+  constant shift. When one shift is a source's dominant story (≥2 cuts and
+  more than half of its differing cuts) the compare reads old through it and
+  reports it in `sourceTcOffsets`; a cut that still differs is a real trim on
+  top of the rebase, with the pre-rebase window kept in its deltas. A source
+  whose cuts each shift by a different amount (an eye-matched re-conform onto
+  other media) stays trims — measured: two of seven cuts sharing a shift is a
+  coincidence, not a base.
+- **Premiere synthetic items name themselves.** A Universal Counting Leader
+  or Black Video has no file: its `Media` writes a bare numeric id as the
+  path and the human name in `<Title>`. They now read by title and carry
+  `generatorName`, so they pair with the online cut's generators by name
+  instead of reporting a numeric id replaced.
+
+On the real reel: 189 of 228 cuts retained (was 15), 16 aliases inferred, one
+source rebased by 47745 frames, symmetric in both directions; what remains is
+the conform's own story — 27 trims, 10 junctions moved inside dissolves, the
+online reel's second mix track, its reversed tail leader and frozen black.
+
+## What's New in v2.192.0 — E140: a .drt retime decodes to its speed
+
+### Added
+
+- **A `.drt` retime decodes to its speed.** The keyed `MediaTimemapBA`
+  (`Sm2TimeMap`) that E139 could only flag now reads through the DRP library's
+  `decodeTimemap`, the same reader the `.drp` side uses: the keyframe slope is
+  the speed ratio, `XMax 60000` with a zero slope is the freeze sentinel, a
+  negative slope is a reverse. The parser's `timemap` becomes an object
+  (`kind` linear | linear-multi | constant | variable | freeze | unknown,
+  `speed`, `reverse`, durations, ramp `segments`), and a DRT event carries
+  `speed` in the percent every other parser speaks with `srcOut` following the
+  record window at that speed; a freeze is the zero-speed in==out event; a map
+  the decoder cannot read stays `speed`/`srcOut` null + `retimeUnknown`, never
+  a faked 100%. Measured on the real REEL_02 export: all four retimed clips
+  read 80, and their `srcOut` lands frame for frame on what Premiere wrote for
+  the same cuts (42423, 41949, 42178, 42178); the Black Video generator reads
+  as a freeze; the tail leader reads as a reverse; nothing is left unknown.
+
+### Measured (filed in api-limitations)
+
+- A 19.1.3.7 EXPORT_DRT writes `KeyframesBA` in the protobuf point form, not
+  the keyed-dict form its XMEML retime import writes; both decode.
+
+## What's New in v2.191.0 — E139: a .drt timeline walks into events; two Resolve versions diff
+
+### Added
+
+- **A `.drt`/`.drp` timeline walks into normalized events, so two Resolve
+  timeline VERSIONS diff.** `parse_interchange {format:'drt', content: PATH}`
+  (optional `timeline` = pool name or index) returns the same event shape as
+  every other format, with sequence-relative record positions plus the
+  timeline's `fps`, `startFrame` and `startTimecode` read from the pool
+  sequence. Measured on a real 19.1.3.7 export of a 229-clip reel: 230 events
+  on V–V4 and A–A2, 11 dissolves attached with their witnessed alignment, the
+  4 retimed clips flagged, and v19 vs v20 of that reel reads `identical, 229
+  of 229 retained` through `turnover_changelist`.
+- **The DRT parser reads the fields it used to skip.** Per clip: `in` (the
+  source in-point — EMPTY on a real export's audio clips, reported `null`, and
+  `srcInAbsent` on the event, never a silent 0), `mediaStartTime`,
+  `mediaFrameRate` (decoded from Resolve's little-endian double blob) and
+  `timemap` (`linear` vs a keyed `curve`; a curve is a retime this reader does
+  not decode, so the event carries `speed: null`, `srcOut: null` and
+  `retimeUnknown` instead of a faked 100%). Per track: `transitions`
+  (`Sm2TiTransition` span, type, `alignmentType` → `alignment`: 2 centres on
+  the cut, 3 ends at it, witnessed on all 11 real dissolves). Per timeline:
+  `frameRate`, `startFrame`, `startTimecode` and `resolution` now fill from the
+  pool `Sm2Sequence` (`FrameRate` LE double, `MediaExtents` seconds,
+  `Resolution` BE uint64 pair) when the container carries none — a real export
+  used to report them all `null`.
+
+### Measured (filed in api-limitations)
+
+- The EXPORT_DRT clip, transition and pool-sequence field encodings.
+
+## What's New in v2.190.0 — E138: the changelist names its shape; pairing is closest-first globally
+
+### Added
+
+- **`turnover_changelist` leads with a SHAPE verdict.** A real Premiere
+  auto-save of a locked reel kept 3 of its 335 cuts, byte-identical at their
+  record positions, and deleted the rest: a patch/selects reel of the same
+  cut. Per-event kinds read that as 332 `gone`. The result now names the
+  relationship first: `identical` | `subset` (new keeps some of old's cuts
+  unchanged in place and nothing else) | `superset` (the reverse) | `edit`,
+  with `retained`, `oldCuts`, `newCuts`, and for subset/superset `sparse`,
+  the `retainedWindows`, and a plain-language `note`. A transition that
+  vanished or appeared with the cuts it joins counts as a consequence, not an
+  edit. `gone`/`new` changes carry their record OUT so a dropped junction can
+  be attributed to them.
+
+### Fixed
+
+- **Event pairing was first-come, not closest-first.** Walking new cuts in
+  order let the first new instance of a source consume an old instance 6,000
+  frames away while the old instance at its own position went unpaired, so
+  the same two reels compared as `subset` one way and `moved + 332 new` the
+  other. Every same-signature (old, new) pair now sorts by record distance
+  and is taken once; the diff is symmetric under swapping old and new. On
+  the real reels: `subset 3 of 335` forward, `superset 3 of 335` back.
+  Sweep across every sequence the two auto-saves share: 739 compared, 738
+  `identical`, 1 `subset`, 0 asymmetric in either shape or counts.
+
+## What's New in v2.189.0 — E136: Premiere markers belong to their sequence and read their real fields
+
+### Fixed
+
+- **Every project marker landed on every sequence, at frame 0, unnamed.**
+  The marker walk returned every `Marker` object in the project for each
+  sequence and read fields the real shape does not carry: on a real Premiere
+  2025 turnover that was 1,228 bogus markers per sequence. A sequence's
+  markers are its own — `Sequence.MarkerOwner.Markers` → a markers container
+  → `<Marker>` pairs → marker objects whose payload is a `DVAMarker` JSON
+  blob (`mStartTime.ticks`, `mName`, `mComment`, `mType`, `mEndTime`). They
+  now read from that blob (ticks to frames, duration from an end time),
+  sorted by frame; the legacy field shape still reads when a sequence owns
+  it; a sequence without a marker owner reports none. On the turnover: 188
+  markers across 66 sequences, where every sequence used to show 1,228.
+
+### Measured (filed in api-limitations)
+
+- The Premiere 2025 marker ownership chain and the `DVAMarker` JSON payload.
+
+## What's New in v2.188.0 — E135: Premiere tracks are lanes; nested blocks first-fit; an audio lane ceiling
+
+### Fixed
+
+- **Every Premiere track was labelled `V` or `A`.** Multi-track sequences
+  collapsed onto one lane: on a real Premiere 2025 reels project 687 of 741
+  sequences had cuts overlapping on the same lane (4,631 pairs), which the
+  bridge refuses. Tracks now number per kind in track order (`V`, `V2` … /
+  `A`, `A2` …) across track groups and the legacy lists, and clip events,
+  fade legs and transitions carry the lane.
+- **Nested sequences expand in a second pass, first-fit.** Two nested
+  sequences stacked on different parent lanes each bring their own inner
+  lanes, and a fixed lane offset collided on 7,615 pairs. A nested block now
+  expands after every parent lane is known and shifts up by the smallest
+  offset at which none of its cuts overlap what the parent or an earlier
+  block holds (`laneShift` records it). On the reels project the only
+  "overlaps" left are zero-length fade carriers — none real.
+- **An audio lane ceiling in the bridge.** Flattened nested sequences can
+  stack audio lanes to A40 (3,586 events above lane 16 on that project, in
+  30 sequences); Resolve authors A1–A16. Events above 16 now drop with a
+  reason in `audioLanesBeyondCeiling` instead of authoring blind.
+
+## What's New in v2.187.0 — E134: real Premiere transitions attach, with their real type
+
+### Fixed
+
+- **Real Premiere transitions were invisible.** A Premiere 2025 track keeps
+  its transitions in a separate `TransitionItems` list, not among
+  `ClipItems` (measured on the reel: two video `Cross Dissolve (Legacy)`
+  items and one audio `Constant Power` fade-in, none of which reached the
+  parser). Each carries its span under `TransitionTrackItem.TrackItem`, an
+  `Alignment`, `HasIncomingClip` / `HasOutgoingClip` (false = a fade from or
+  to black or silence) and a `DisplayName`. The walk now reads
+  `TransitionItems` alongside `ClipItems`; transitions attach to the
+  incoming clip whose record-in falls inside the span and carry the real
+  `DisplayName` as their type, so the bridge routes dissolves and audio
+  cross-fades by name; a transition with no outgoing clip synthesizes the
+  black/silence leg as before. The synthetic real-shape fixture pins a
+  `TransitionItems` dissolve attaching at its explicit span.
+
+### Measured (filed in api-limitations)
+
+- The Premiere 2025 transition item shape and its fade flags.
+
+## What's New in v2.186.0 — E133: Premiere nested sequences flatten into the reel
+
+### Fixed
+
+- **A nested sequence used as a clip was an unmapped reel.** In a real
+  Premiere 2025 reels project, 3,607 items reference another sequence
+  (`Clip.Source` → `VideoSequenceSource` / `AudioSequenceSource` →
+  `SequenceSource.Sequence`), and the parser emitted the nested sequence's
+  name as a source the bridge could not map. Those items now flatten: the
+  nested sequence walks with its own cursor, its cuts of the same track kind
+  translate through the clip's in-point window into the parent's record
+  span (source frames trimmed at each cut's play rate), each tagged
+  `fromCompound` — the OTIO Stack (E120) and AAF nested-composition (E125)
+  flatten for Premiere. Depth and cycle guards keep a self-referencing
+  sequence as a named `compound` hole. Measured on the reels project:
+  13,711 events flatten, none remain as sequence-named sources. The real
+  shape is pinned in the synthetic fixture.
+
+## What's New in v2.185.0 — E132: real Premiere projects parse — 739 sequences where there were zero
+
+### Fixed
+
+- **A real `.prproj` listed no sequences and walked no events.** Measured on
+  a real 130 MB Premiere 2025 colour turnover (project Version 45): objects
+  live in two id spaces — numeric `ObjectID`/`ObjectRef` and uuid
+  `ObjectUID`/`ObjectURef` — and every sequence, project item, master clip,
+  medium and clip track is uuid-defined; sequences list their tracks through
+  `TrackGroups` → track groups → `Tracks`; an item's record span sits under
+  `ClipTrackItem.TrackItem` and its source behind `SubClip` → `VideoClip`
+  (in/out points, source) → media source → `Media` (path); a zero is written
+  as absence; names are direct `<Name>` children. The parser keyed
+  `ObjectID` only, followed `ObjectRef` only, and knew only the synthetic
+  shape — 0 of 739 sequences listed. Both shapes now walk: the turnover
+  lists all 739 sequences by name and its reel walks 335 events with no
+  unknown source or position (the counting leader lands at frame 0). The
+  real shape is pinned as a synthetic fixture.
+
+### Measured (filed in api-limitations)
+
+- The Premiere 2025 `.prproj` object graph, both id spaces, the track-group
+  chain, the clip source chain, and the omitted-zero law.
+
+## What's New in v2.184.0 — E131: a nested Stack's audio tracks flatten onto the parent audio lanes
+
+### Verified
+
+- A compound's inner Audio tracks flatten onto the parent's audio lanes
+  (`A`, `A2` …) tagged `fromCompound`, and the bridge places them on those
+  lanes — three audio placements across two lanes, none dropped. Pinned as a
+  test; the flatten from E120 already did this.
+
+## What's New in v2.183.0 — E129/E130: `import_from_drp` names from the pool, imports timelines, keeps compounds
+
+### Fixed
+
+- **`timeline.import_from_drp` named containers after their first clip.**
+  Resolve's own compound-timeline export listed as "cut_src.mp4" /
+  "white_src.mp4", "by name" could not find the real timeline, and the
+  default (all containers) imported the inner compound containers as
+  separate, hollow timelines. The lister now names each container from the
+  pool (`Sm2MpTimelineClip` / `Sm2MpCompoundClip` embed the `Sm2Sequence`
+  the container's `<Sequence>` names) and reports `kind`; the default
+  imports every TIMELINE; explicit names and indexes are unchanged (E129).
+- **The Python extractor dropped a timeline's compound containers.** A
+  compound is a pool `Sm2MpCompoundClip` whose embedded sequence lives in
+  its own container (the E45 law `drt.extract_from_drp` already honours), so
+  a timeline with compounds imported with hollow compounds. The extractor now
+  keeps them recursively (MediaRefs → compound pool elements → embedded
+  sequence ids → containers) and `metadata.json` lists `keptSeqContainers`.
+  Verified on the fixture: E57_NESTED keeps E57_OUT and E57_IN; E57_OUT keeps
+  E57_IN; the bundled template keeps its one container (E130). The
+  bundled template's sequence now lists as `MediaTemplate` on this route
+  too, where it used to read as its clip `sample.mp4`.
+
+## What's New in v2.182.0 — E128: `extract_from_drp` defaults to the pool's timeline, not the first-sorted compound
+
+### Fixed
+
+- **The default extraction picked an inner compound.** `extract_from_drp`
+  used index 0 by default, and SeqContainers list name-sorted by DbId; on
+  Resolve's own export of a compound timeline (the E127 fixture) index 0 was
+  the inner compound E57_IN, so the default emitted a hollow inner container
+  instead of the timeline. The default is now the first container the pool
+  kinds as a timeline (index 0 only when the export carries no pool kinds);
+  `timelineName` picks a container by its pool name; an explicit
+  `timelineIndex` still means exactly that container. The result reports
+  `pickedBy`, the container's name and kind, and every container kept (a
+  timeline keeps its compounds recursively). Verified on the fixture: the
+  default yields E57_NESTED with E57_OUT and E57_IN kept; `timelineName`
+  E57_OUT yields E57_OUT + E57_IN; index 0 yields E57_IN alone.
+
+## What's New in v2.181.0 — E127: DRT timelines get their real names, and compounds their kind
+
+### Fixed
+
+- **`drt.parse` / `list_sequences` named a timeline after its first clip.**
+  A SeqContainer XML carries no timeline name — its first `<Name>` is the
+  first clip's — so Resolve's DRT export of a compound timeline listed
+  "cut_src.mp4" and "white_src.mp4" as sequences (measured on 19.1.3.7; the
+  export is a permanent fixture). The pool folder's `Sm2MpTimelineClip` and
+  `Sm2MpCompoundClip` embed the `Sm2Sequence` each container's `<Sequence>`
+  names; the parser now takes names and `kind` (`timeline` | `compound`) from
+  there, tags a media-less clip named after a compound as `compound`, and
+  `list_sequences` reports `kind` and `nestedIn` so a picker can demote the
+  compound containers (E57_IN nested in E57_OUT, nested in E57_NESTED). The
+  bundled media template's sequence now lists by its real name,
+  `MediaTemplate`, where it used to read as its clip `sample.mp4`.
+
+## What's New in v2.180.0 — E126: the sequence picker knows a nested composition from a turnover
+
+### Added
+
+- **`list_sequences` flags nested AAF compositions.** An Avid nested sequence
+  (a composition another composition uses as a clip) listed as a peer of the
+  timeline that uses it, so a "which sequence?" picker offered the inner
+  composition as a turnover of its own. Each AAF sequence now reports
+  `nests` (the compositions it flattens) and `nestedIn` (the sequences that
+  use it); nested compositions still list — their cuts also arrive flattened
+  inside the parent (E125) — but a picker can demote them.
+
+## What's New in v2.179.0 — E125: an Avid nested sequence used as a clip flattens into the parent
+
+### Fixed
+
+- **A nested sequence in an AAF turnover was an unmapped reel.** A
+  SourceClip that references a NAMED CompositionMob is an Avid nested
+  timeline used as a clip; the walker's reference chase stopped at the first
+  named mob and emitted the composition's name as a source reel while its own
+  cuts sat in the same AAF. The walk now descends into the named
+  composition's editorial slot and translates its cuts through the
+  reference's window (source trimmed at each cut's play rate), tagging
+  `fromCompound` — the OTIO Stack flatten (E120) for AAF. Unnamed
+  intermediate compositions (subclips, group clips) keep the reference
+  chase. Render-verified on 19.1.3.7: the flattened turnover conforms and
+  plays the nested sequence's white insert exactly where the parent used it
+  (234 across its 24 frames, picture either side).
+
+## What's New in v2.178.0 — E124: the manifest and the changelist know a compound when they see one
+
+### Fixed
+
+- **`conform_manifest` names a compound clipitem.** Resolve's XML writer
+  collapses a compound to one media-less item (E121); the manifest failed it
+  as "no resolved path". It now fails by NAME with the remedy — map the
+  compound's name to a flattened media file, or turn over as OTIO, where
+  nested Stacks flatten (E120) — and resolves like any source once mapped.
+- **`turnover_changelist` reports a compound collapse once.** The same
+  compound seen flattened in one cut (OTIO) and collapsed in the other
+  (XML) read as a replacement plus a gone cut. It is now
+  `compound_collapsed` / `compound_expanded` (name, track, positions,
+  inner cut count) and its cuts leave the pairing; a collapsed compound of
+  another name over those cuts stays a real replacement.
+
+## What's New in v2.177.0 — E123: round-trip QC is compound-aware; flattening keeps the junctions
+
+### Added
+
+- **`verify_roundtrip` understands the two writers' compound forms.**
+  Resolve's OTIO writer flattens a compound's inner cuts (E120) while its
+  FCP7 writer collapses the compound to one media-less clipitem (E121), so
+  verifying flattened input cuts against an XML re-export read as count and
+  source drift. An exported compound whose span covers input cuts flattened
+  FROM that same compound now leaves the pairwise compare and is reported
+  in `compoundsCollapsedInExport` (name, track, span, inner cut count). A
+  collapsed compound over cuts that did not come from it stays drift.
+
+### Verified
+
+- Flattening keeps the junctions: an inner dissolve inside a nested Stack
+  and a transition INTO the compound both author at their flattened
+  positions — the bridge places both and drops none.
+
+## What's New in v2.176.0 — E122: frame QC never scores a compound clip as a false red
+
+### Fixed
+
+- **A flattened compound cut read as a conform error in frame QC.** The
+  lineage ingest of Resolve's FCP7 export read a compound's media-less
+  clipitem as a source named after the compound with an oracle frame of 0;
+  the sampler would then look for a source that does not exist and score
+  the cut WRONG. The geometry parser now flags a clipitem whose `<file>`
+  carries an explicitly empty `<pathurl>` as a compound, the lineage store
+  keeps `is_compound` (pre-E122 sidecars migrate in place), and `qc` never
+  samples such a cut: it reports `UNREADABLE` / review with a note naming
+  the compound and pointing at the OTIO export, where compounds keep their
+  inner content and flatten (E120). Picture cuts around it are judged as
+  before.
+
+## What's New in v2.175.0 — E121: a flattened XML compound is a named hole, not a refusal
+
+### Fixed
+
+- **An XML turnover with a compound clip refused to conform.** Resolve's FCP7
+  writer flattens a compound to ONE clipitem whose `<file>` carries an
+  explicitly empty `<pathurl>` and no inner content (measured on 19.1.3.7);
+  read as a source reel, `assemble_from_interchange` refused the whole
+  turnover as an unmapped reel. The walker now tags such clipitems
+  `compound`, and the bridge drops them with a reason in
+  `unresolvedCompounds` (name, track, record span) while the rest of the cut
+  conforms — unless the sourceMap maps the compound's name to a flattened
+  media file, in which case it authors like any clip. The reason points at
+  the OTIO export, where compounds keep their inner content and flatten
+  (E120).
+- `timeline.get_items` help notes that `generator` also covers Fusion titles
+  (Text+ enumerates with no media and no properties, like a generator).
+
+## What's New in v2.174.0 — E120: compound clips in Resolve's OTIO exports flatten instead of vanishing
+
+### Fixed
+
+- **A compound clip in an OTIO turnover was silently dropped.** Resolve's
+  OTIO writer nests a compound as a `Stack` inside the track — its
+  `source_range` is the trim window into the compound, and nested compounds
+  nest Stacks recursively (measured on 19.1.3.7 from a depth-2 timeline).
+  `parseOTIO` skipped the Stack, so a 96-frame timeline parsed as 48 with no
+  error. Nested Stacks now flatten into the parent's record time through
+  their trim window (source frames trimmed at each clip's own play rate,
+  inner upper tracks landing on the next lanes), each flattened cut tagged
+  `fromCompound`, and the bridge's ledger names them
+  (`flattenedCompounds`, `flattenedCompoundEvents`). Render-verified: the
+  flattened conform of Resolve's own export is luma-identical to the
+  original compound render at every sampled frame (three picture regions
+  at 123–125, the 24-frame white insert at 234).
+
+### Measured (filed in api-limitations)
+
+- `EXPORT_FCP_7_XML` flattens a compound to a single media-less clipitem
+  named after it, with no inner content; `EXPORT_OTIO` keeps the nesting.
+
+## What's New in v2.173.0 — E118: Resolve's own OTIO exports re-conform
+
+### Fixed
+
+- **A Resolve OTIO export with generators could not conform.** Resolve's
+  OTIO writer emits a Solid Color as a `Clip` with a NULL `media_reference`
+  named after the generator (E117), which the parser read as a source reel —
+  `assemble_from_interchange` refused the turnover ("unmapped source reel:
+  Solid Color"). Generator clips — a null or `MissingReference` with a
+  generator name, or a proper OTIO `GeneratorReference` — now walk as BL legs
+  carrying `generatorName` (and the colour when a `GeneratorReference`
+  declares one), so the bridge authors generators. Render-verified on
+  19.1.3.7: the E110 fade-to-white conform, re-exported as OTIO and
+  re-conformed, plays its clip → generator fade 124 → 96 → 68 → 41 → 18 → 16
+  and holds 16 — black, because the OTIO writer carries no colour (E117),
+  which `verify_roundtrip` reports as `generatorColourNotInExport`.
+
+## What's New in v2.172.0 — E117: colour QC knows which writers are colour-blind
+
+### Fixed
+
+- **`verify_roundtrip` no longer fails a colour compare against a re-export
+  that cannot carry colour.** Measured on 19.1.3.7: Resolve's OTIO writer
+  emits a Solid Color as a `Clip` with a null `media_reference` and empty
+  `Resolve_OTIO` metadata — no colour anywhere (its FCP7 XML writer echoes
+  the colour as `input_1`). Pass `exportedFormat` (otio|edl|xml|drt): a
+  colour-blind export reports `generatorColourNotInExport` (like
+  `markersNotInExport`) instead of `generator-colour` failures; an XML
+  export keeps the strict compare. Without the format the compare stays
+  strict. Resolve's OTIO export is a permanent fixture.
+
+### Measured (filed in api-limitations)
+
+- `EXPORT_OTIO` writes generators as media-less clips named after the
+  generator with no parameters; `Cross Dissolve` transitions carry a
+  `transitionCustomCurvesKeyframes` 0→1 curve in `Resolve_OTIO` metadata.
+
+## What's New in v2.171.0 — E114: audio-lane `-1` edges take their own lane's junctions
+
+### Fixed
+
+- **XMEML audio cross-fades lost 12 source frames on the incoming clip.**
+  Resolve's FCP7 writer emits an audio cross-fade as a transitionitem on the
+  audio track with `-1` clip edges exactly like video (measured on 19.1.3.7
+  from the E109 AAF conform; its OTIO writer emits the same cross-fade as a
+  `Custom_Transition` with 12/12 offsets). The E108 audio walk attached the
+  transition but never computed that lane's junction list, so the incoming
+  clip's `<in>` (the source at the OVERLAP start) lost its junction offset and
+  `verify_roundtrip` failed the AAF → conform → import → XML loop with a
+  12-frame audio `source-frames` drift. Each lane now resolves against its
+  own transitionitems; the loop verifies `pass: true` through both writers.
+- **v2.170.0's `kind` classifier was wrong for generators and subtitles.**
+  Measured on 19.1.3.7 (E115): a Solid Color generator and a subtitle item
+  return no MediaPoolItem and `None` from GetProperty() — exactly like a
+  transition — so the "no media, empty properties" rule labelled both
+  `transition`. The discriminator is now GEOMETRY: a transition straddles a
+  cut (one neighbour ends inside its span, another starts inside it), a
+  generator owns its span, subtitle tracks report `subtitle`, and known
+  transition names short-circuit. Verified against Resolve's own enumeration
+  of the E107 fades timeline (generator, dissolve, clip, dissolve, clip,
+  dissolve, generator).
+- **v2.170.0 also shipped with two red Python tests** — an item-shape
+  assertion in the `get_items` selector test that did not expect the new
+  `kind` field. The expectation is updated.
+
+## What's New in v2.170.0 — E113: `get_items` knows a transition from a clip
+
+### Added
+
+- **`timeline.get_items` reports `kind`** — `clip`, `transition`, or
+  `generator`. `GetItemListInTrack` lists transitions as items, and a video
+  Cross Dissolve enumerates by name; an AUDIO cross-fade enumerates with an
+  EMPTY name (measured on 19.1.3.7 on an assembled AAF turnover: 24 frames,
+  centered on the cut, between the two dialog clips), so the name can never
+  be the discriminator. A transition has no MediaPoolItem and an empty
+  property dict; a Solid Color generator has no media but transform keys;
+  everything else is a clip. An API surprise on the probe never demotes a
+  clip.
+
+### Measured (filed in api-limitations)
+
+- The transition entry now records the nameless audio form and the
+  media-pool/property discriminator, measured on both kinds.
+
+## What's New in v2.169.0 — E112: round-trip QC is colour-aware
+
+`verify_roundtrip` merged every generator leg out of the compare as "black",
+so a fade-to-white that came back black — or a colour matte that lost its
+colour — passed QC on geometry alone.
+
+### Added
+
+- **`verify_roundtrip` compares generator colours.** An input leg carrying a
+  fill colour must come back on the same track over its span with the same
+  colour (±1/255), else `generator-colour` fails; `generatorColours` reports
+  the compare. Black-only turnovers compare nothing and stay silent.
+
+### Fixed
+
+- **Resolve's own re-export of an authored colour reads back.** The FCP7
+  writer emits a Solid Color's colour as the FxPlug parameter `input_1`
+  (not Premiere's `fillcolor`); the walker now reads any RGB-valued
+  generator parameter. Live loop closed on 19.1.3.7: the E110 fade-to-white
+  turnover conformed, imported, rendered, re-exported, and verified
+  `pass: true` with both colours (white, and 128/64/191) compared — the
+  writer echoing the authored `EffectFiltersBA` is a second witness to the
+  blob layout. A black-for-white export fails as `generator-colour`.
+
+### Measured (filed in api-limitations)
+
+- The XML importer ignores a `Dip to Color Dissolve`'s colour parameter:
+  white and red imported as byte-identical default blobs and rendered inert.
+  The dip colour stays GUI-only on 19.1.3.7 (E111).
+
+## What's New in v2.168.0 — E110: Solid Color has a colour — fade-to-white and colour mattes author
+
+The one thing the black-leg machinery could not do was be anything but
+black: the Solid Color generator's colour lives in an `EffectFiltersBA` blob
+nobody had ground truth for, and Resolve 19 exposes the colour only in its
+UI. Resolve's own FCP7 XML importer turned out to be the capture route.
+
+### Added
+
+- **`drt.assemble` generator elements take `color`** (`{r,g,b[,a]}` as 0..1
+  floats or 0..255 ints): `placeGenerator` authors the 55-byte
+  `EffectFiltersBA` byte-for-byte as Resolve's writer emits it (header, fixed
+  prefix, flag, big-endian uint16 ARGB, pad, a second black record).
+  `solidColorEffectBlob` / `decodeSolidColorEffectBlob` are exported.
+- **XMEML generatoritem `fillcolor` carries through** `parse_interchange`
+  (Premiere Color Matte and Resolve's own export alike) as `color` on the BL
+  leg, and the bridge authors the coloured generator — so a turnover's
+  fade-to-white or colour matte conforms instead of turning black.
+
+### Measured (filed in api-limitations)
+
+- Resolve's FCP7 importer honours `fillcolor`: red and blue generators
+  rendered Y81 U90 V240 and Y41 U240 V110 (BT.601 limited-range exact) and
+  `EXPORT_FCP_7_XML` writes the colour back. Render-verified end to end from
+  an offline-authored `.drt`: a clip → white fade climbs 124 → 154 → 182 →
+  209 → 232 → 234 across its 24-frame window, the white plateau reads
+  234/128/128, and a custom (128, 64, 191) matte lands at Y100 U174 V147
+  against a BT.601 expectation of 99.8 / 174.3 / 147.0.
+
+## What's New in v2.167.0 — E109: flat AAF sound slots keep their lanes; AAF audio cross-fades render
+
+An Avid turnover carries dialog, music and effects as SEPARATE flat sound
+MobSlots. The AAF walker labelled every flat slot `A` (only `NestedScope`
+layers were numbered), so a dialog lane and a music bed collided on A1 and
+the bridge refused the whole turnover ("audio events overlap on audio track
+1 — one track cannot hold both"). The sound `Transition` between the dialog
+clips parsed fine; the lane collapse was the block.
+
+### Fixed
+
+- **Flat AAF slots number per media kind in slot order** (`A`, `A2`, `A3` …
+  / `V`, `V2` …). The first slot of a kind keeps the bare letter; `NestedScope`
+  layers keep their own layer numbering. Render-measured on 19.1.3.7: an AAF
+  with a dialog lane (−21 dBFS tone → 24f `MonoAudioDissolve` → −41 dBFS
+  tone) over a quiet music bed on its own slot conforms, imports, and renders
+  the cross-fade −26.0 → −29.3 → −32.5 → −37.5 → −41.6 dBFS across exactly its
+  window, with the second lane audibly present (−41.6 vs −47.1 for one lane).
+- **Channel legs still place once.** Resolve's own AAF export writes one slot
+  per audio channel with identical legs; the bridge's merge (and
+  `verify_roundtrip`'s dedupe) now key on source/range rather than the lane,
+  so channel legs of one clip merge while a different bed on its own lane
+  never does.
+
+## What's New in v2.166.0 — E108: XMEML audio cross-fades conform and render
+
+The XMEML walker only looked at `<transitionitem>`s on VIDEO tracks, so an
+audio cross-fade vanished at parse and never reached the bridge that
+authors them (OTIO carried its audio Transition all along). Every audio
+track also walked as `A`, collapsing multi-track audio onto one lane where
+OTIO and AAF number `A`, `A2`, `A3` …
+
+### Fixed
+
+- **XMEML audio-track transitionitems attach** to the incoming audio event
+  exactly as video's do (one shared attach pass), and the bridge authors the
+  cross-fade. Render-measured on 19.1.3.7 against a control timeline: a 24f
+  `Cross Fade (+3dB)` from a −21 dBFS tone to a −41 dBFS tone ramps
+  −27.1 → −30.6 → −34.2 → −40.2 → −47.1 dBFS across the window in 0.25 s
+  RMS steps where the control steps hard at the cut.
+- **XMEML audio tracks number like OTIO/AAF** (`A`, `A2`, …), so the
+  bridge places each lane on its own audio track instead of stacking
+  everything on A1.
+- **`media_pool.capture_media_template` saves the current project before
+  switching to its scratch project.** `CreateProject` replaces the current
+  project, and an unsaved one is simply gone afterwards — the restore cannot
+  `LoadProject` a name that existed only in memory (measured: a freshly
+  created project with two imported timelines vanished, and Resolve fell
+  back to a transient "Untitled Project"). A failed save refuses the capture.
+
+### Measured (filed in api-limitations)
+
+- `ProjectManager.CreateProject` while an UNSAVED project is current
+  discards that project without error.
+
+## What's New in v2.165.0 — E107: frame QC reads Resolve's own XML and samples clear of transitions
+
+The lineage store's `ingest_xml` was measured against a verbatim
+`EXPORT_FCP_7_XML` of a fade-in → clip → centered dissolve → clip → fade-out
+timeline (rendered and luma-verified: 18→123 over the fade-in, a blend over
+96–119, 230→21 over the fade-out). Every transition-adjacent cut landed at
+record `-1` with no oracle frame — the reference sampled at frame 0 read
+black and the conform side could not be sampled at all, so each read as a
+false yellow turnover. Two laws of Resolve's writer explain it.
+
+### Fixed
+
+- **`-1` clip edges resolve to junctions in the lineage ingest** (the E105
+  law the editorial parser already knew), and with a record-order cursor:
+  under three centered transitions two equal-length clips both carry
+  `-1/-1` edges, and the first junction pair that fits placed BOTH clips at
+  the same position — in the editorial parser too. Both parsers now walk
+  clips with a cursor; the verbatim export is a permanent fixture.
+- **Resolve writes no `pproTicksIn`.** The oracle insisted on Premiere ticks
+  and derived no source frame for any cut of a Resolve export. When ticks
+  are absent, `<in>` (record-aligned by the `-1` resolution) is the oracle
+  frame; the ingest reports `ticksAbsent`, `resolvedEdges`, `unresolvedEdges`.
+- **Frame QC samples clear of transition windows.** Each cut records the
+  windows its edges sit in (`cuts.transition`, plus `cuts.speed`; existing
+  sidecars migrate in place) and `qc` compares the first frame past the
+  incoming window and before the outgoing one, advancing the source frame
+  at the cut's speed (reverse walks backward). Measured on the render:
+  structure 0.982 at the dissolve junction → 0.999 clear of it; the result
+  carries `sample_note` saying where it looked, and a cut swallowed whole by
+  its windows samples its midpoint and says so.
+
+### Measured (filed in api-limitations)
+
+- `EXPORT_FCP_7_XML` writes no `pproTicksIn`/`pproTicksOut`, `-1` on every
+  transition-adjacent edge (junction), `center` alignment for every
+  centered-authored dissolve and fade, and Solid Color generatoritems for
+  black legs. A flat/untextured frame (a white card) is `UNREADABLE` to the
+  brightness-robust classifier — an honest review, not a false verdict.
+
+## What's New in v2.164.0 — E106: the changelist sees junctions
+
+`editorial.turnover_changelist` diffed clips and was blind to everything
+that happens *between* them. Measured on a faded, dissolved, retimed EDL
+pair: a 24→12-frame dissolve change reported nothing, both dropped fades
+read as "BL gone", and the zero-length CMX carrier line of a dissolve's
+outgoing side read as "B002 gone". The timing guards paired first-row-wins,
+so an identical cut with one A2 leg dropped flagged a FALSE flattened
+retime and never flagged the audio drop (`track === 'A'` missed `A2`).
+
+### Fixed
+
+- **The changelist diffs junctions.** `transition_added` /
+  `transition_dropped` / `transition_changed` entries name the outgoing and
+  incoming sources, classify fade in/out vs dissolve, and carry the span and
+  duration/type/pre-roll deltas — a dissolve reshaped from centered to
+  start-at-cut is a change even when both clips stayed put. Spans derive
+  exactly as the bridge places them (CMX start-at-cut, OTIO `in_offset`,
+  XMEML/PrProj `recStart`, AAF overlap start).
+- **Carrier lines and fade legs never read as sources.** Zero-length events
+  (CMX outgoing marker lines, the synthesized BL fade slugs) and the black
+  legs a transition references fold into the junction diff; the changelist
+  reports how many in `carriersFolded`. A cut diffed against itself is
+  silent on every axis.
+- **`timingGuards` pairs instance-to-instance.** Same track+source, closest
+  record position, consumed once — the pairing the changelist already used —
+  so a source cut twice at two speeds no longer cross-compares. Flags carry
+  `recIn`. Dropped-audio detection reads any `A`-track (`A`, `A2`, …), and a
+  lost fade or dissolve is now a timing lie (`transition_dropped`).
+
+### Added
+
+- `editorial.mjs` exports `transitionSpan(event)` and
+  `listTransitions(events)` — the junction model shared by the changelist
+  and the guards.
+
+## What's New in v2.163.0 — E105: QC through every export format
+
+One faded, dissolved, retimed conform exported from Resolve three ways — OTIO,
+FCP7 XML, and CMX EDL — and pushed through `editorial.verify_roundtrip`. All
+three now close `pass: true`; getting there measured four laws of Resolve's own
+writers and fixed the parsers to match.
+
+### Fixed
+
+- **Every FCP7-XML retime read as a FREEZE**: Resolve's timeremap effect
+  writes `speed` 50 followed by `variablespeed` 0, and a loose `/speed/`
+  parameter match let the second overwrite the first. Exact parameter
+  matching now, with the `reverse` flag read alongside.
+- **FCP7 `-1` clip edges** (transition-adjacent) are resolved to the
+  transition's junction — the span center for `center` alignment — with the
+  clip's `in` advanced by the overlap offset so source stays record-aligned;
+  `out - in` is the record duration even under a retime. Solid Color
+  `generatoritem`s walk as black legs, and fade transitions attach to the
+  picture rather than the black.
+- **CMX EDL exports name every file source reel `AX`** with the real names in
+  `* FROM/TO CLIP NAME` comments; `parseEDL` now applies them (TO = incoming,
+  FROM = outgoing of a dissolve pair), keeping specific reels intact.
+- **`timeline.export_timeline_checked` refuses unresolved export constants
+  loudly.** A made-up `EXPORT_CMX_3600` reached `Timeline.Export` as a string
+  and came back as a bare `success: false`; the real constant is `EXPORT_EDL`,
+  and the refusal now lists the vocabulary.
+
+### Added
+
+- `verify_roundtrip` reports `audioNotInExport` when the export carries no
+  audio at all (Resolve's EDL writer is video-only — measured) instead of
+  failing, mirroring `markersNotInExport`.
+
+### Measured (filed in api-limitations)
+
+- `EXPORT_EDL` is video-only, writes reel `AX` + clip-name comments, places
+  dissolve junctions at the CMX start-at-cut position, and writes the BL
+  fades its own importer drops.
+
+## What's New in v2.162.0 — freeze parity: Avid 0% motion effects are freezes
+
+### Fixed
+
+- **An Avid freeze frame silently read as a 100% clip.** A motion effect at
+  0% (`PARAM_SPEED_RATIO_U 0.0`, or a flat speed map at 0) fell into the AAF
+  walker's "no play rate recoverable" branch, and the freeze vanished. An
+  explicit zero now reports `speed: 0, freeze: true`, and the bridge authors
+  the real freeze — completing freeze parity across all five ingest formats
+  (EDL `M2 000.0`, OTIO `FreezeFrame`, XMEML `timeremap` 0, PrProj
+  `InPoint == OutPoint`, and now AAF).
+
+## What's New in v2.161.0 — OTIO freeze frames close the loop
+
+### Fixed
+
+- **OTIO `FreezeFrame` effects were silently lost at parse**: the reader only
+  looked at `time_scalar`, which FreezeFrame writers commonly omit, so a
+  turnover freeze read as a plain 100% clip. The schema itself now means
+  speed 0, and the bridge authors the real freeze `Sm2TimeMap`.
+
+### Added
+
+- The OTIO writer emits `FreezeFrame.1` (time_scalar 0) for zero-speed
+  events — OTIO's own schema for it, readable by both conventions.
+
+### Measured
+
+- **Resolve's `EXPORT_OTIO` writes an authored freeze back as
+  `FreezeFrame.1` with `time_scalar: 0`** — the freeze round-trips
+  losslessly, and `verify_roundtrip` now catches a freeze flattened to 100%
+  as retime drift.
+
+## What's New in v2.160.0 — write-side span fidelity; the flat DRT target stops lying about black
+
+### Fixed
+
+- **`eventsToOTIO` forced every transition to centered**, so a start-at-cut
+  fade-in re-written to OTIO demanded incoming pre-roll the source never
+  needed — and the round-trip dropped the fade as handle starvation. The
+  writer now carries the source event's actual alignment (start-at-cut,
+  `inOffset`, or derived from `recStart`).
+- **The flat DRT target omitted nothing and authored a bogus `BL` offline
+  clip** for black legs. BL legs are now omitted — an empty track region
+  renders the same black without the media-offline lie — and the `drt`
+  result reports `blackLegsOmitted`.
+
+## What's New in v2.159.0 — the EDL writer learns transitions
+
+### Fixed
+
+- **`convert_to_interchange`'s EDL target silently dropped every
+  transition** (the OTIO target carried them since day one). The writer now
+  emits the CMX pairs — a zero-length outgoing marker line plus the `D` line
+  with its duration — with the `BL` reel on the black side of fades, and a
+  zero-length fade-out carrier receives the fade's record extent per the
+  CMX convention. Round-trip proven: written EDLs parse back to fully
+  authored specs (dissolves, fade-in, fade-out; nothing dropped). Reel
+  names are basename-stripped before sanitizing, so path-style sources
+  produce clean reels.
+
+## What's New in v2.158.0 — E100: the kitchen-sink certification
+
+### Verified (one turnover, everything at once)
+
+- A single OTIO turnover carrying a fade-in, a V2 stack, a centered
+  dissolve, a 50% retime, a retime-adjacent fade-out, two audio legs, two
+  track markers, and a clip marker conformed, imported, and **rendered
+  correct in all 32 measured windows** — including the previously unmeasured
+  interactions (the boundary shift extending a retimed cut into its
+  fade-out; an upper-track stack compositing over the fade region). The
+  round-trip QC closed `pass: true` against Resolve's own re-export, and
+  the fixture is now a permanent offline test.
+
+### Fixed
+
+- `verify_roundtrip` compares sources by **basename**: an OTIO turnover
+  names sources by `target_url` path while Resolve's re-export uses the file
+  basename — the same file read as six spurious source mismatches.
+
+### Measured
+
+- **Fairlight level law**: the template's A1 strip plays at source level
+  while the added mono strips (A2–A16) play 3 dB down per channel (center
+  pan law). Both render; it is mixer semantics, not a placement failure.
+
+## What's New in v2.157.0 — the conform manifest learns fades too
+
+### Fixed
+
+- **`editorial.conform_manifest` failed every conformable fade EDL**: BL
+  legs failed `source_resolved` ("no resolved path") and the fade-in failed
+  `handles` — but BL is the EDL's built-in black (it conforms as a Solid
+  Color generator, no source needed), and a fade from black needs no handle
+  media at all (the boundary shift trims the picture head inside its own
+  material). A fade-out's real requirement — outgoing tail on the PICTURE
+  source — now lands on the right source: a starved tail still fails,
+  named precisely.
+
+## What's New in v2.156.1 — docs catch up with the fade + QC arc
+
+### Documentation
+
+- `docs/guides/native-drt-authoring.md` learns the v2.148–2.156 arc: the
+  A1–A16 audio ceiling, the fade capability row and the fade/AAF-overlap
+  laws, the `blackLegs` ledger field, and the full `verify_roundtrip`
+  surface (markers, fades, retimes, audio) in the delivery checklist.
+- The Native .drt Authoring and Headless Edit Loop guides are now linked
+  from both READMEs' guide tables — both were orphaned.
+
+## What's New in v2.156.0 — the QC loop learns audio; the verify surface is complete
+
+### Added
+
+- **`editorial.verify_roundtrip` is audio-aware.** Declared audio events
+  compare pairwise through the same machinery as video — record, source,
+  retime, and fade-window excusal — with audio mismatches tagged
+  `trackType: 'audio'`, AAF channel legs deduped, and BL/silence legs merged
+  out. A video-only turnover whose re-export carries audio (the A1
+  convenience mirror this bridge authors) reports `audio.compared: false`
+  informationally instead of failing. Live loop verified: an explicit A2 leg
+  round-trips through `EXPORT_OTIO` at exact geometry.
+- With markers (v2.147), fades (v2.153), retimes (v2.154), and now audio,
+  the round-trip QC surface covers every structure the conform bridge
+  authors.
+
+## What's New in v2.155.0 — Premiere transitions land properly: centered spans and fades
+
+### Fixed
+
+- **Every centered Premiere transition was silently dropped**: the .prproj
+  reader attached transitions only to clips starting exactly at the span
+  start — the CMX start-at-cut shape — so a transition centered on its cut
+  (Premiere's default) matched nothing and vanished. The incoming clip is
+  now found anywhere inside the span, and `recStart` carries Premiere's
+  explicit record span to the bridge so the editor's actual alignment is
+  reproduced.
+
+### Added
+
+- **.prproj fades**: an edge span with a missing neighbor synthesizes BL
+  legs through the same black machinery as EDL/OTIO/XMEML/AAF — all five
+  ingest formats now author fades. Audio transition candidates honor
+  `recStart` too. The emitted spec shapes are the render-verified classes
+  from v2.150–152.
+
+## What's New in v2.154.0 — the QC loop learns retimes
+
+### Added
+
+- **`editorial.verify_roundtrip` is retime-aware.** A conform that lost its
+  retime is a wrong timeline that record/source geometry alone cannot catch
+  — the record extent is unchanged, only the playback rate. Speed and
+  reverse now compare pairwise (`kind: 'retime'` on drift).
+
+### Measured (good news, for once)
+
+- **`EXPORT_OTIO` carries an authored `Sm2TimeMap` back as
+  `LinearTimeWarp`**: a 50% M2 retime conformed offline reads back out of
+  Resolve's OTIO export as `time_scalar: 0.5`. The retime loop closes
+  losslessly through OTIO — live loop verified both ways (pass on the true
+  export, `retime` drift on a speed-stripped one).
+
+## What's New in v2.153.0 — the QC loop learns fades
+
+### Added
+
+- **`editorial.verify_roundtrip` is fade-aware.** A correct fade conform
+  used to fail QC three ways: the re-export's Solid Color legs mismatched
+  the EDL's BL reels, the leg counts differed, and the fade boundary-shift
+  moved picture edges by half the transition. Now BL/Solid-Color legs
+  canonicalize to BLACK and drop out of the pairwise compare (counted in
+  `blackSegments`), picture edges inside an input junction's fade window are
+  excused into `fadeReshapedBoundaries` — reported, never silently absorbed
+  — and the per-source TC offset is fitted net of the record shift so a
+  source cut both plain and faded doesn't read as source-frames drift.
+  Live loop verified: EDL fades → conform → import → OTIO re-export →
+  `pass: true` with the reshape named. Beyond-window shifts and shifts at
+  junction-free edges still fail as real record drift.
+
+## What's New in v2.152.0 — AAF dissolves conform at last, and AAF fades join the family
+
+### Fixed
+
+- **No AAF dissolve could ever conform through `assemble_from_interchange`**:
+  an AAF Transition consumes record time, so the walker (correctly) emits the
+  incoming clip overlapping the outgoing — and the bridge's overlap gate
+  threw on exactly that shape. A reconciliation pre-pass now trims the
+  outgoing's tail to the overlap start; the boundary shift then re-extends it
+  to the cut point, which is the AAF notional-cut (`CutPoint`) semantics
+  exactly. Render-verified: the dissolve blends through the 181.8 midpoint
+  fingerprint.
+
+### Added
+
+- **AAF fades**: the walker synthesizes BL pseudo-events at filler-adjacent
+  and sequence-edge Transitions, completing fade parity across all four
+  formats (EDL v2.150, OTIO/XMEML v2.151, AAF now). The head-transition
+  "clamp" case is reinterpreted as what it is — a fade-in from black.
+  Full triple render-verified: fade-in 18→123, dissolve-to-white through the
+  midpoint, fade-out 230→21.
+- A pyaaf2-authored AAF fixture test exercises the real walker end to end
+  (no stubs), skipped only where pyaaf2 is unavailable.
+
+## What's New in v2.151.0 — fade parity: OTIO and XMEML fades author too
+
+### Added
+
+- **OTIO and XMEML fades route through the black machinery** shipped for EDL
+  BL legs in v2.150.0. OTIO: a Transition adjacent to a Gap (or the track
+  edge) is a fade — gap-then-Transition-then-Clip fades in, Transition-then-
+  Gap (or Transition as the last child) fades out. XMEML: an edge
+  transitionitem whose span has no outgoing clip fades in, no incoming clip
+  fades out. All synthesize BL pseudo-events; the bridge materializes a
+  zero-length black leg to cover its side of the span whenever the boundary
+  shift alone won't grow it (empty track renders black, so the growth is
+  render-neutral). Live OTIO render: fade-in luma ramps 18→123, the centered
+  fade-out 124→18 — identical geometry from all three parsers.
+
+## What's New in v2.150.0 — fades conform: BL legs author, and Resolve's own EDL importer drops them
+
+### Added
+
+- **EDL fades author end-to-end** in `drt.assemble_from_interchange`: BL
+  (black) legs become Solid Color generator elements and the fades real
+  clip-to-generator dissolves. A CMX fade-in's zero-length BL slug grows
+  through the boundary-shift machinery (single-sided transitions refuse to
+  import — measured); the picture trims its head with source staying
+  record-aligned. Render-proven: luma ramps 18→123 across a 24-frame
+  fade-in and 123→16 across the fade-out, with the black tail holding.
+  Audio BL fades (to silence) drop with a stated reason — there is no
+  silence source to cross-fade against.
+- Generator elements now insert into the track in **chronological item
+  order** (junction detection reads listed adjacency), and an edge-aligned
+  span whose leg is shorter than its boundary shift drops with a reason
+  instead of authoring a broken geometry.
+
+### Measured (new Resolve bug, filed in api-limitations)
+
+- **Resolve's own EDL importer silently drops BL dissolves**: the fade-in
+  vanishes wholesale (frame 0 renders full-bright) and a fade-out leaves a
+  hard cut into the Solid Color generator it creates for the BL slug. A
+  single-sided transition element refuses to import entirely.
+
+## What's New in v2.149.0 — subtitle render truth: ExportSubtitle lies on 19.x
+
+### Measured (new Resolve bug, filed in api-limitations)
+
+- **`SetRenderSettings` subtitle keys are accepted-and-inert on 19.x**: with
+  authored subtitle cues readback-verified and the track enabled,
+  `ExportSubtitle: true` + every `SubtitleFormat` mode (`BurnIn`,
+  `SeparateFile`, `EmbeddedCaptions`) returns True — and the renders carry no
+  burned-in pixels, no sidecar file, and no caption stream. The keys are
+  documented in the Resolve 21 API reference. Quirk: `ExportSubtitle` alone
+  returns False; the pair returns True.
+
+### Added
+
+- **`render.set_settings` warns on pre-21 hosts** when the subtitle-delivery
+  keys are set, naming the measured inertness and the verification steps —
+  the accepted-then-ignored warning pattern that already covers
+  `AddFrameHandles` under `UseFullExtents`.
+
+## What's New in v2.148.0 — the audio ceiling doubles: A1–A16
+
+### Changed
+
+- **Offline audio placement now reaches A16** (was A8). The r19 media
+  template was re-captured live with 16 mono audio tracks — valid Fairlight
+  strips included, because a cloned track without a strip renders silent
+  (the measured strip law). A9 and A16 placements render-verified on
+  Studio 19.1.3.7 at the same -24.1 dB mono-strip level as A1, with the
+  gaps digitally silent at the sample level. `drt.assemble` cuts refuse
+  at A17 with the re-capture guidance.
+
+## What's New in v2.147.0 — the round-trip QC loop learns markers
+
+### Added
+
+- **`editorial.verify_roundtrip` is marker-aware**: timeline markers compare
+  through the loop (min-anchored frames within tolerance, names when both
+  sides carry them). A re-export with NO markers while the turnover has them
+  raises the `markersNotInExport` honesty flag without failing the pass — a
+  missing exporter capability is not a conform drift.
+
+### Measured (new Resolve bug, filed in api-limitations)
+
+- **`EXPORT_OTIO` drops timeline markers wholesale**: two markers readable
+  through the marker API, zero in the exported .otio — while Resolve's own
+  OTIO *importer* reads Marker objects fine. Marker-fidelity checks must go
+  through the marker API, never an OTIO re-export.
+
+## What's New in v2.146.0 — bins, and the folder registry law
+
+### Added
+
+- **`assemble_project` `timelines[].folder`** — place reels in named Master
+  bins (entries sharing a name share the bin; media stays in Master).
+  Live-proven: a Reels bin holding both timeline clips, both timelines
+  materialized, and a binned reel rendering its exact content.
+
+### Measured (the folder registry law)
+
+- **The parent folder's FieldsBlob is the subfolder registry.** Media and
+  timeline children are discovered by scan; subfolders are NOT — an
+  unregistered bin directory imports as nothing and silently takes its
+  clips' timelines with it. The registry's inner format is byte-verified
+  against the template harvest (a keyed child-id dict in a protobuf wrapper,
+  zstd-framed). Natively created Resolve projects carry an EMPTY folder blob
+  when binless — the assembly templates now match that convention
+  (render-verified as a no-op).
+
+## What's New in v2.145.2 — launcher metadata before dependencies
+
+### Fixed
+
+- **`davinci-resolve-advanced-mcp --help`/`--version` now work in fresh
+  source checkouts** (before `npm install`) — adapted from
+  [PR #178](https://github.com/samuelgursky/davinci-resolve-mcp/pull/178) by
+  @Rohitkanithi: metadata flags are handled before the stdio server import
+  (and before the Node-floor refusal — help is harmless on any Node), where
+  previously even `--help` died with `ERR_MODULE_NOT_FOUND`.
+- **The installer banner's tool counts were stale** (32/329 vs the real
+  36/353) — fixed and wired into the `test_doc_tool_counts` drift guard so
+  the banner can never drift independently again.
 
 ## What's New in v2.145.1 — bridge config override, honored end to end
 

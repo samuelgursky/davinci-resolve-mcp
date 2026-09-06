@@ -45,8 +45,10 @@ def _has_encoding(call: ast.Call) -> bool:
 
 
 def _is_pil_image_open(func: ast.Attribute) -> bool:
+    # Binary-container `.open` APIs, not text files: PIL's Image.open and
+    # pyaaf2's aaf2.open (an AAF is a compound binary document).
     value = func.value
-    return isinstance(value, ast.Name) and value.id == "Image"
+    return isinstance(value, ast.Name) and value.id in ("Image", "aaf2")
 
 
 def unencoded_text_calls(path: Path, check_attr_open: bool):

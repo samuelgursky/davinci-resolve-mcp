@@ -2,7 +2,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-[![Version](https://img.shields.io/badge/version-2.146.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
+[![Version](https://img.shields.io/badge/version-2.209.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![npm](https://img.shields.io/npm/v/davinci-resolve-mcp.svg?label=npm&color=CB3837)](https://www.npmjs.com/package/davinci-resolve-mcp)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](docs/reference/api-coverage.md)
 [![Tools](https://img.shields.io/badge/MCP%20Tools-36%20(353%20full)-blue.svg)](#server-modes)
@@ -79,6 +79,20 @@ Use `launchctl setenv`, not `export` — Resolve is launched from the Dock and
 never sees your shell's environment. Restart Resolve afterwards. A Lua canary is
 installed alongside so you can tell "Python not detected" apart from a wrong
 folder.
+
+Two things that bite (#182). The prefix must contain **both**
+`lib/libpython3.X.dylib` and `bin/python3` under that exact **unversioned**
+name — Homebrew's framework builds often ship only `bin/python3.13`, which is
+half a Python as far as Resolve is concerned, and the installer's preflight now
+says so instead of reporting a usable prefix. And `launchctl setenv` **does not
+survive a reboot**; if scripts stop listing weeks later with no error, that is
+why. For something persistent, put an interpreter where Resolve already looks
+(this one needs `sudo`, and check that `/usr/local/bin` does not precede your
+normal Python on `PATH`):
+
+```bash
+sudo ln -s "$(command -v python3)" /usr/local/bin/python3
+```
 
 Validated on free 21.0.3.7 and Studio 19.1.3.7, both macOS. The Windows paths
 added in v2.70.1 (issue #106) shipped unverified; reports on free 21.0.1.11
@@ -160,6 +174,12 @@ Add it alongside the live server (both ship in one `npm install`):
 need user-installed tools (ffmpeg for `audio`, `sharp`/`better-sqlite3` for some paths) — call the
 `capabilities` tool for live status and install hints.
 
+Unlike the Python server, this one has Node dependencies. `npx davinci-resolve-mcp setup` installs them
+into the managed install (`npm install --omit=dev --omit=optional` under `resolve-advanced/`) and only
+then registers the bin. If that install could not run — offline, or npm unavailable — setup registers
+an `npx` command for the advanced server instead, so the entry it writes always boots. To repair an
+existing install without re-running setup: `npx davinci-resolve-mcp sync`.
+
 ### Bradford Post Assistant — managed application (closed beta)
 
 The maintainers also build **Bradford Post Assistant**, a desktop application on top of this
@@ -224,6 +244,67 @@ The open-source servers are complete and fully functional on their own.
 | Render and deliver | Format/codec matrix probing, render settings validation, queued job lifecycle checks, guarded Quick Export |
 | Extension authoring | Fuse, DCTL, ACES DCTL, and Resolve-page Lua/Python script lifecycle helpers with safe MCP-marked install/remove |
 | Craft guidance | The bundled editorial, colour, audio, and workflow guidance served as prose over MCP — indexed, searchable, and readable by any client, not just ones with this repository on disk |
+
+### Operation envelope
+
+Every compound tool return carries an `_operation` block beside its payload, so
+an agent reads one shape instead of a different key per tool: `status`
+(`success` / `partial` / `blocked` / `failed`), `verification` (with
+`contradiction` kept distinct — Resolve reported success and the readback
+disagreed), `changes` (the semantic delta), `warnings`, and an `execution_id`.
+
+Two absences are meaningful and deliberate. `verification.status: "unverified"`
+means *no evidence was reported*, not "checked and clean". A missing `changes`
+means the action did not report a delta, not that nothing changed — an empty
+`{}` there would be a confident, wrong answer about an edit that simply never
+declared one.
+
+The envelope is namespaced rather than merged into the top level because
+`status`, `operation`, `warnings`, `result` and `changes` are all already domain
+keys here; flattening would rewrite a background job's `status: "done"` and a
+confirm gate's `status: "confirmation_required"`. `setup(action="set_defaults",
+params={"result_envelope": "pure" | "legacy"})` changes the shape, per call via
+`params={"envelope": ...}`, per process via `RESOLVE_MCP_RESULT_ENVELOPE`.
+
+### Agent execution traces ("Why did the editor do this?")
+
+Multi-step AI operations correlate across tool calls into unified execution
+traces. Each trace aggregates tool durations (`duration_ms`), call counts, cumulative
+semantic deltas (`items_deleted`, `items_added`), and readback verifications.
+Agents and editors can inspect workflows via `resolve_control`:
+`get_execution_trace(execution_id?)`, `list_recent_executions()`, or open a
+scoped execution with `begin_execution(request="...")` / `end_execution()`.
+`export_execution_report(execution_id?, format="markdown"|"json")` writes a
+reviewable audit artifact with the same summary, defaulting to
+`logs/execution-reports/<execution_id>.md`. `path` writes it anywhere you want
+it instead — alongside a conform in a dated TransferFiles folder, say — and
+creates the directories to get there, so check the path before you send it.
+An existing file is never replaced without `overwrite: true`.
+`inspect_operation(tool?, target_action?, target_params?)` evaluates pre-flight
+risk level (`low`, `medium`, `high`, `critical`), destructive potential, and blast
+radius (`item`, `track`, `timeline`, `project`, `system`) before taking action, while
+`list_lifecycle_hooks()` inspects active execution interceptors.
+
+It is a heuristic over action names, not a simulation — it never touches the
+project and does not validate your parameters, so `recognised: false` means the
+levels are defaults rather than a finding, and `snapshot_available: null` means
+rollback availability was not determined rather than absent. Every shipped hook
+observes; none replaces a tool's result, so `dry_run` always reaches the real
+handler and nothing synthesises a preview for an action that has none.
+
+A report for a run where nothing was verified says **"not established — no
+checks recorded"**, not "passed". Absence of evidence is a question still open,
+and an audit document is the last place to let a reader read it as an all-clear.
+
+Traces live in a 100-entry in-memory ring and are appended to
+`logs/execution-traces.jsonl` beside `server.log` — `RESOLVE_MCP_TRACE_FILE`
+moves it. `list_recent_executions` reports that path and whether it is
+writable, so "the log is empty" and "nothing is being written" are
+distinguishable without reading the source. What is recorded is tool name,
+action, timing, status, semantic deltas and verification — no parameters and no
+file paths. The one free-text field is the `request` you pass to
+`begin_execution`, so treat it the way you would a commit message on a client
+project.
 
 ## Optional Extras
 
@@ -303,6 +384,8 @@ For method-by-method status, see [API Coverage and Test Results](docs/reference/
 | [Multicam Setup Helper Guide](docs/guides/multicam-setup-guide.md) | Stacked timeline prep, helper/API boundary, and Resolve UI conversion steps |
 | [Editorial Decision Guide](docs/guides/editorial-decision-guide.md) | Project-owned editorial craft guidance for analysis and timeline decisions |
 | [Conforming an Avid AAF](docs/guides/conforming-an-avid-aaf.md) | Why all three Resolve-native routes fail on a consolidated turnover, and which one is dangerous |
+| [Native .drt Authoring](docs/guides/native-drt-authoring.md) | Offline template-spliced timeline authoring: cuts, retimes, transitions, fades, markers, compounds — and the measured laws behind them |
+| [Headless Edit Loop](docs/guides/headless-edit-loop.md) | Driving Resolve from the command line: which interchange formats relink and round-trip, measured in GUI and -nogui |
 | [Color Decision Guide](docs/guides/color-decision-guide.md) | Project-owned color correction guidance and Resolve color API boundaries |
 | [Contributing and Project Layout](docs/contributing.md) | Contribution workflow, platform support, security notes, repository structure |
 | [Security Policy](SECURITY.md) | Local stdio trust boundary, tool metadata, confirmation guidance, reporting |

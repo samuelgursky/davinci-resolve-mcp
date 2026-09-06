@@ -22,6 +22,7 @@ from src.server import (
     _media_analysis_effective_preferences,
     _media_analysis_merge_metadata_field,
     _media_analysis_marker_candidates_from_report,
+    _media_analysis_plan_project_root,
     _media_analysis_metadata_writeback_enabled,
     _media_analysis_missing_capabilities_response,
     _media_analysis_publish_confirmed,
@@ -4198,7 +4199,19 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
                     self.assertNotIn("transcription", missing)
 
     def _run_single_clip_batch_with_transcript(self, tmp, payload):
-        """Run a one-clip batch whose _transcribe returns `payload`."""
+        """Run a one-clip batch whose _transcribe returns `payload`.
+
+        These tests mock what `_transcribe` *returns*, but the job still has to
+        be created first, and create_batch_job refuses a job whose enabled
+        transcription has no backend behind it
+        (`missing_required_capabilities`). So a machine with no Whisper backend
+        cannot reach the behaviour under test — including, awkwardly, the case
+        named for an unavailable backend, which is about how a *result* is
+        counted rather than how the job is gated.
+        """
+        if not _media_analysis_module.detect_capabilities().get(
+                "transcription", {}).get("available"):
+            self.skipTest("no local transcription backend installed")
         source_dir = os.path.join(tmp, "source")
         os.makedirs(source_dir)
         source = os.path.join(source_dir, "job_transcript.mp4")
@@ -4221,7 +4234,10 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
             },
             name="Transcript batch",
         )
-        self.assertTrue(created["success"])
+        # Carry the payload into the message: a bare "False is not true" from a
+        # helper four call-frames deep says nothing about which precondition
+        # failed, and this one only runs where ffmpeg exists.
+        self.assertTrue(created["success"], created)
         job = created["job"]
         with unittest.mock.patch.object(
             _media_analysis_module, "_transcribe", return_value=payload
@@ -5332,6 +5348,53 @@ class LoudnessParsingTests(unittest.TestCase):
                 mine = _media_analysis_module._parse_loudness(sample)
                 for key in ("integrated_lufs", "loudness_range_lu", "true_peak_dbtp"):
                     self.assertEqual(mine[key], theirs[key], f"{name}/{key}")
+
+
+
+class MediaAnalysisPlanProjectRootTests(unittest.TestCase):
+    """plan["output_root"] is a mapping, not a path.
+
+    resolve_output_root() returns {"success", "base_root", "project_root", ...}.
+    str() on that mapping produces a dict repr — a non-empty string, so it
+    survives the `if wants_runner and job_id and project_root:` guard and is
+    handed to start_batch_job_runner as a directory name. The runner finds no
+    job store under it and reports {"started": False, "reason": "job_not_found"},
+    which sends the caller off to debug a job that exists and is fine.
+    """
+
+    def test_extracts_project_root_from_the_mapping(self):
+        created = {
+            "plan": {
+                "output_root": {
+                    "success": True,
+                    "base_root": "/analysis",
+                    "project_root": "/analysis/My_Project_abc123",
+                    "project_directory": "My_Project_abc123",
+                }
+            }
+        }
+        self.assertEqual(
+            _media_analysis_plan_project_root(created),
+            "/analysis/My_Project_abc123",
+        )
+
+    def test_does_not_return_a_dict_repr(self):
+        created = {"plan": {"output_root": {"project_root": "/analysis/P"}}}
+        root = _media_analysis_plan_project_root(created)
+        self.assertNotIn("{", root)
+        self.assertNotIn("project_root", root)
+
+    def test_accepts_a_plain_string_output_root(self):
+        created = {"plan": {"output_root": "/analysis/P"}}
+        self.assertEqual(_media_analysis_plan_project_root(created), "/analysis/P")
+
+    def test_missing_or_empty_yields_empty_string(self):
+        # Empty must stay falsy: it is what makes the runner guard decline
+        # instead of starting against a bogus path.
+        for created in ({}, {"plan": {}}, {"plan": {"output_root": {}}},
+                        {"plan": {"output_root": None}}):
+            self.assertEqual(_media_analysis_plan_project_root(created), "", created)
+
 
 
 if __name__ == "__main__":

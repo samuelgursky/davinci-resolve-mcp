@@ -233,5 +233,32 @@ class RenderSetSettingsWarningTest(unittest.TestCase):
                          {"UseFullExtents": False, "AddFrameHandles": 8, "DataBurnIn": "None"})
 
 
+class SubtitleRenderKeysInertOn19Test(unittest.TestCase):
+    """ExportSubtitle/SubtitleFormat: accepted-and-inert on 19.x (E90).
+
+    Measured on Studio 19.1.3.7: SetRenderSettings returns True for all three
+    SubtitleFormat modes and the renders carry no burn-in, no sidecar, and no
+    embedded caption track. The warning is version-gated so a 21 host (where
+    the keys are documented) stays quiet.
+    """
+
+    def test_pre21_host_warns_on_subtitle_keys(self):
+        warnings = compound._render_settings_warnings(
+            {"ExportSubtitle": True, "SubtitleFormat": "BurnIn"}, version_major=19)
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("INERT on this Resolve generation", warnings[0])
+
+    def test_21_host_and_unknown_version_stay_quiet(self):
+        for major in (21, None):
+            warnings = compound._render_settings_warnings(
+                {"ExportSubtitle": True, "SubtitleFormat": "SeparateFile"},
+                version_major=major)
+            self.assertEqual(warnings, [], f"version_major={major}")
+
+    def test_subtitle_free_settings_never_trip_the_gate(self):
+        self.assertEqual(
+            compound._render_settings_warnings({"ExportVideo": True}, version_major=19), [])
+
+
 if __name__ == "__main__":
     unittest.main()

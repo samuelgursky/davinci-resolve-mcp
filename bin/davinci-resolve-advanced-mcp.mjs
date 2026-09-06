@@ -11,7 +11,35 @@
  */
 
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import fs from 'node:fs';
 import path from 'node:path';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const packageRoot = path.resolve(__dirname, '..');
+const packageJson = JSON.parse(fs.readFileSync(path.join(packageRoot, 'package.json'), 'utf8'));
+const version = packageJson.version || '0.0.0-dev';
+
+function usage() {
+  return `DaVinci Resolve Advanced MCP ${version}
+
+Usage:
+  davinci-resolve-advanced-mcp
+  davinci-resolve-advanced-mcp --version
+  davinci-resolve-advanced-mcp --help
+
+Starts the offline DaVinci Resolve advanced MCP server over stdio.
+`;
+}
+
+const command = process.argv[2];
+if (command === '--help' || command === '-h' || command === 'help') {
+  process.stdout.write(usage());
+  process.exit(0);
+}
+if (command === '--version' || command === '-v' || command === 'version') {
+  process.stdout.write(`${version}\n`);
+  process.exit(0);
+}
 
 // Node floor (package.json engines: >=20.9), enforced at STARTUP rather than
 // discovered per-feature: under an old Node the pure-JS tools limp along
@@ -34,8 +62,55 @@ if (major < 20 || (major === 20 && minor < 9)) {
   process.exit(1);
 }
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const serverEntry = path.resolve(__dirname, '..', 'resolve-advanced', 'server', 'index.mjs');
+const advancedRoot = path.resolve(packageRoot, 'resolve-advanced');
+const serverEntry = path.join(advancedRoot, 'server', 'index.mjs');
+
+// Preflight, for the same reason as the Node floor above: a managed install
+// that never received resolve-advanced/ (or its deps) otherwise dies with a
+// bare ERR_MODULE_NOT_FOUND before the MCP handshake, and the client reports
+// only "subprocess closed stdout before responding" — a stack trace with no
+// fix in it. Issue #179. Say what is missing and how to repair it.
+function missingRuntimePieces() {
+  if (!fs.existsSync(serverEntry)) {
+    return { what: `the advanced server tree (${serverEntry} is missing)` };
+  }
+  let required = [];
+  try {
+    const manifest = JSON.parse(fs.readFileSync(path.join(advancedRoot, 'package.json'), 'utf8'));
+    required = Object.keys(manifest.dependencies || {});
+  } catch {
+    return { what: `resolve-advanced/package.json (cannot tell which deps are required)` };
+  }
+  const modulesDir = path.join(advancedRoot, 'node_modules');
+  const missing = required.filter(
+    (dep) => !fs.existsSync(path.join(modulesDir, ...dep.split('/'))),
+  );
+  // Deps may also be hoisted above the package (an npm/npx install puts them in
+  // a parent node_modules), so an empty local node_modules is not conclusive —
+  // only report deps the resolver genuinely cannot see.
+  const unresolvable = missing.filter((dep) => {
+    try {
+      import.meta.resolve(dep);
+      return false;
+    } catch {
+      return true;
+    }
+  });
+  return unresolvable.length ? { what: `dependencies: ${unresolvable.join(', ')}` } : null;
+}
+
+const gap = missingRuntimePieces();
+if (gap) {
+  process.stderr.write(
+    `[davinci-resolve-advanced-mcp] cannot start: ${gap.what}.\n` +
+    `This install is at ${packageRoot}.\n` +
+    `Fix: run \`npx davinci-resolve-mcp setup\` to repair the managed install ` +
+    `(it syncs resolve-advanced/ and installs its Node dependencies), or run the ` +
+    `server straight from the package with ` +
+    `\`npx -y --package davinci-resolve-mcp davinci-resolve-advanced-mcp\`.\n`,
+  );
+  process.exit(1);
+}
 
 const { startServer } = await import(pathToFileURL(serverEntry).href);
 await startServer();

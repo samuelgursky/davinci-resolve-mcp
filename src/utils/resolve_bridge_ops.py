@@ -174,13 +174,22 @@ class ResolveOperations:
     #: loses a handle gets a clear `stale_handle` error and can re-fetch.
     MAX_HANDLES = 4096
 
+    #: Elements carried out of one encoded return value. A timeline-scale
+    #: enumeration has to fit: the old 500 silently halved an 864-item
+    #: `AppendToTimeline` return, and the caller counted the 500 it got as the
+    #: whole truth (a 432+432 variant read back as 250+250, issue: silence-ripple
+    #: audio_accounting). Whatever the ceiling is, exceeding it is now REPORTED
+    #: — see `_encode` — because a short list that looks complete is the failure
+    #: mode, not the bound itself.
+    DEFAULT_MAX_ITEMS = 2000
+
     def __init__(
         self,
         resolve: Any,
         *,
         media_roots: List[str],
         output_roots: List[str],
-        max_items: int = 500,
+        max_items: int = DEFAULT_MAX_ITEMS,
         lifecycle: Optional[Callable[[str], Dict[str, Any]]] = None,
     ) -> None:
         if resolve is None:
@@ -191,7 +200,16 @@ class ResolveOperations:
         # pretending to stop something they have no handle on.
         self._lifecycle = lifecycle
         self.policy = PathPolicy(media_roots, output_roots)
-        self.max_items = max(1, min(int(max_items), 5000))
+        # Capped at MAX_HANDLES, not at some larger round number: every live
+        # object in an encoded list mints a handle, so a list longer than the
+        # table evicts its own earliest entries before the client can use them
+        # and hands back handles that are already `stale_handle`. A ceiling
+        # above the table would trade a short list for a poisoned one.
+        self.max_items = max(1, min(int(max_items), self.MAX_HANDLES))
+        #: Set by `_encode` when a return value did not fit, read by the ops
+        #: that encode. Not a counter across calls — it answers "was THIS reply
+        #: complete", which is the only question a caller can act on.
+        self._encode_truncation: List[Dict[str, Any]] = []
         self._routes: Dict[str, Callable[[Dict[str, Any]], Any]] = {
             name: getattr(self, f"op_{name}") for name in self.OPERATIONS
         }
@@ -507,20 +525,67 @@ class ResolveOperations:
         Every object produced by one call carries the same shape, including the
         elements of a returned list — a track's timeline items are homogeneous,
         which is exactly the case where sharing a cached method set pays.
+
+        **Dropping elements is recorded, never silent.** A container longer than
+        `max_items` used to come back shortened with nothing anywhere saying so,
+        and a short list is indistinguishable from a genuinely short result: an
+        864-clipInfo `AppendToTimeline` returned 500 items, the caller counted
+        them, and a variant holding 432 video + 432 audio was reported to the
+        operator as 250 + 250 — which reads exactly like 182 ranges failing to
+        land. The bound itself is legitimate (see `max_items`); hiding it is
+        not, so every drop is reported alongside the value.
         """
         if value is None or isinstance(value, (bool, int, float, str)):
             return value
         if depth > 6:
             return str(value)
         if isinstance(value, (list, tuple)):
-            return [self._encode(v, depth + 1, shape) for v in list(value)[: self.max_items]]
+            items = list(value)
+            self._note_truncation(len(items), "list", depth, shape)
+            return [self._encode(v, depth + 1, shape) for v in items[: self.max_items]]
         if isinstance(value, dict):
-            return {str(k): self._encode(v, depth + 1, shape) for k, v in list(value.items())[: self.max_items]}
+            pairs = list(value.items())
+            self._note_truncation(len(pairs), "dict", depth, shape)
+            return {str(k): self._encode(v, depth + 1, shape) for k, v in pairs[: self.max_items]}
         return {
             "__handle__": self._mint(value, shape),
             "__type__": type(value).__name__,
             "__shape__": shape,
         }
+
+    def _note_truncation(self, total: int, kind: str, depth: int, shape: str) -> None:
+        if total <= self.max_items:
+            return
+        self._encode_truncation.append({
+            "shape": shape, "kind": kind, "depth": depth,
+            "returned": self.max_items, "total": total,
+            "dropped": total - self.max_items,
+        })
+
+    def _encoded(self, value: Any, shape: str) -> Dict[str, Any]:
+        """Encode one return value into a reply, carrying any truncation with it.
+
+        The `truncated` block is the whole point: a caller that reads `value` as
+        a complete answer is wrong exactly when this key is present, and it
+        cannot know that from the value alone.
+        """
+        self._encode_truncation = []
+        encoded = self._encode(value, shape=shape)
+        reply: Dict[str, Any] = {"value": encoded}
+        if self._encode_truncation:
+            dropped = sum(row["dropped"] for row in self._encode_truncation)
+            reply["truncated"] = {
+                "dropped": dropped,
+                "limit": self.max_items,
+                "containers": self._encode_truncation[:8],
+                "hint": (
+                    "This reply is INCOMPLETE — the value is not evidence of how many "
+                    "items exist. Re-read in smaller pieces, or count from the object "
+                    "itself rather than from this list."
+                ),
+            }
+            self._encode_truncation = []
+        return reply
 
     def _decode(self, value: Any) -> Any:
         """Argument -> live object, rehydrating handles the bridge itself issued."""
@@ -571,7 +636,7 @@ class ResolveOperations:
                 "resolve_raised",
                 f"Resolve raised while running {method}: {str(exc)[:200]}",
             )
-        return {"value": self._encode(result, shape=f"{self._shape_of(target_key)}.{method}")}
+        return self._encoded(result, shape=f"{self._shape_of(target_key)}.{method}")
 
     def op_list_methods(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """The public attribute names on a target — what `hasattr` should answer.
@@ -690,7 +755,8 @@ class ResolveOperations:
             return {"kind": "none",
                     "note": "present-but-None; on Resolve objects this is indistinguishable "
                             "from absent, because getattr never raises"}
-        return {"kind": "value", "value": self._encode(value, shape=f"{self._shape_of(arguments.get('target', 'resolve'))}.{name}")}
+        encoded = self._encoded(value, shape=f"{self._shape_of(arguments.get('target', 'resolve'))}.{name}")
+        return {"kind": "value", **encoded}
 
     def op_release_handles(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """Drop handles a client no longer needs, or all of them."""

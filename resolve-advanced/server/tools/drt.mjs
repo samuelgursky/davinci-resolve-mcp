@@ -51,7 +51,7 @@ const assembleSchema = z.object({
   spec: z
     .object({})
     .passthrough()
-    .describe("assembleTimeline spec: { timelineName?, startFrame? (timeline start frame @24, default 86400=01:00:00:00 — sets the start TIMECODE, render-verified on 19), media?: {mediaFilePath, spec:{width,height,frameCount,fps}, cuts:[{startFrame,durationFrames,srcIn?,track? (1-based video track; >1 = video-only, render-verified stacking),speed?/reverse? (constant retime, e.g. 0.5, forward or backwards; video-only; readback+render-verified on 19),freeze? (true = hold source frame srcIn for the whole cut; video-only; render-proven frozen on 19 via freezedetect),ramp? ([{durationFrames,speed},...] >=2 LINEAR segments from the cut head, srcIn honored; video-only; render-proven cadence on 19 — eased/curved ramps are NOT authorable, an interp!=0 keyframe crashes Resolve on import (measured)),audioOnly?+track? (explicit AUDIO placement on audio track 1-8; presence suppresses the A1 mirror; render-verified on 19),markers? (ITEM markers/clip locators: [{frame ITEM-relative, color?, name?, note?, duration?, customData?}] — readback-verified on 19; NOTE Resolve's own EXPORT_DRT drops item markers, this authoring path is the only .drt carrier)}]} | [same, ...] (multi-source needs media_pool.capture_media_template run once per file), transitions?: [{track, atFrame, durationFrames?, trackType? ('video' | 'audio' cross-fade), type? ('dissolve' default | 'wipe' | 'dip' | 'additive' | 'smooth-cut' | 'non-additive' — all render-verified on 19 w/ midpoint fingerprints; XMEML/EDL transition codes route automatically, and NOTE Resolve's own XMEML importer writes transitions that render INERT, so this route beats it)}], markers?: [{frame (timeline-absolute), color? (16 names), name?, note?, duration?, customData?}] (readback-verified on 19), compounds?: [{name, startFrame (parent, absolute), durationFrames, track?, cuts:[{mediaFilePath, startFrame (INNER, 0-based), durationFrames, srcIn?}], compounds?: [same, nested — frames inner-relative]}] (multiple PARALLEL compounds compose AND compounds NEST recursively — depth-2 through depth-4 playback render-verified on 19 (the old depth-2 black was a missing SequenceSetup key, fixed); inner cuts need captured templates w/ native clips), subtitles?: [{startFrame (timeline-absolute), durationFrames, text}] + subtitlesSrt? (raw SRT, cues anchor at the origin; readback-verified on 19; angle-bracket runs read as SRT markup), elements?: [{type:'title'|'generator', track, startFrame, durationFrames?, text?, generatorName? ('Solid Color'|'SMPTE Color Bar'|'Grey Scale' render-verified on 19), ...}] }. startFrame is timeline-absolute (origin 86400)."),
+    .describe("assembleTimeline spec: { timelineName?, startFrame? (timeline start frame @24, default 86400=01:00:00:00 — sets the start TIMECODE, render-verified on 19), media?: {mediaFilePath, spec:{width,height,frameCount,fps}, cuts:[{startFrame,durationFrames,srcIn?,track? (1-based video track; >1 = video-only, render-verified stacking),speed?/reverse? (constant retime, e.g. 0.5, forward or backwards; video-only; readback+render-verified on 19),freeze? (true = hold source frame srcIn for the whole cut; video-only; render-proven frozen on 19 via freezedetect),ramp? ([{durationFrames,speed},...] >=2 LINEAR segments from the cut head, srcIn honored; video-only; render-proven cadence on 19 — eased/curved ramps are NOT authorable, an interp!=0 keyframe crashes Resolve on import (measured)),audioOnly?+track? (explicit AUDIO placement on audio track 1-16; presence suppresses the A1 mirror; A1-A8 and the raised A9-A16 ceiling render-verified on 19),markers? (ITEM markers/clip locators: [{frame ITEM-relative, color?, name?, note?, duration?, customData?}] — readback-verified on 19; NOTE Resolve's own EXPORT_DRT drops item markers, this authoring path is the only .drt carrier)}]} | [same, ...] (multi-source needs media_pool.capture_media_template run once per file), transitions?: [{track, atFrame, durationFrames?, trackType? ('video' | 'audio' cross-fade), type? ('dissolve' default | 'wipe' | 'dip' | 'additive' | 'smooth-cut' | 'non-additive' — all render-verified on 19 w/ midpoint fingerprints; XMEML/EDL transition codes route automatically, and NOTE Resolve's own XMEML importer writes transitions that render INERT, so this route beats it)}], markers?: [{frame (timeline-absolute), color? (16 names), name?, note?, duration?, customData?}] (readback-verified on 19), compounds?: [{name, startFrame (parent, absolute), durationFrames, track?, cuts:[{mediaFilePath, startFrame (INNER, 0-based), durationFrames, srcIn?}], compounds?: [same, nested — frames inner-relative]}] (multiple PARALLEL compounds compose AND compounds NEST recursively — depth-2 through depth-4 playback render-verified on 19 (the old depth-2 black was a missing SequenceSetup key, fixed); inner cuts need captured templates w/ native clips), subtitles?: [{startFrame (timeline-absolute), durationFrames, text}] + subtitlesSrt? (raw SRT, cues anchor at the origin; readback-verified on 19; angle-bracket runs read as SRT markup), elements?: [{type:'title'|'generator', track, startFrame, durationFrames?, text?, generatorName? ('Solid Color'|'SMPTE Color Bar'|'Grey Scale' render-verified on 19), color? ({r,g,b[,a]} 0..1 floats or 0..255 ints — a Solid Color FILL; authored as the EffectFiltersBA Resolve's own writer emits, render-verified E110: white 235, BT.601-exact colours), ...}] }. startFrame is timeline-absolute (origin 86400)."),
   outputPath: z.string().describe('Absolute path where the importable .drt will be written'),
   targetAppVersion: z
     .union([z.string(), z.number()])
@@ -97,7 +97,8 @@ const injectIntoDrpSchema = z.object({
 const extractFromDrpSchema = z.object({
   drpPath: z.string().describe('Source .drp'),
   outputPath: z.string().describe('Path for the emitted .drt'),
-  timelineIndex: z.number().int().nonnegative().optional().describe('Which SeqContainer to extract (0-based, default 0)'),
+  timelineIndex: z.number().int().nonnegative().optional().describe('Which SeqContainer to extract (0-based). Omitted: the first container the pool kinds as a TIMELINE — SeqContainers list name-sorted by DbId, so index 0 is often a compound\'s inner container (measured, E128)'),
+  timelineName: z.string().optional().describe('Extract the container the pool names this (timeline or compound) — see list_sequences'),
 });
 
 // Verified Resolve app-version → on-disk <ProjectVersion> map (the import GATE).
@@ -153,7 +154,7 @@ function requirePathArg(args, key, action) {
 export const drtTool = {
   name: 'drt',
   description:
-    'DaVinci Resolve Timeline (.drt) operations — offline, no Resolve required. Actions: assemble_from_interchange (EDL/OTIO/XML/AAF + sourceMap → IMPORTABLE RENDERING native .drt in one call; retimes AUTHOR — constant speed fwd/rev AND zero-speed freezes (EDL M2 000.0; render-proven frozen); cross-dissolves are AUTHORED when the cut abuts with handles both sides (render-verified on 19), else dropped with reason; ledger in `conform`), assemble (spec → IMPORTABLE native-schema .drt via template-spliced real structures; pass targetAppVersion e.g. \'19.1\' for pre-21 hosts), parse, list_sequences (enumerate the timelines inside a .drp/.drt → [{id,name,eventCount,index}] to drive a "which sequence?" picker), author, validate, inject_into_drp, extract_from_drp (pull one SeqContainer out as a .drt — feed the .drt to the Python davinci-resolve MCP timeline.import_timeline_checked, or use timeline.import_from_drp to do both), downgrade (stamp <ProjectVersion> down so an OLDER Resolve will import a .drt/.drp from a newer one — pass targetAppVersion like "19.1.3" or targetProjectVersion).',
+    'DaVinci Resolve Timeline (.drt) operations — offline, no Resolve required. Actions: assemble_from_interchange (EDL/OTIO/XML/AAF + sourceMap → IMPORTABLE RENDERING native .drt in one call; retimes AUTHOR — constant speed fwd/rev AND zero-speed freezes (EDL M2 000.0; render-proven frozen); cross-dissolves are AUTHORED when the cut abuts with handles both sides (render-verified on 19), else dropped with reason; audio events above lane A16 drop with a reason in audioLanesBeyondCeiling (flattened nested sequences can stack lanes to A40 — measured); fades AUTHOR across ALL FOUR formats (EDL BL legs, OTIO gap-adjacent Transitions, XMEML edge transitionitems, AAF filler-adjacent Transitions) and AAF overlap-consuming dissolves reconcile+author (CutPoint honored; before E93 they threw at the overlap gate) — BL legs become Solid Color generators and the fade a real clip-to-generator dissolve, luma-ramp render-verified, while Resolve\'s OWN EDL importer drops BL dissolves silently; ledger in `conform`), assemble (spec → IMPORTABLE native-schema .drt via template-spliced real structures; pass targetAppVersion e.g. \'19.1\' for pre-21 hosts), parse, list_sequences (enumerate the timelines inside a .drp/.drt → [{id,name,eventCount,index,kind,nestedIn}] to drive a "which sequence?" picker — names and kind (timeline|compound) come from the pool folder, since a SeqContainer carries no timeline name and its first <Name> is a CLIP\'s (measured, E127); a compound container is nestedIn every timeline that places it, and a media-less clip named after a compound is tagged `compound` in parse), author, validate, inject_into_drp, extract_from_drp (pull one SeqContainer out as a .drt — by timelineName, an explicit timelineIndex, or by default the first container the pool kinds as a TIMELINE (index 0 is name-sorted by DbId and was an inner compound on Resolve\'s own export, E128); a timeline keeps its compound containers recursively; feed the .drt to the Python davinci-resolve MCP timeline.import_timeline_checked, or use timeline.import_from_drp to do both), downgrade (stamp <ProjectVersion> down so an OLDER Resolve will import a .drt/.drp from a newer one — pass targetAppVersion like "19.1.3" or targetProjectVersion).',
   async handler({ action, args }) {
     if (action === 'parse') {
       const p = parseSchema.parse(requirePathArg(args, 'drtPath', 'parse'));
@@ -303,16 +304,23 @@ export const drtTool = {
       // single-timeline .drt import path only takes one timeline per file.
       const p = z.object({
         timelines: z.array(z.object({}).passthrough()).min(2)
-          .describe('Two or more assembleTimeline specs (same shape as `assemble` spec); timelineName required and unique per entry'),
+          .describe("Two or more assembleTimeline specs (same shape as `assemble` spec); timelineName required and unique per entry. Optional per-entry `folder` places that timeline's pool clip in a named Master subfolder (bins for reel-per-timeline packages; entries sharing a name share the bin)."),
         outputPath: z.string().describe('Where the multi-timeline .drp is written'),
         targetAppVersion: z.union([z.string(), z.number()]).optional(),
       }).parse(args);
       const names = p.timelines.map((t, i) => t.timelineName || `Timeline ${i + 1}`);
       if (new Set(names).size !== names.length) throw new Error(`assemble_project: timelineName must be unique per timeline (got: ${names.join(', ')})`);
+      const folders = p.timelines.map((t) => {
+        if (t.folder === undefined) return null;
+        const f = String(t.folder).trim();
+        if (!f || /[\/\\]/.test(f)) throw new Error(`assemble_project: folder must be a plain bin name (no path separators): ${JSON.stringify(t.folder)}`);
+        return f;
+      });
       const { assembleTimeline } = drp();
       const buffers = [];
       for (const [i, spec] of p.timelines.entries()) {
         const s = { ...spec, timelineName: names[i] };
+        delete s.folder;
         if (s.templateVersion === undefined && p.targetAppVersion !== undefined) {
           s.templateVersion = parseFloat(p.targetAppVersion) >= 21 ? 21 : 19;
         }
@@ -434,6 +442,60 @@ export const drtTool = {
         for (const id of remap.values()) baseIds.add(id);
         for (const id of clusterText.match(UUID_RE) || []) if (!remap.has(id)) baseIds.add(id);
       }
+      // SUBFOLDERS (E87): a bin is just a directory + its own MpFolder.xml —
+      // the directory TREE is the registry (measured: no folder vec exists;
+      // children carry <MpFolder> back-refs). Move each foldered timeline's
+      // pool clip from Master's MediaVec into its bin's, and repoint the
+      // back-ref. Media elements stay in Master (shared by design).
+      if (folders.some(Boolean)) {
+        const masterFolderId = mpXml.match(/<Sm2MpFolder DbId="([^"]+)"/)[1];
+        const poolId = (mpXml.match(/<MediaPool>([^<]+)<\/MediaPool>/) || [])[1] || '';
+        const bins = new Map();
+        for (const [i, folder] of folders.entries()) {
+          if (!folder) continue;
+          if (!bins.has(folder)) {
+            const binId = randomUUID();
+            const bin = { id: binId, entry: `MediaPool/Master/${folder}/MpFolder.xml`, clips: [] };
+            bins.set(folder, bin);
+          }
+          const bin = bins.get(folder);
+          const tlRe = new RegExp(`<Element>\\s*<Sm2MpTimelineClip DbId="[^"]+">(?:(?!<\\/Element>\\s*<Element>)[\\s\\S])*?<Name>${names[i].replace(/[.*+?^$()|[\]{}]/g, '\\$&')}<\\/Name>[\\s\\S]*?<\\/Sm2MpTimelineClip>\\s*<\\/Element>`);
+          const hit = mpXml.match(tlRe);
+          if (!hit) throw new Error(`assemble_project: could not locate pool clip for timeline ${names[i]} to move into folder ${folder}`);
+          mpXml = mpXml.replace(hit[0], '');
+          bin.clips.push(hit[0].replace(/<MpFolder>[^<]*<\/MpFolder>/, `<MpFolder>${bin.id}</MpFolder>`));
+        }
+        // Register the bins in Master's FieldsBlob — the parent folder blob
+        // is the SUBFOLDER registry (measured: with it blanked, a bin's
+        // directory + MpFolder.xml import as NOTHING — its clips and their
+        // timelines all vanish; media/timeline children are discovered by
+        // scan, subfolders are not). Inner format byte-verified against the
+        // template harvest: protobuf{field2: keyedDict{"0": binId, ...},
+        // field4: time-varint} in the [u32 2][u32 len][0x81][zstd] wrapper.
+        const { zstdRawFrame } = requireCjs('../../vendor/drp-format/timeline-markers-blob.js');
+        const binIds = [...bins.values()].map((b) => b.id);
+        const childDict = encodeKeyedDict({ hdr: 1, entries: binIds.map((id, i) => ({ key: String(i), type: 0x0a, subType: 0, value: id })) });
+        const inner = Buffer.concat([
+          Buffer.from([0x12, childDict.length]), childDict,
+          Buffer.from([0x20]), Buffer.from('b6cba6a90d', 'hex'),
+        ]);
+        const frame = zstdRawFrame(inner);
+        const folderBlob = Buffer.concat([
+          Buffer.from([0, 0, 0, 2]),
+          (() => { const b = Buffer.alloc(4); b.writeUInt32BE(frame.length + 1, 0); return b; })(),
+          Buffer.from([0x81]), frame,
+        ]).toString('hex');
+        mpXml = mpXml.replace(/(<Sm2MpFolder DbId="[^"]+">\s*)<FieldsBlob\/>/, `$1<FieldsBlob>${folderBlob}</FieldsBlob>`);
+        for (const [folder, bin] of bins) {
+          base.file(bin.entry,
+            `<?xml version="1.0" encoding="UTF-8"?>\n` +
+            `<Sm2MpFolder DbId="${bin.id}">\n <FieldsBlob/>\n <Name>${folder}</Name>\n` +
+            ` <MpFolder>${masterFolderId}</MpFolder>\n <UniqueMediaPoolItemId>${randomUUID()}</UniqueMediaPoolItemId>\n` +
+            ` <MediaVec>\n${bin.clips.join('\n')}\n </MediaVec>\n` +
+            ` <MediaPool>${poolId}</MediaPool>\n <Folded>false</Folded>\n <ColorTag>FOLDER_COLOR_NONE</ColorTag>\n` +
+            ` <LockSysId/>\n <DbSavedTime>0</DbSavedTime>\n</Sm2MpFolder>\n`);
+        }
+      }
       base.file(mpP, mpXml);
       base.file('project.xml', pjXml);
       let outBuf = await base.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
@@ -518,7 +580,32 @@ export const drtTool = {
       const p = extractFromDrpSchema.parse(args);
       const drpZip = await JSZip.loadAsync(await fs.readFile(p.drpPath));
       const seqEntries = drt().listSeqContainerEntries(drpZip);
-      const idx = p.timelineIndex ?? 0;
+      // Which container (E128): SeqContainers list name-sorted by DbId, so a
+      // bare index 0 picked whichever container's uuid sorted first — on
+      // Resolve's export of a compound timeline that was an INNER compound.
+      // Resolve by pool name/kind unless an index is given explicitly.
+      const poolNames = await drt().loadPoolSequenceNames(drpZip);
+      const containerInfo = [];
+      for (const entryName of seqEntries) {
+        const sx = await drpZip.file(entryName).async('string');
+        const sid = (sx.match(/<Sequence>([0-9a-f-]{36})<\/Sequence>/) || [])[1];
+        const pool = sid ? poolNames.get(sid) : null;
+        containerInfo.push({ entry: entryName, name: pool ? pool.name : null, kind: pool ? pool.kind : null });
+      }
+      let idx;
+      let pickedBy;
+      if (p.timelineName != null) {
+        idx = containerInfo.findIndex((c) => c.name === p.timelineName);
+        if (idx < 0) return { error: `no SeqContainer named ${JSON.stringify(p.timelineName)} — containers: ${containerInfo.map((c) => `${c.name ?? '?'}${c.kind ? ` (${c.kind})` : ''}`).join(', ')}` };
+        pickedBy = 'timelineName';
+      } else if (p.timelineIndex != null) {
+        idx = p.timelineIndex;
+        pickedBy = 'timelineIndex';
+      } else {
+        idx = containerInfo.findIndex((c) => c.kind === 'timeline');
+        pickedBy = idx >= 0 ? 'first timeline in the pool' : 'first container (pool carries no kinds)';
+        if (idx < 0) idx = 0;
+      }
       if (idx >= seqEntries.length) {
         return { error: `timelineIndex ${idx} out of range (${seqEntries.length} SeqContainers)` };
       }
@@ -613,6 +700,9 @@ export const drtTool = {
         outputPath: p.outputPath,
         bytes: outBuf.length,
         sourceSeqContainer: keepEntry,
+        pickedBy,
+        container: { name: containerInfo[idx].name, kind: containerInfo[idx].kind },
+        keptContainers: [...keepContainers].map((e) => ({ entry: e, name: (containerInfo.find((c) => c.entry === e) || {}).name ?? null })),
         droppedTimelines,
         note: 'The imported timeline is named after the FILE. Source must be a SAVED project export — ExportProject snapshots the saved DB state, so unsaved edits are absent.',
       };

@@ -225,7 +225,7 @@ test('list_sequences drt → enumerates authored timelines', async () => {
 test('list_sequences drp → enumerates the template project', async () => {
   const r = await drtTool.handler({ action: 'list_sequences', args: { drpPath: 'vendor/drp-format/templates/media-clip-h264.drp' } });
   assert.ok(r.count >= 1);
-  assert.equal(r.sequences[0].name, 'sample.mp4');
+  assert.equal(r.sequences[0].name, 'MediaTemplate');  // E127: the pool's timeline name, not the first clip's (was the fallback 'sample.mp4')
   assert.ok(typeof r.sequences[0].id === 'string' && r.sequences[0].id.length);
 });
 
@@ -491,6 +491,30 @@ print(json.dumps(state))
   assert.deepEqual(out.unhandled, {});
 });
 
+test('aaf_probe: a 0% motion effect is a FREEZE, not "nothing recoverable" (E104)', { skip: PY ? false : 'python3 not available' }, () => {
+  // Avid freeze frames arrive as a motion effect at 0% — PARAM_SPEED_RATIO_U 0.0
+  // or a flat speed map at 0. Both used to fall through the "no play rate"
+  // branch and reach consumers as a plain 100% clip.
+  const out = runWalker(`
+fz1 = opgroup("Motion Control", 48, [mk("Sequence", components=[clip("A001", 1, start=10)])])
+fz1.parameters = [mk("ConstantValue", name="PARAM_SPEED_RATIO_U", value=0.0)]
+fz2 = opgroup("Motion Control", 24, [mk("Sequence", components=[clip("A002", 1)])])
+fz2.parameters = [mk("VaryingValue", name="PARAM_SPEED_MAP_U", pointlist=[mk("ControlPoint", time=0.0, value=0.0), mk("ControlPoint", time=1.0, value=0.0)])]
+seq = mk("Sequence", components=[fz1, fz2, clip("B001", 25)])
+state = new_state()
+ap._walk_slot(seq, prefix="V", fps=24, state=state)
+print(json.dumps(state))
+`);
+  assert.deepEqual(
+    out.events.map((e) => [e.source, e.recIn, e.recOut, e.speed, e.freeze === true]),
+    [
+      ['A001', 0, 48, 0, true],
+      ['A002', 48, 72, 0, true],
+      ['B001', 72, 97, 100, false],
+    ],
+  );
+});
+
 test('aaf_probe: variable-speed timewarp → speedVarying, never a fabricated number', { skip: PY ? false : 'python3 not available' }, () => {
   const out = runWalker(`
 from fractions import Fraction
@@ -640,9 +664,11 @@ print(json.dumps(state))
   );
 });
 
-test('aaf_probe: a transition at the head clamps instead of going negative', { skip: PY ? false : 'python3 not available' }, () => {
-  // A leading transition has no preceding material to overlap. Malformed, but a
-  // negative record position would be a worse lie than the file that produced it.
+test('aaf_probe: a transition at the head clamps — and is a fade-in from black (E93)', { skip: PY ? false : 'python3 not available' }, () => {
+  // A leading transition has no preceding material to overlap: the rewind
+  // clamps at the sequence start, and since the sequence head counts as
+  // black, a zero-length BL pseudo-event materializes the fade-in side for
+  // the bridge's black machinery.
   const out = runWalker(`
 seq = mk("Sequence", components=[mk("Transition", length=25), clip("A001", 50), clip("A002", 10)])
 state = new_state()
@@ -652,12 +678,14 @@ print(json.dumps({"events": state["events"], "walked": walked}))
   assert.deepEqual(
     out.events.map((e) => [e.source, e.recIn, e.recOut]),
     [
+      ['BL', 0, 0],
       ['A001', 0, 50],
       ['A002', 50, 60],
     ],
   );
   assert.equal(out.walked, 60, 'the clamp does not let the rewind escape the sequence start');
-  assert.deepEqual(out.events[0].transition, { type: 'dissolve', duration: 25, alignment: 'start' });
+  assert.equal(out.events[0].transition, null);
+  assert.deepEqual(out.events[1].transition, { type: 'dissolve', duration: 25, alignment: 'start' });
 });
 
 test('aaf_probe: back-to-back clips are unaffected by the subtraction', { skip: PY ? false : 'python3 not available' }, () => {

@@ -24,6 +24,11 @@ const PY_ABI_RISK_MINOR = 13;
 const SYNC_ITEMS = [
   "bin",
   "src",
+  // The Node 'advanced' bin resolves ../resolve-advanced/server/index.mjs
+  // relative to itself, and install.py registers that bin into every generated
+  // client config. Leaving the tree out of the sync shipped configs that
+  // pointed at a module the managed install could never contain (issue #179).
+  "resolve-advanced",
   "docs",
   "examples",
   "scripts",
@@ -52,6 +57,7 @@ Usage:
   davinci-resolve-mcp server [server.py options]
   davinci-resolve-mcp control-panel [control panel options]
   davinci-resolve-mcp batch <plan|run|status|list|resume|cancel> [options]
+  davinci-resolve-mcp sync [--no-deps]
   davinci-resolve-mcp --version
   davinci-resolve-mcp --help
 
@@ -61,6 +67,7 @@ Examples:
   npx davinci-resolve-mcp doctor
   npx davinci-resolve-mcp batch run /path/to/footage --depth standard
   npx davinci-resolve-mcp batch run /path/to/footage --json > progress.log
+  npx davinci-resolve-mcp sync            # refresh the managed install only
 
 Environment:
   DAVINCI_RESOLVE_MCP_INSTALL_ROOT   Override the managed install directory.
@@ -132,6 +139,28 @@ function validateManagedRoot(root) {
   }
 }
 
+// Top-level children of a synced item that the sync must NOT delete. The
+// advanced server's node_modules is installed *into* the managed root by
+// provisionAdvancedDeps and has no counterpart in the package, so a blanket
+// clear would throw it away on every subsequent command and force a reinstall.
+const SYNC_PRESERVE = {
+  "resolve-advanced": ["node_modules"],
+};
+
+function clearDestination(destination, preserve) {
+  if (!preserve.length || !fs.existsSync(destination)) {
+    fs.rmSync(destination, { recursive: true, force: true });
+    return;
+  }
+  const keep = new Set(preserve);
+  for (const entry of fs.readdirSync(destination)) {
+    if (keep.has(entry)) {
+      continue;
+    }
+    fs.rmSync(path.join(destination, entry), { recursive: true, force: true });
+  }
+}
+
 function copyItem(name, destinationRoot) {
   const source = path.join(PACKAGE_ROOT, name);
   if (!fs.existsSync(source)) {
@@ -139,7 +168,7 @@ function copyItem(name, destinationRoot) {
   }
 
   const destination = path.join(destinationRoot, name);
-  fs.rmSync(destination, { recursive: true, force: true });
+  clearDestination(destination, SYNC_PRESERVE[name] || []);
   fs.cpSync(source, destination, {
     recursive: true,
     errorOnExist: false,
@@ -152,6 +181,13 @@ function copyItem(name, destinationRoot) {
 function shouldSyncPath(sourcePath) {
   const basename = path.basename(sourcePath);
   if (basename === "__pycache__" || basename === ".DS_Store") {
+    return false;
+  }
+  // A dev checkout carries resolve-advanced/node_modules with optional native
+  // deps (sharp, better-sqlite3) built for the developer's platform+ABI.
+  // Copying those into a managed install is slow and ships binaries that may
+  // not load there; provisionAdvancedDeps installs them fresh instead.
+  if (basename === "node_modules") {
     return false;
   }
   if (basename.endsWith(".pyc") || basename.endsWith(".pyo")) {
@@ -177,6 +213,124 @@ function syncManagedInstall(root) {
     "utf8"
   );
   return root;
+}
+
+// ─── Advanced (Node) server runtime ─────────────────────────────────────────
+//
+// The advanced bin imports ../resolve-advanced/server/index.mjs, which in turn
+// imports @modelcontextprotocol/sdk, zod, jszip, fzstd, zstd-codec and the
+// vendored codecs. Syncing the tree is only half the fix for issue #179: the
+// managed root has no node_modules, so the imports still fail. Node resolves
+// them from resolve-advanced/node_modules, which resolve-advanced/package.json
+// declares — so that manifest, not a list duplicated here, is the source of
+// truth for what has to be present.
+
+function advancedRoot(root) {
+  return path.join(root, "resolve-advanced");
+}
+
+function advancedServerEntry(root) {
+  return path.join(advancedRoot(root), "server", "index.mjs");
+}
+
+function advancedRequiredDeps(root) {
+  const manifest = path.join(advancedRoot(root), "package.json");
+  try {
+    const parsed = JSON.parse(fs.readFileSync(manifest, "utf8"));
+    return Object.keys(parsed.dependencies || {});
+  } catch {
+    return [];
+  }
+}
+
+/** Can the advanced server actually boot from this root? Names what is missing. */
+function advancedRuntimeStatus(root) {
+  const entry = advancedServerEntry(root);
+  const entryPresent = fs.existsSync(entry);
+  const modulesDir = path.join(advancedRoot(root), "node_modules");
+  const required = advancedRequiredDeps(root);
+  const missingDeps = required.filter(
+    (dep) => !fs.existsSync(path.join(modulesDir, ...dep.split("/")))
+  );
+  return {
+    entry,
+    entryPresent,
+    // No manifest to read means we cannot tell what is required; treat that as
+    // "not bootable" rather than quietly reporting a clean bill of health.
+    depsPresent: required.length > 0 && missingDeps.length === 0,
+    required,
+    missingDeps,
+    bootable: entryPresent && required.length > 0 && missingDeps.length === 0,
+  };
+}
+
+function npmCommand() {
+  return process.platform === "win32" ? "npm.cmd" : "npm";
+}
+
+/**
+ * Install the advanced server's Node deps into the managed root.
+ *
+ * Optional deps (better-sqlite3, sharp, pg, js-yaml) stay omitted on purpose:
+ * they are native or heavy, the server already reports capability-specific
+ * setup gaps when they are absent, and a failed native build must not take the
+ * whole setup down with it.
+ *
+ * stdio is inherited on stderr only — this must never write to stdout, which
+ * on the server path is a JSON-RPC channel.
+ */
+function provisionAdvancedDeps(root, { force = false } = {}) {
+  const before = advancedRuntimeStatus(root);
+  if (!before.entryPresent) {
+    return { ...before, ran: false, reason: "advanced server tree is not present" };
+  }
+  if (before.depsPresent && !force) {
+    return { ...before, ran: false, reason: "already provisioned" };
+  }
+
+  const result = spawnSync(
+    npmCommand(),
+    ["install", "--omit=dev", "--omit=optional", "--no-audit", "--no-fund"],
+    { cwd: advancedRoot(root), stdio: ["ignore", "inherit", "inherit"], encoding: "utf8" }
+  );
+
+  const after = advancedRuntimeStatus(root);
+  return {
+    ...after,
+    ran: true,
+    ok: result.status === 0 && after.bootable,
+    status: result.status,
+    error: result.error ? result.error.message : null,
+  };
+}
+
+function reportAdvancedRuntime(root, { provision }) {
+  const outcome = provision
+    ? provisionAdvancedDeps(root)
+    : advancedRuntimeStatus(root);
+
+  if (outcome.bootable) {
+    console.log("Advanced server (Node): ready");
+    return outcome;
+  }
+  if (!outcome.entryPresent) {
+    console.log(
+      `Advanced server (Node): unavailable — ${outcome.entry} is missing. ` +
+      `The 'davinci-resolve-advanced' entry will be registered as an npx command instead.`
+    );
+    return outcome;
+  }
+  const missing = outcome.missingDeps.length
+    ? outcome.missingDeps.join(", ")
+    : "its dependency manifest";
+  console.log(
+    `Advanced server (Node): not bootable — missing ${missing}. ` +
+    (outcome.error ? `npm install failed: ${outcome.error}. ` : "") +
+    `Fix: run 'npm install --omit=dev --omit=optional' in ${advancedRoot(root)}, ` +
+    `or re-run 'npx davinci-resolve-mcp setup' with a network connection. ` +
+    `Until then the 'davinci-resolve-advanced' entry falls back to an npx command.`
+  );
+  return outcome;
 }
 
 function parseExecutable(value) {
@@ -373,6 +527,9 @@ function commandSetup(args) {
 
   console.log(`DaVinci Resolve MCP managed install: ${root}`);
   console.log(`Python: ${python.executable} (${python.major}.${python.minor}.${python.micro})`);
+  // Before install.py, not after: it inspects this layout to decide whether the
+  // 'davinci-resolve-advanced' entry can point at the managed bin.
+  reportAdvancedRuntime(root, { provision: true });
   run(command, commandArgs, { cwd: root });
 }
 
@@ -394,6 +551,8 @@ function commandDoctor(args) {
 
   console.log(`DaVinci Resolve MCP managed install: ${root}`);
   console.log(`Python: ${python.executable} (${python.major}.${python.minor}.${python.micro})`);
+  // Diagnose only — doctor already forces --dry-run and must not install.
+  reportAdvancedRuntime(root, { provision: false });
   run(command, commandArgs, { cwd: root });
 }
 
@@ -420,6 +579,16 @@ function commandBatch(args) {
   maybeWarnAbiRisk(python);
   const [command, ...commandArgs] = pythonCommandLine(python, ["-m", "src.batch_cli", ...args]);
   run(command, commandArgs, { cwd: root });
+}
+
+function commandSync(args) {
+  const provision = !args.includes("--no-deps");
+  const root = syncManagedInstall(installRoot());
+  console.log(`DaVinci Resolve MCP managed install: ${root}`);
+  const outcome = reportAdvancedRuntime(root, { provision });
+  if (provision && !outcome.bootable) {
+    process.exit(1);
+  }
 }
 
 function main() {
@@ -455,6 +624,10 @@ function main() {
     }
     if (command === "batch") {
       commandBatch(args);
+      return;
+    }
+    if (command === "sync") {
+      commandSync(args);
       return;
     }
 

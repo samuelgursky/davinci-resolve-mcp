@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { eventsToAssembleSpec, eventsToEDL } from '../server/author-interchange.mjs';
-import { parseEDL } from '../server/editorial.mjs';
+import { parseEDL, parseOTIO, parseXMEMLEvents } from '../server/editorial.mjs';
 
 const MAP = {
   TAPE1: { mediaFilePath: '/m/a.mp4', spec: { width: 640, height: 360, frameCount: 480, fps: 24 } },
@@ -151,7 +151,6 @@ test('a dissolve with a record gap before it drops as no-abutting-predecessor', 
 
 // Multi-track video: parsers number video tracks (V, V2, …), cuts carry the
 // track, overlap is judged PER TRACK (V2 stacking over V1 is legitimate).
-import { parseOTIO } from '../server/editorial.mjs';
 
 const rt = (value, rate = 24) => ({ OTIO_SCHEMA: 'RationalTime.1', value, rate });
 const clip = (name, srcIn, dur) => ({
@@ -305,9 +304,13 @@ test('audio cuts beyond the template ceiling refuse at assemble time', async () 
   const base = await addMediaClip({
     mediaFile: '/m/a.mp4', spec: { width: 640, height: 360, frameCount: 480, fps: 24 }, templateVersion: 19,
   });
+  // The r19 template ships 16 audio tracks with valid Fairlight strips
+  // (re-captured live E89, 2026-09-01); A16 assembles, A17 refuses.
+  const ok = await cutSourceIntoClips(base.buffer, { cuts: [{ startFrame: 86400, durationFrames: 24, audioOnly: true, track: 16 }] });
+  assert.equal(ok.cutCount, 1);
   await assert.rejects(
-    cutSourceIntoClips(base.buffer, { cuts: [{ startFrame: 86400, durationFrames: 24, audioOnly: true, track: 9 }] }),
-    /audio track 9 exceeds the template's 8 audio tracks/,
+    cutSourceIntoClips(base.buffer, { cuts: [{ startFrame: 86400, durationFrames: 24, audioOnly: true, track: 17 }] }),
+    /audio track 17 exceeds the template's 16 audio tracks/,
   );
 });
 
@@ -315,6 +318,153 @@ test('audio cuts beyond the template ceiling refuse at assemble time', async () 
 // cross-fade template renders a RAMP through the junction (verified on
 // 19.1.3.7 against a Resolve-authored control: -27.6 → -25.6 → -23.0 → -21.9
 // highpass-RMS, identical shape).
+// ── BL (black) legs and fades (E91, render-verified on 19.1.3.7) ─────────
+// Resolve's OWN EDL importer drops BL dissolves silently (fade-in vanishes,
+// fade-out leaves a hard cut to the Solid Color it creates). This bridge
+// authors them: BL legs become Solid Color generator elements, fades become
+// real clip↔generator dissolves — luma ramped 18→123 (in) and 123→16 (out)
+// on the live render.
+test('EDL BL fades author as generator elements + dissolves (E91)', () => {
+  const edl = [
+    'TITLE: FADES', 'FCM: NON-DROP FRAME',
+    '001  BL    V     C        00:00:00:00 00:00:00:00 01:00:00:00 01:00:00:00',
+    '002  TAPE1 V     D    024 00:00:00:00 00:00:04:00 01:00:00:00 01:00:04:00',
+    '003  TAPE1 V     C        00:00:04:00 00:00:04:00 01:00:04:00 01:00:04:00',
+    '004  BL    V     D    024 00:00:00:00 00:00:02:00 01:00:04:00 01:00:06:00',
+    '',
+  ].join('\n');
+  const events = parseEDL(edl, { fps: 24 });
+  const { spec, report } = eventsToAssembleSpec(events, {
+    sourceMap: { TAPE1: { mediaFilePath: '/m/a.mp4', spec: { width: 640, height: 360, frameCount: 192, fps: 24 } } },
+  });
+  // Fade-in: the zero-length BL slug GROWS through the boundary shift
+  // (single-sided transitions refuse to import, measured), the picture
+  // trims its head with source staying record-aligned.
+  assert.deepEqual(spec.elements, [
+    { type: 'generator', generatorName: 'Solid Color', track: 1, startFrame: 86400, durationFrames: 12 },
+    { type: 'generator', generatorName: 'Solid Color', track: 1, startFrame: 86508, durationFrames: 36 },
+  ]);
+  assert.deepEqual(spec.media[0].cuts, [{ startFrame: 86412, durationFrames: 96, srcIn: 12 }]);
+  assert.deepEqual(spec.transitions, [
+    { track: 1, atFrame: 86412, durationFrames: 24, startFrame: 86400 },
+    { track: 1, atFrame: 86508, durationFrames: 24, startFrame: 86496 },
+  ]);
+  assert.deepEqual(report.blackLegs, { authoredGenerators: 2, audioSilenceLegsSkipped: 0 });
+  assert.equal(report.droppedTransitions.length, 0);
+});
+
+test('OTIO gap-adjacent transitions are fades — synthetic BL legs route through the black machinery (E92)', () => {
+  const rt = (v, r = 24) => ({ OTIO_SCHEMA: 'RationalTime.1', rate: r, value: v });
+  const tr = (s, d, r = 24) => ({ OTIO_SCHEMA: 'TimeRange.1', start_time: rt(s, r), duration: rt(d, r) });
+  const otio = {
+    OTIO_SCHEMA: 'Timeline.1',
+    tracks: { OTIO_SCHEMA: 'Stack.1', children: [
+      { OTIO_SCHEMA: 'Track.1', kind: 'Video', markers: [], children: [
+        { OTIO_SCHEMA: 'Transition.1', transition_type: 'SMPTE_Dissolve', in_offset: rt(0), out_offset: rt(24) },
+        { OTIO_SCHEMA: 'Clip.2', name: 'A', source_range: tr(0, 96), media_reference: { target_url: 'A' }, effects: [], markers: [] },
+        { OTIO_SCHEMA: 'Transition.1', transition_type: 'SMPTE_Dissolve', in_offset: rt(12), out_offset: rt(12) },
+        { OTIO_SCHEMA: 'Gap.1', source_range: tr(0, 48) },
+      ] },
+    ] },
+  };
+  const events = parseOTIO(otio, { fps: 24 });
+  assert.deepEqual(events.filter((e) => e.source === 'BL').map((e) => [e.recIn, e.recOut]), [[0, 0], [96, 96]]);
+  const { spec, report } = eventsToAssembleSpec(events, {
+    sourceMap: { A: { mediaFilePath: '/m/a.mp4', spec: { width: 640, height: 360, frameCount: 192, fps: 24 } } },
+  });
+  // Head fade: CMX-form zero BL grows via the shift; tail fade (centered):
+  // the zero BL MATERIALIZES forward to cover the post side of the span.
+  assert.deepEqual(spec.elements, [
+    { type: 'generator', generatorName: 'Solid Color', track: 1, startFrame: 86400, durationFrames: 12 },
+    { type: 'generator', generatorName: 'Solid Color', track: 1, startFrame: 86496, durationFrames: 12 },
+  ]);
+  assert.deepEqual(spec.transitions, [
+    { track: 1, atFrame: 86412, durationFrames: 24, startFrame: 86400 },
+    { track: 1, atFrame: 86496, durationFrames: 24, startFrame: 86484 },
+  ]);
+  assert.equal(report.droppedTransitions.length, 0);
+});
+
+test('XMEML fade transitionitems (no outgoing / no incoming clip) synthesize BL legs (E92)', () => {
+  const xml = [
+    "<?xml version='1.0'?>",
+    "<xmeml version='4'><sequence><rate><timebase>24</timebase></rate><media><video><track>",
+    '<clipitem><name>a.mp4</name><start>0</start><end>96</end><in>0</in><out>96</out></clipitem>',
+    "<transitionitem><start>0</start><end>24</end><effect><effectid>Cross Dissolve</effectid></effect></transitionitem>",
+    "<transitionitem><start>84</start><end>108</end><effect><effectid>Cross Dissolve</effectid></effect></transitionitem>",
+    '</track></video></media></sequence></xmeml>',
+  ].join('');
+  const events = parseXMEMLEvents(xml, { fps: 24 });
+  const { spec, report } = eventsToAssembleSpec(events, {
+    sourceMap: { 'a.mp4': { mediaFilePath: '/m/a.mp4', spec: { width: 640, height: 360, frameCount: 192, fps: 24 } } },
+  });
+  assert.deepEqual(spec.media[0].cuts, [{ startFrame: 86412, durationFrames: 84, srcIn: 12 }]);
+  assert.deepEqual(spec.elements, [
+    { type: 'generator', generatorName: 'Solid Color', track: 1, startFrame: 86400, durationFrames: 12 },
+    { type: 'generator', generatorName: 'Solid Color', track: 1, startFrame: 86496, durationFrames: 12 },
+  ]);
+  assert.equal(report.droppedTransitions.length, 0);
+});
+
+// AAF overlap reconciliation (E93): an AAF Transition CONSUMES record time,
+// so the walker emits the incoming clip OVERLAPPING the outgoing by the
+// transition duration. Before this, the overlap gate threw and NO AAF
+// dissolve could conform. Render-verified live: fade-in 18→123, dissolve to
+// white through the 181.8 midpoint fingerprint, fade-out 230→21.
+test('AAF-shaped overlapping dissolve events reconcile and author (E93)', () => {
+  const MAP2 = {
+    A: { mediaFilePath: '/m/a.mp4', spec: { width: 640, height: 360, frameCount: 480, fps: 24 } },
+    B: { mediaFilePath: '/m/b.mp4', spec: { width: 640, height: 360, frameCount: 480, fps: 24 } },
+  };
+  const events = [
+    { index: 1, track: 'V', source: 'A', srcIn: 0, srcOut: 96, recIn: 0, recOut: 96, fps: 24 },
+    { index: 2, track: 'V', source: 'B', srcIn: 48, srcOut: 144, recIn: 72, recOut: 168, fps: 24, transition: { type: 'dissolve', duration: 24, alignment: 'start', cutPoint: 12 } },
+  ];
+  const { spec, report } = eventsToAssembleSpec(events, { sourceMap: MAP2 });
+  // Outgoing trimmed to the overlap start, then re-extended to the cut point
+  // by the boundary shift — the AAF notional-cut semantics exactly.
+  assert.deepEqual(spec.media.find((m) => m.mediaFilePath === '/m/a.mp4').cuts,
+    [{ startFrame: 86400, durationFrames: 84, srcIn: 0 }]);
+  assert.deepEqual(spec.media.find((m) => m.mediaFilePath === '/m/b.mp4').cuts,
+    [{ startFrame: 86484, durationFrames: 84, srcIn: 60 }]);
+  assert.deepEqual(spec.transitions, [{ track: 1, atFrame: 86484, durationFrames: 24, startFrame: 86472 }]);
+  assert.equal(report.droppedTransitions.length, 0);
+});
+
+test('AAF walker-shaped BL fades author through the reconciliation (E93)', () => {
+  // The exact shape aaf_probe emits for [Transition, SC, Transition, Filler]:
+  // zero-length BL legs at the overlap starts, clips at post-rewind record.
+  const events = [
+    { index: 1, track: 'V', source: 'BL', srcIn: 0, srcOut: 0, recIn: 0, recOut: 0, fps: 24 },
+    { index: 2, track: 'V', source: 'A', srcIn: 0, srcOut: 96, recIn: 0, recOut: 96, fps: 24, transition: { type: 'dissolve', duration: 24, alignment: 'start', cutPoint: 12 } },
+    { index: 3, track: 'V', source: 'BL', srcIn: 0, srcOut: 0, recIn: 72, recOut: 72, fps: 24, transition: { type: 'dissolve', duration: 24, alignment: 'start', cutPoint: 12 } },
+  ];
+  const { spec, report } = eventsToAssembleSpec(events, {
+    sourceMap: { A: { mediaFilePath: '/m/a.mp4', spec: { width: 640, height: 360, frameCount: 480, fps: 24 } } },
+  });
+  assert.equal(spec.elements.length, 2);
+  assert.equal(spec.transitions.length, 2);
+  assert.equal(report.droppedTransitions.length, 0);
+});
+
+test('audio BL fades drop with the no-silence-source reason; BL needs no sourceMap entry', () => {
+  const edl = [
+    'TITLE: AFADE', 'FCM: NON-DROP FRAME',
+    '001  TAPE1 A     C        00:00:00:00 00:00:02:00 01:00:00:00 01:00:02:00',
+    '002  BL    A     D    024 00:00:00:00 00:00:01:00 01:00:02:00 01:00:03:00',
+    '003  TAPE1 V     C        00:00:00:00 00:00:03:00 01:00:00:00 01:00:03:00',
+    '',
+  ].join('\n');
+  const events = parseEDL(edl, { fps: 24 });
+  const { spec, report } = eventsToAssembleSpec(events, {
+    sourceMap: { TAPE1: { mediaFilePath: '/m/a.mp4', spec: { width: 640, height: 360, frameCount: 192, fps: 24 } } },
+  });
+  assert.equal(spec.elements, undefined); // audio BL never becomes a generator
+  assert.equal(report.blackLegs.audioSilenceLegsSkipped, 1);
+  const drop = report.droppedTransitions.find((d) => d.trackType === 'audio');
+  assert.match(drop.reason, /no silence source/);
+});
+
 test('an EDL audio dissolve with handles authors an audio cross-fade', () => {
   const edl = [
     'TITLE: AX',
@@ -539,6 +689,300 @@ test('verifyRoundtrip flags real drift, not convention noise', () => {
   assert.equal(res2.mismatches[0].kind, 'record');
 });
 
+test('verifyRoundtrip is fade-aware: black legs merge out, reshaped edges excused with a report (E94)', () => {
+  // A faded conform (measured E94 live): input EDL has a zero-length BL +
+  // picture + BL tail; the re-export shows Solid Color legs and the picture
+  // shifted +12 both ends by the fade boundary-shift.
+  const input = [
+    { track: 'V', source: 'BL', recIn: 0, recOut: 0, srcIn: 0 },
+    { track: 'V', source: 'TAPE1', recIn: 0, recOut: 96, srcIn: 0, transition: { type: 'D', duration: 24, alignment: 'start' } },
+    { track: 'V', source: 'BL', recIn: 96, recOut: 144, srcIn: 0, transition: { type: 'D', duration: 24, alignment: 'start' } },
+  ];
+  const exported = [
+    { track: 'V', source: 'Solid Color', recIn: 0, recOut: 12, srcIn: 0 },
+    { track: 'V', source: 'cut_src.mp4', recIn: 12, recOut: 108, srcIn: 12 },
+    { track: 'V', source: 'Solid Color', recIn: 108, recOut: 144, srcIn: 0 },
+  ];
+  const res = verifyRoundtrip(input, exported, { sourceAliases: { TAPE1: 'cut_src' } });
+  assert.equal(res.pass, true, JSON.stringify(res.mismatches));
+  assert.deepEqual(res.blackSegments, { input: 1, exported: 2 });
+  assert.deepEqual(res.fadeReshapedBoundaries, [
+    { at: 0, source: 'cut_src', input: [0, 96], exported: [12, 108] },
+  ]);
+  assert.deepEqual(res.srcOffsets, { cut_src: 0 });
+  // A shift BEYOND the fade window is still real drift.
+  const drifted = JSON.parse(JSON.stringify(exported));
+  drifted[1].recIn = 40; drifted[1].srcIn = 40;
+  const res2 = verifyRoundtrip(input, drifted, { sourceAliases: { TAPE1: 'cut_src' } });
+  assert.equal(res2.pass, false);
+  assert.equal(res2.mismatches[0].kind, 'record');
+  // And a shifted edge NOWHERE NEAR a junction is drift even when small-ish.
+  const noFade = [
+    { track: 'V', source: 'A', recIn: 0, recOut: 96, srcIn: 0 },
+    { track: 'V', source: 'A', recIn: 96, recOut: 144, srcIn: 100 },
+  ];
+  const res3 = verifyRoundtrip(noFade, [
+    { track: 'V', source: 'A.mov', recIn: 0, recOut: 96, srcIn: 0 },
+    { track: 'V', source: 'A.mov', recIn: 108, recOut: 156, srcIn: 112 },
+  ]);
+  assert.equal(res3.pass, false);
+  assert.equal(res3.mismatches[0].kind, 'record');
+});
+
+test('verifyRoundtrip is retime-aware: a lost or wrong-speed retime fails as drift (E95)', () => {
+  // Record/source geometry cannot catch a lost retime (the record extent is
+  // unchanged). Measured live: EXPORT_OTIO carries an authored Sm2TimeMap
+  // back as LinearTimeWarp 0.5, so speed/reverse compare pairwise.
+  const input = [
+    { track: 'V', source: 'A', recIn: 0, recOut: 48, srcIn: 0 },
+    { track: 'V', source: 'A', recIn: 48, recOut: 96, srcIn: 48, speed: 50 },
+  ];
+  const good = [
+    { track: 'V', source: 'A.mov', recIn: 0, recOut: 48, srcIn: 0, speed: 100 },
+    { track: 'V', source: 'A.mov', recIn: 48, recOut: 96, srcIn: 48, speed: 50 },
+  ];
+  assert.equal(verifyRoundtrip(input, good).pass, true);
+  const flattened = good.map((e) => ({ ...e, speed: 100 }));
+  const r1 = verifyRoundtrip(input, flattened);
+  assert.equal(r1.pass, false);
+  assert.equal(r1.mismatches[0].kind, 'retime');
+  const reversed = good.map((e, i) => (i === 1 ? { ...e, reverse: true } : e));
+  const r2 = verifyRoundtrip(input, reversed);
+  assert.equal(r2.pass, false);
+  assert.equal(r2.mismatches[0].kind, 'retime');
+});
+
+test('verifyRoundtrip is audio-aware: declared audio compares, the A1 mirror stays informational (E97)', () => {
+  const input = [
+    { track: 'V', source: 'A', recIn: 0, recOut: 96, srcIn: 0 },
+    { track: 'A2', source: 'A', recIn: 24, recOut: 72, srcIn: 24 },
+  ];
+  const good = [
+    { track: 'V', source: 'A.mov', recIn: 0, recOut: 96, srcIn: 0 },
+    { track: 'A2', source: 'A.mov', recIn: 24, recOut: 72, srcIn: 24 },
+  ];
+  const r1 = verifyRoundtrip(input, good);
+  assert.equal(r1.pass, true, JSON.stringify(r1.mismatches));
+  assert.deepEqual(r1.audio, { input: 1, exported: 1, compared: true });
+  // audio leg slipped 6 frames → real drift, tagged audio
+  const drift = good.map((e) => (e.track === 'A2' ? { ...e, recIn: 30, recOut: 78, srcIn: 30 } : e));
+  const r2 = verifyRoundtrip(input, drift);
+  assert.equal(r2.pass, false);
+  assert.deepEqual(r2.mismatches[0], { kind: 'record', trackType: 'audio', at: 0, input: [24, 72], exported: [30, 78] });
+  // a video-only turnover re-exporting with mirrored audio is NOT a drift
+  const r3 = verifyRoundtrip([input[0]], good);
+  assert.equal(r3.pass, true);
+  assert.equal(r3.audio.compared, false);
+  // AAF channel legs dedupe: the same audio range once per channel is one leg
+  const dupIn = [input[0], input[1], { ...input[1] }];
+  const r4 = verifyRoundtrip(dupIn, good);
+  assert.equal(r4.pass, true, JSON.stringify(r4.mismatches));
+  assert.equal(r4.audio.input, 1);
+});
+
+test('conformManifest is BL-aware: fades need no black-side source or handles (E99)', async () => {
+  const { conformManifest } = await import('../server/editorial.mjs');
+  const edl = [
+    'TITLE: F', 'FCM: NON-DROP FRAME', '',
+    '001  BL       V     C        00:00:00:00 00:00:00:00 01:00:00:00 01:00:00:00',
+    '002  TAPE1    V     D    024 00:00:00:00 00:00:04:00 01:00:00:00 01:00:04:00',
+    '003  TAPE1    V     C        00:00:04:00 00:00:04:00 01:00:04:00 01:00:04:00',
+    '004  BL       V     D    024 00:00:00:00 00:00:02:00 01:00:04:00 01:00:06:00', '',
+  ].join('\n');
+  const events = parseEDL(edl, { fps: 24 });
+  // A conformable fade EDL passes: BL needs no source, the fade-in needs no
+  // handles, and the fade-out's tail requirement lands on the PICTURE source.
+  const ok = conformManifest(events, { TAPE1: { path: '/m/a.mp4', handleIn: 0, handleOut: 48 } });
+  assert.equal(ok.pass, true, JSON.stringify(ok.rows));
+  // A starved outgoing tail still fails — named on the fade-out row.
+  const starved = conformManifest(events, { TAPE1: { path: '/m/a.mp4', handleIn: 0, handleOut: 4 } });
+  assert.equal(starved.pass, false);
+  const failing = starved.rows.find((r) => !r.pass);
+  assert.match(failing.checks.find((c) => c.name === 'handles').detail, /outgoing TAPE1 needs tail/);
+});
+
+// E100 certification: every authored structure in ONE turnover — fade-in,
+// stack, centered dissolve, retime, fade-out, two audio legs, track + clip
+// markers. Live loop measured 2026-09-01: all 16 video windows and 16 audio
+// windows correct, verify_roundtrip pass:true against Resolve's re-export.
+test('kitchen-sink OTIO turnover conforms with a complete ledger (E100)', () => {
+  const rt = (v, r = 24) => ({ OTIO_SCHEMA: 'RationalTime.1', rate: r, value: v });
+  const tr = (s, d, r = 24) => ({ OTIO_SCHEMA: 'TimeRange.1', start_time: rt(s, r), duration: rt(d, r) });
+  const clip = (url, sIn, d, extra = {}) => ({ OTIO_SCHEMA: 'Clip.2', name: url, source_range: tr(sIn, d), media_reference: { target_url: url }, effects: [], markers: [], ...extra });
+  const otio = { OTIO_SCHEMA: 'Timeline.1', tracks: { OTIO_SCHEMA: 'Stack.1', children: [
+    { OTIO_SCHEMA: 'Track.1', kind: 'Video', markers: [
+      { OTIO_SCHEMA: 'Marker.2', name: 'TM1', color: 'BLUE', marked_range: tr(30, 0) },
+      { OTIO_SCHEMA: 'Marker.2', name: 'TM2', color: 'RED', marked_range: tr(100, 0) },
+    ], children: [
+      { OTIO_SCHEMA: 'Transition.1', transition_type: 'SMPTE_Dissolve', in_offset: rt(0), out_offset: rt(24) },
+      clip('/m/cut.mp4', 24, 72),
+      { OTIO_SCHEMA: 'Transition.1', transition_type: 'SMPTE_Dissolve', in_offset: rt(12), out_offset: rt(12) },
+      clip('/m/wht.mp4', 24, 48, { markers: [{ OTIO_SCHEMA: 'Marker.2', name: 'CM1', color: 'GREEN', marked_range: tr(34, 0) }] }),
+      clip('/m/cut.mp4', 0, 48, { effects: [{ OTIO_SCHEMA: 'LinearTimeWarp.1', time_scalar: 0.5 }] }),
+      { OTIO_SCHEMA: 'Transition.1', transition_type: 'SMPTE_Dissolve', in_offset: rt(12), out_offset: rt(12) },
+      { OTIO_SCHEMA: 'Gap.1', source_range: tr(0, 48) },
+    ] },
+    { OTIO_SCHEMA: 'Track.1', kind: 'Video', markers: [], children: [
+      { OTIO_SCHEMA: 'Gap.1', source_range: tr(0, 24) }, clip('/m/wht.mp4', 96, 24),
+    ] },
+    { OTIO_SCHEMA: 'Track.1', kind: 'Audio', markers: [], children: [
+      { OTIO_SCHEMA: 'Gap.1', source_range: tr(0, 12) }, clip('/m/cut.mp4', 12, 60),
+    ] },
+    { OTIO_SCHEMA: 'Track.1', kind: 'Audio', markers: [], children: [
+      { OTIO_SCHEMA: 'Gap.1', source_range: tr(0, 96) }, clip('/m/cut.mp4', 0, 48),
+    ] },
+  ] } };
+  const spec24 = { width: 640, height: 360, frameCount: 192, fps: 24 };
+  const { spec, report } = eventsToAssembleSpec(parseOTIO(otio, { fps: 24 }), {
+    sourceMap: { '/m/cut.mp4': { mediaFilePath: '/m/cut.mp4', spec: spec24 }, '/m/wht.mp4': { mediaFilePath: '/m/wht.mp4', spec: spec24 } },
+  });
+  assert.equal(report.droppedTransitions.length, 0, JSON.stringify(report.droppedTransitions));
+  assert.equal(spec.transitions.length, 3);
+  assert.equal(spec.elements.length, 2);
+  assert.equal(spec.markers.length, 2);
+  assert.equal(report.authoredRetimes.length, 1);
+  assert.equal(report.authoredAudioEvents, 2);
+  assert.equal(report.upperTrackCutsVideoOnly, 1);
+  const whiteCut = spec.media.find((m) => m.mediaFilePath === '/m/wht.mp4').cuts.find((c) => c.markers);
+  assert.deepEqual(whiteCut.markers, [{ frame: 10, color: 'Green', name: 'CM1' }]);
+});
+
+test('verifyRoundtrip matches path-style OTIO sources against basename re-exports (E100)', () => {
+  const input = [{ track: 'V', source: '/media/deep/cut_src.mp4', recIn: 0, recOut: 48, srcIn: 0 }];
+  const exported = [{ track: 'V', source: 'cut_src.mp4', recIn: 0, recOut: 48, srcIn: 0 }];
+  assert.equal(verifyRoundtrip(input, exported).pass, true);
+});
+
+test('eventsToEDL writes the CMX transition pairs — dissolves and fades survive the EDL target (E101)', () => {
+  // The OTIO writer carried transitions since day one; the EDL writer
+  // silently dropped every one. Now: zero-length outgoing marker + D line,
+  // with BL on the black side of fades — and the written EDL parses back to
+  // a fully-authored spec.
+  const events = [
+    { track: 'V', source: 'BL', recIn: 86400, recOut: 86400, srcIn: 0, srcOut: 0, fps: 24 },
+    { track: 'V', source: 'TAPE1', recIn: 86400, recOut: 86496, srcIn: 0, srcOut: 96, fps: 24, transition: { type: 'D', duration: 24 } },
+    { track: 'V', source: 'TAPE2', recIn: 86496, recOut: 86544, srcIn: 48, srcOut: 96, fps: 24, transition: { type: 'D', duration: 24 } },
+    { track: 'V', source: 'BL', recIn: 86544, recOut: 86592, srcIn: 0, srcOut: 0, fps: 24, transition: { type: 'D', duration: 24 } },
+  ];
+  const edl = eventsToEDL(events, { fps: 24 });
+  assert.match(edl, /002 {2}TAPE1 V {5}D {4}024/);
+  assert.match(edl, /006 {2}BL V {5}D {4}024/);
+  const { spec, report } = eventsToAssembleSpec(parseEDL(edl, { fps: 24 }), { sourceMap: MAP });
+  assert.equal(spec.transitions.length, 3);
+  assert.equal(spec.elements.length, 2);
+  assert.equal(report.droppedTransitions.length, 0);
+});
+
+test('eventsToOTIO carries transition alignment; the flat DRT target omits BL legs (E102)', async () => {
+  const { eventsToOTIO, eventsToDrtSpec } = await import('../server/author-interchange.mjs');
+  const events = [
+    { index: 1, track: 'V', source: 'BL', recIn: 0, recOut: 0, srcIn: 0, srcOut: 0, fps: 24 },
+    { index: 2, track: 'V', source: 'TAPE1', recIn: 0, recOut: 96, srcIn: 0, srcOut: 96, fps: 24, transition: { type: 'D', duration: 24, alignment: 'start' } },
+    { index: 3, track: 'V', source: 'BL', recIn: 96, recOut: 144, srcIn: 0, srcOut: 0, fps: 24, transition: { type: 'D', duration: 24, alignment: 'start' } },
+  ];
+  // A centered rewrite of a start-at-cut fade-in used to demand incoming
+  // pre-roll the source never needed — the round-trip dropped the fade.
+  const back = parseOTIO(eventsToOTIO(events, { fps: 24 }), { fps: 24 });
+  const { spec, report } = eventsToAssembleSpec(back, { sourceMap: MAP });
+  assert.equal(spec.transitions.length, 2, JSON.stringify(report.droppedTransitions));
+  assert.equal(spec.elements.length, 2);
+  assert.equal(report.droppedTransitions.length, 0);
+  // BL never becomes a bogus offline clip on the flat DRT target.
+  const drtSpec = eventsToDrtSpec(events, { fps: 24 });
+  assert.deepEqual(drtSpec.timelines[0].videoTracks[0].clips.map((c) => c.mediaFilePath), ['TAPE1']);
+});
+
+test('OTIO FreezeFrame effects ingest as freezes, write back as FreezeFrame, and verify (E103)', async () => {
+  const { eventsToOTIO } = await import('../server/author-interchange.mjs');
+  const rt = (v, r = 24) => ({ OTIO_SCHEMA: 'RationalTime.1', rate: r, value: v });
+  const tr = (s, d, r = 24) => ({ OTIO_SCHEMA: 'TimeRange.1', start_time: rt(s, r), duration: rt(d, r) });
+  // A FreezeFrame WITHOUT time_scalar (common writer shape) used to read as
+  // a plain 100% clip — the freeze vanished at parse.
+  const otio = { OTIO_SCHEMA: 'Timeline.1', tracks: { OTIO_SCHEMA: 'Stack.1', children: [
+    { OTIO_SCHEMA: 'Track.1', kind: 'Video', markers: [], children: [
+      { OTIO_SCHEMA: 'Clip.2', name: 'A', source_range: tr(0, 48), media_reference: { target_url: 'A' }, effects: [], markers: [] },
+      { OTIO_SCHEMA: 'Clip.2', name: 'A', source_range: tr(48, 48), media_reference: { target_url: 'A' }, effects: [{ OTIO_SCHEMA: 'FreezeFrame.1', name: 'Freeze' }], markers: [] },
+    ] },
+  ] } };
+  const events = parseOTIO(otio, { fps: 24 });
+  assert.equal(events[1].speed, 0);
+  const { spec, report } = eventsToAssembleSpec(events, { sourceMap: { A: { mediaFilePath: '/m/a.mp4', spec: { width: 640, height: 360, frameCount: 480, fps: 24 } } } });
+  assert.equal(spec.media[0].cuts[1].freeze, true);
+  assert.deepEqual(report.authoredRetimes, [{ index: 2, source: 'A', speed: 0, freeze: true }]);
+  // Writer emits OTIO's own schema for it (Resolve's EXPORT_OTIO writes the
+  // same FreezeFrame.1 for an authored freeze — measured live).
+  const doc = eventsToOTIO(events, { fps: 24 });
+  const eff = doc.tracks.children[0].children.find((c) => c.OTIO_SCHEMA === 'Clip.2' && c.effects.length).effects[0];
+  assert.equal(eff.OTIO_SCHEMA, 'FreezeFrame.1');
+  assert.equal(eff.time_scalar, 0);
+  // and the round trip verifies; a freeze flattened to 100% fails as retime drift
+  const back = parseOTIO(doc, { fps: 24 });
+  assert.equal(verifyRoundtrip(events, back).pass, true);
+  const flat = back.map((e) => ({ ...e, speed: 100 }));
+  assert.equal(verifyRoundtrip(events, flat).mismatches[0].kind, 'retime');
+});
+
+// E105: QC through every export format. Resolve's own writers measured on a
+// faded/dissolved/retimed conform — FCP7 XML (-1 junction edges, exact
+// `speed` next to `variablespeed` 0, Solid Color generatoritems), CMX EDL
+// (reel AX + FROM/TO CLIP NAME comments, video-only), OTIO (control).
+test('parseXMEMLEvents reads Resolve-written -1 edges, exact speed, and Solid Color generators (E105)', () => {
+  const xml = [
+    "<?xml version='1.0'?><xmeml version='4'><sequence><rate><timebase>24</timebase></rate><media><video><track>",
+    '<generatoritem id="g0"><name>Solid Color</name><start>0</start><end>-1</end><in>0</in><out>12</out></generatoritem>',
+    '<transitionitem><start>0</start><end>24</end><alignment>center</alignment><effect><effectid>Cross Dissolve</effectid></effect></transitionitem>',
+    '<clipitem id="c0"><name>cut_src.mp4</name><start>-1</start><end>-1</end><in>24</in><out>84</out></clipitem>',
+    '<transitionitem><start>60</start><end>84</end><alignment>center</alignment><effect><effectid>Cross Dissolve</effectid></effect></transitionitem>',
+    '<clipitem id="c1"><name>white_src.mp4</name><start>-1</start><end>120</end><in>12</in><out>60</out></clipitem>',
+    '<clipitem id="c2"><name>cut_src.mp4</name><start>120</start><end>168</end><in>0</in><out>48</out>',
+    '<filter><effect><name>Time Remap</name><effectid>timeremap</effectid>',
+    '<parameter><name>speed</name><parameterid>speed</parameterid><value>50</value></parameter>',
+    '<parameter><name>reverse</name><parameterid>reverse</parameterid><value>FALSE</value></parameter>',
+    '<parameter><name>variablespeed</name><parameterid>variablespeed</parameterid><value>0</value></parameter>',
+    '</effect></filter></clipitem>',
+    '</track></video></media></sequence></xmeml>',
+  ].join('');
+  const ev = parseXMEMLEvents(xml, { fps: 24 });
+  const rows = ev.filter((e) => e.recOut > e.recIn).map((e) => [e.source, e.recIn, e.recOut, e.srcIn, e.speed]);
+  assert.deepEqual(rows, [
+    ['BL', 0, 12, 0, 100],            // generatoritem, end -1 → the first junction
+    ['cut_src.mp4', 12, 72, 36, 100], // both edges -1 → junction to junction; `in` advances by the overlap offset
+    ['white_src.mp4', 72, 120, 24, 100],
+    ['cut_src.mp4', 120, 168, 0, 50], // `speed` 50 survives the `variablespeed` 0 that follows it
+  ]);
+  const pic = ev.find((e) => e.source === 'cut_src.mp4' && e.recIn === 12);
+  assert.equal(pic.transition.recStart, 0, 'the fade-in attaches to the PICTURE, not the black generator');
+});
+
+test('parseEDL applies FROM/TO CLIP NAME comments to generic AX reels (E105)', () => {
+  const edl = [
+    'TITLE: e105', 'FCM: NON-DROP FRAME', '',
+    '001  BL       V     C        01:00:00:00 01:00:00:00 01:00:00:00 01:00:00:00',
+    '001  AX       V     D    024 00:00:01:00 00:00:03:12 01:00:00:00 01:00:02:12',
+    '* FROM CLIP NAME: Solid Color', '* TO CLIP NAME: cut_src.mp4', '',
+    '002  AX       V     C        00:00:03:12 00:00:03:12 01:00:02:12 01:00:02:12',
+    '002  AX       V     D    024 00:00:00:12 00:00:03:00 01:00:02:12 01:00:05:00',
+    '* FROM CLIP NAME: cut_src.mp4', '* TO CLIP NAME: white_src.mp4', '',
+    '003  TAPE9    V     C        00:00:00:00 00:00:01:12 01:00:05:00 01:00:06:12',
+    '* FROM CLIP NAME: keeps_reel.mov', '',
+  ].join('\n');
+  const ev = parseEDL(edl, { fps: 24 });
+  assert.deepEqual(ev.map((e) => e.source), ['BL', 'cut_src.mp4', 'cut_src.mp4', 'white_src.mp4', 'TAPE9']);
+  assert.equal(ev[4].clipName, 'keeps_reel.mov'); // a specific reel keeps its name, clipName rides along
+});
+
+test('verifyRoundtrip flags a video-only export as audioNotInExport instead of failing (E105)', () => {
+  const input = [
+    { track: 'V', source: 'A', recIn: 0, recOut: 48, srcIn: 0 },
+    { track: 'A', source: 'A', recIn: 0, recOut: 48, srcIn: 0 },
+  ];
+  const exported = [{ track: 'V', source: 'A.mov', recIn: 0, recOut: 48, srcIn: 0 }];
+  const r = verifyRoundtrip(input, exported);
+  assert.equal(r.pass, true, JSON.stringify(r.mismatches));
+  assert.equal(r.audioNotInExport, true);
+  assert.equal(r.audio.compared, false);
+});
+
 test('assemble_from_interchange carries a sidecar SRT onto the subtitle track', async () => {
   const fsM = await import('node:fs');
   const os = await import('node:os');
@@ -761,4 +1205,473 @@ test('OTIO Transition children attach to the incoming clip and author (E70)', ()
   // SMPTE_Dissolve maps to the plain dissolve; the explicit in/out offsets
   // carry the span (12 before the cut).
   assert.deepEqual(spec.transitions, [{ track: 1, atFrame: 86448, durationFrames: 24, startFrame: 86436 }]);
+});
+
+test('verifyRoundtrip compares markers; a marker-less export is flagged, not failed (E88)', () => {
+  const base = [
+    { track: 'V1', source: 'A', recIn: 0, recOut: 48, srcIn: 0 },
+    { track: 'MARKER', source: '', recIn: 12, recOut: null, name: 'first' },
+    { track: 'MARKER', source: '', recIn: 40, recOut: null, name: 'second' },
+  ];
+  const exportedNoMk = [{ track: 'V', source: 'A.mov', recIn: 86400, recOut: 86448, srcIn: 0 }];
+  // Resolve's OTIO export drops timeline markers wholesale (measured live:
+  // 2 read back through the marker API, 0 in the export) — honesty flag.
+  const r1 = verifyRoundtrip(base, exportedNoMk);
+  assert.equal(r1.pass, true);
+  assert.equal(r1.markersNotInExport, true);
+  // when the export DOES carry markers, they compare strictly
+  const exportedMk = [...exportedNoMk,
+    { track: 'MARKER', source: '', recIn: 86412, recOut: null, name: 'first' },
+    { track: 'MARKER', source: '', recIn: 86445, recOut: null, name: 'second' }];
+  const r2 = verifyRoundtrip(base, exportedMk);
+  assert.equal(r2.pass, false);
+  assert.equal(r2.mismatches[0].kind, 'marker-frame'); // 40 vs 45
+  const exportedGood = [...exportedNoMk,
+    { track: 'MARKER', source: '', recIn: 86412, recOut: null, name: 'first' },
+    { track: 'MARKER', source: '', recIn: 86440, recOut: null, name: 'second' }];
+  const r3 = verifyRoundtrip(base, exportedGood);
+  assert.equal(r3.pass, true);
+  assert.equal(r3.markers.exported, 2);
+});
+
+// E107: measured against Resolve 19.1.3.7's OWN FCP7 writer (fixture is the
+// verbatim export of a fade-in → clip → centered dissolve → clip → fade-out
+// timeline, rendered and luma-verified 2026-09-01). Two laws: (1) with three
+// centered transitions, two equal-length clips both carry -1/-1 edges and
+// the first-pair rule put BOTH at the first junction pair; a record-order
+// cursor fixes it. (2) The writer emits NO pproTicksIn at all.
+const E107_XML = fs.readFileSync(new URL('./fixtures/E107_resolve_fades.xml', import.meta.url), 'utf8');
+
+test('parseXMEMLEvents places equal-length -1/-1 clips at successive junction pairs (E107)', () => {
+  const ev = parseXMEMLEvents(E107_XML);
+  const vid = ev.filter((e) => e.track === 'V' && !/^BL$/.test(e.source));
+  assert.deepEqual(vid.map((e) => [e.source, e.recIn, e.recOut, e.srcIn, e.srcOut]), [
+    ['cut_src.mp4', 12, 108, 36, 132],
+    ['white_src.mp4', 108, 204, 12, 108],
+  ]);
+  const black = ev.filter((e) => e.track === 'V' && e.source === 'BL');
+  assert.deepEqual(black.map((e) => [e.recIn, e.recOut]), [[0, 12], [204, 216]]);
+  assert.ok(!E107_XML.includes('pproTicksIn'), 'the fixture must stay a verbatim Resolve export (no ticks)');
+});
+
+// E108: XMEML audio. Only the VIDEO walk looked at transitionitems, so an
+// audio cross-fade vanished at parse (OTIO carried its Transition all
+// along), and every audio track walked as 'A', collapsing multi-track
+// audio onto one lane where OTIO/AAF number A, A2, A3 …
+test('parseXMEMLEvents attaches audio cross-fades and numbers audio tracks like OTIO (E108)', () => {
+  const clip = (id, name, s, e, i, o) => `<clipitem id="${id}"><name>${name}</name><start>${s}</start><end>${e}</end><in>${i}</in><out>${o}</out><file id="f_${name}"><name>${name}</name><pathurl>file:///m/${name}</pathurl></file></clipitem>`;
+  const xml = `<?xml version="1.0"?><xmeml version="5"><sequence><name>S</name><rate><timebase>24</timebase></rate><media>
+<video><format><samplecharacteristics><width>640</width><height>360</height><rate><timebase>24</timebase></rate></samplecharacteristics></format>
+<track>${clip('v1', 'a.mp4', 0, 48, 0, 48)}${clip('v2', 'b.mp4', 48, 96, 0, 48)}</track></video>
+<audio><track>${clip('a1', 'a.mp4', 0, 48, 0, 48)}<transitionitem><start>36</start><end>60</end><alignment>center</alignment><effect><name>Cross Fade (+3dB)</name><effectid>Cross Fade (+3dB)</effectid><mediatype>audio</mediatype></effect></transitionitem>${clip('a2', 'b.mp4', 48, 96, 0, 48)}</track>
+<track>${clip('a3', 'm.wav', 0, 96, 0, 96)}</track></audio></media></sequence></xmeml>`;
+  const ev = parseXMEMLEvents(xml);
+  const aud = ev.filter((e) => /^A/.test(e.track));
+  assert.deepEqual(aud.map((e) => [e.track, e.source, e.recIn, e.recOut]), [['A', 'a.mp4', 0, 48], ['A', 'b.mp4', 48, 96], ['A2', 'm.wav', 0, 96]]);
+  const xf = aud.find((e) => e.source === 'b.mp4');
+  assert.deepEqual(xf.transition, { type: 'Cross Fade (+3dB)', duration: 24, recStart: 36 });
+  // Null control: video untouched, and no transition leaks onto the wrong lane.
+  assert.ok(ev.filter((e) => e.track === 'V').every((e) => e.transition === null));
+  assert.equal(aud.find((e) => e.track === 'A2').transition, null);
+});
+
+// E109: flat AAF sound slots now number A, A2, A3 … (aaf_probe). Channel legs
+// of ONE clip (Resolve's AAF export writes one slot per channel) still merge
+// to a single placement — the merge key ignores the lane — while a different
+// bed on its own lane keeps it instead of colliding on A1.
+test('audio channel legs merge across lanes; distinct beds keep their lanes (E109)', () => {
+  const spec24 = { width: 640, height: 360, frameCount: 192, fps: 24 };
+  const sm = { '/m/cut.mp4': { mediaFilePath: '/m/cut.mp4', spec: spec24 }, '/m/wht.mp4': { mediaFilePath: '/m/wht.mp4', spec: spec24 } };
+  const base = { srcIn: 0, srcOut: 96, recIn: 0, recOut: 96, speed: 100, reverse: false, transition: null, fps: 24 };
+  const V = { index: 1, track: 'V', source: '/m/cut.mp4', ...base };
+  const legs = eventsToAssembleSpec([V, { index: 2, track: 'A', source: '/m/cut.mp4', ...base }, { index: 3, track: 'A2', source: '/m/cut.mp4', ...base }], { sourceMap: sm });
+  assert.equal(legs.report.authoredAudioEvents, 1);
+  assert.equal(legs.report.audioChannelLegsMerged, 1);
+  const beds = eventsToAssembleSpec([V, { index: 2, track: 'A', source: '/m/cut.mp4', ...base }, { index: 3, track: 'A2', source: '/m/wht.mp4', ...base }], { sourceMap: sm });
+  assert.equal(beds.report.authoredAudioEvents, 2);
+  assert.equal(beds.report.audioChannelLegsMerged, 0);
+  assert.deepEqual(beds.spec.media.flatMap((m) => m.cuts.filter((c) => c.audioOnly).map((c) => c.track)).sort(), [1, 2]);
+  // Null control: the same two beds both labelled A (the pre-E109 collapse) still refuse loudly.
+  assert.throws(() => eventsToAssembleSpec([V, { index: 2, track: 'A', source: '/m/cut.mp4', ...base }, { index: 3, track: 'A', source: '/m/wht.mp4', ...base }], { sourceMap: sm }), /overlap on audio track 1/);
+});
+
+// E110: generator COLOUR. Resolve's FCP7 importer honours a generatoritem
+// fillcolor and its writer emits it back (fixture = verbatim EXPORT_FCP_7_XML
+// of red + blue generators, rendered Y81 U90 V240 / Y41 U240 V110); the walker
+// carries it on the BL leg and the bridge authors the coloured Solid Color.
+test('parseXMEMLEvents carries generatoritem fillcolor on BL legs and the bridge authors it (E110)', () => {
+  const xml = fs.readFileSync(new URL('./fixtures/E110_resolve_color_generators.xml', import.meta.url), 'utf8');
+  const ev = parseXMEMLEvents(xml);
+  const legs = ev.filter((e) => e.track === 'V' && e.source === 'BL');
+  assert.deepEqual(legs.map((e) => [e.recIn, e.recOut, e.color]), [[0, 48, { r: 1, g: 0, b: 0, a: 1 }], [48, 96, { r: 0, g: 0, b: 1, a: 1 }]]);
+  const spec24 = { width: 640, height: 360, frameCount: 192, fps: 24 };
+  const { spec } = eventsToAssembleSpec(ev, { sourceMap: { 'cut_src.mp4': { mediaFilePath: '/m/cut_src.mp4', spec: spec24 } } });
+  const gens = spec.elements.filter((el) => el.type === 'generator');
+  assert.deepEqual(gens.map((g) => [g.startFrame - 86400, g.durationFrames, g.color]), [[0, 48, { r: 1, g: 0, b: 0, a: 1 }], [48, 48, { r: 0, g: 0, b: 1, a: 1 }]]);
+  // Null control: a default (black) Solid Color leg carries no colour and authors none.
+  const black = xml.replace(/<red>255<\/red>/, '<red>0</red>').replace(/<blue>255<\/blue>/, '<blue>0</blue>');
+  const ev0 = parseXMEMLEvents(black);
+  assert.ok(ev0.filter((e) => e.source === 'BL').every((e) => e.color === undefined));
+  const { spec: spec0 } = eventsToAssembleSpec(ev0, { sourceMap: { 'cut_src.mp4': { mediaFilePath: '/m/cut_src.mp4', spec: spec24 } } });
+  assert.ok(spec0.elements.filter((el) => el.type === 'generator').every((g) => g.color === undefined));
+});
+
+// E112: verify_roundtrip is COLOUR-AWARE. Black legs merge out of the geometry
+// compare, but an input leg carrying a fillcolor must find an exported leg on
+// the same track over its span with the same colour — a white fade that came
+// back black is a conform error geometry cannot see. Fixture = Resolve's own
+// FCP7 export of red + blue generators (E110).
+test('verifyRoundtrip compares generator colours and catches a colour that came back black (E112)', () => {
+  const xml = fs.readFileSync(new URL('./fixtures/E110_resolve_color_generators.xml', import.meta.url), 'utf8');
+  const input = parseXMEMLEvents(xml);
+  const ok = verifyRoundtrip(input, parseXMEMLEvents(xml));
+  assert.equal(ok.pass, true, JSON.stringify(ok.mismatches));
+  assert.deepEqual(ok.generatorColours, { compared: 2, mismatches: [] });
+  const black = verifyRoundtrip(input, parseXMEMLEvents(xml.replace('<red>255</red>', '<red>0</red>')));
+  assert.equal(black.pass, false);
+  assert.deepEqual(black.mismatches, [{ kind: 'generator-colour', track: 'V1', record: [0, 48], input: '255,0,0', exported: '0,0,0' }]);
+  // A coloured leg the export lost entirely is reported with exported: null.
+  const gone = verifyRoundtrip(input, parseXMEMLEvents(xml).filter((e) => !(e.source === 'BL' && e.recIn === 48)));
+  assert.ok(gone.mismatches.some((m) => m.kind === 'generator-colour' && m.exported === null && m.record[0] === 48));
+  // Null control: black-only legs (no colour anywhere) compare nothing and stay silent.
+  const plain = xml.replace('<red>255</red>', '<red>0</red>').replace('<blue>255</blue>', '<blue>0</blue>');
+  const r0 = verifyRoundtrip(parseXMEMLEvents(plain), parseXMEMLEvents(plain));
+  assert.equal(r0.pass, true);
+  assert.equal(r0.generatorColours, undefined);
+});
+
+// E112 live loop, kept as fixtures: the hand-authored fade-to-white turnover
+// (E110_ftw_turnover.xml) conformed through assemble_from_interchange, imported
+// into Resolve 19.1.3.7, rendered (124 → 234 across the fade; the custom matte
+// Y100 U174 V147), and re-exported with EXPORT_FCP_7_XML. Resolve's writer emits
+// the authored colours back as the FxPlug parameter `input_1` (not `fillcolor`).
+test('verifyRoundtrip closes the fade-to-white loop against Resolve\'s own re-export (E112)', () => {
+  const input = parseXMEMLEvents(fs.readFileSync(new URL('./fixtures/E110_ftw_turnover.xml', import.meta.url), 'utf8'));
+  const exportXml = fs.readFileSync(new URL('./fixtures/E112_resolve_ftw_export.xml', import.meta.url), 'utf8');
+  assert.ok(exportXml.includes('<parameterid>input_1</parameterid>'), 'fixture must stay a verbatim Resolve export');
+  const exported = parseXMEMLEvents(exportXml);
+  assert.deepEqual(exported.filter((e) => e.source === 'BL').map((e) => [e.recIn, e.recOut, e.color && [e.color.r, e.color.g, e.color.b].map((v) => Math.round(v * 255))]),
+    [[96, 192, [255, 255, 255]], [192, 240, [128, 64, 191]]]);
+  const r = verifyRoundtrip(input, exported);
+  assert.equal(r.pass, true, JSON.stringify(r.mismatches));
+  assert.deepEqual(r.generatorColours, { compared: 2, mismatches: [] });
+});
+
+// E114: Resolve's FCP7 writer emits an AUDIO cross-fade as a transitionitem on
+// the audio track with -1 clip edges, exactly like video. The E108 audio walk
+// attached the transition but never computed that lane's junction list, so
+// the incoming clip's <in> (the source at the OVERLAP start) lost its junction
+// offset — verify_roundtrip failed the E109 AAF loop with a 12-frame audio
+// source-frames drift. Fixture = verbatim EXPORT_FCP_7_XML of the E109 timeline.
+test('audio-lane -1 edges take the junction offset from their own lane (E114)', () => {
+  const xml = fs.readFileSync(new URL('./fixtures/E114_resolve_audio_xfade_export.xml', import.meta.url), 'utf8');
+  const ev = parseXMEMLEvents(xml);
+  const aud = ev.filter((e) => /^A/.test(e.track)).map((e) => [e.track, e.source, e.recIn, e.recOut, e.srcIn, e.transition && e.transition.duration]);
+  assert.deepEqual(aud, [['A', 'cut_src.mp4', 0, 84, 0, null], ['A', 'quiet_src.mp4', 84, 168, 12, 24], ['A2', 'quiet_src.mp4', 0, 168, 0, null]]);
+  // The AAF-shaped input (E109): dialog lane with a 24f cross-fade consuming 12 frames of overlap, music bed on A2.
+  const input = [
+    { index: 1, track: 'V', source: 'DIAL', srcIn: 0, srcOut: 96, recIn: 0, recOut: 96, speed: 100, reverse: false, transition: null, fps: 24 },
+    { index: 2, track: 'V', source: 'DIAL2', srcIn: 0, srcOut: 96, recIn: 96, recOut: 192, speed: 100, reverse: false, transition: null, fps: 24 },
+    { index: 3, track: 'A', source: 'DIAL', srcIn: 0, srcOut: 96, recIn: 0, recOut: 96, speed: 100, reverse: false, transition: null, fps: 24 },
+    { index: 4, track: 'A', source: 'DIAL2', srcIn: 0, srcOut: 96, recIn: 72, recOut: 168, speed: 100, reverse: false, transition: { type: 'dissolve', duration: 24, alignment: 'start', cutPoint: 12 }, fps: 24 },
+    { index: 5, track: 'A2', source: 'MUSIC', srcIn: 0, srcOut: 168, recIn: 0, recOut: 168, speed: 100, reverse: false, transition: null, fps: 24 },
+  ];
+  const r = verifyRoundtrip(input, ev, { sourceAliases: { DIAL: 'cut_src.mp4', DIAL2: 'quiet_src.mp4', MUSIC: 'quiet_src.mp4' } });
+  assert.equal(r.pass, true, JSON.stringify(r.mismatches));
+  assert.equal(r.audio.compared, true);
+});
+
+// E117: Resolve's OTIO writer CANNOT carry a generator colour — a Solid Color
+// exports as a Clip with a null media_reference and empty Resolve_OTIO
+// metadata (fixture = verbatim EXPORT_OTIO of the E110 fade-to-white conform).
+// A colour compare against such an export can only fail, so with the export
+// format declared it reports generatorColourNotInExport instead.
+test('verifyRoundtrip reports generatorColourNotInExport for a colour-blind OTIO re-export (E117)', () => {
+  const input = parseXMEMLEvents(fs.readFileSync(new URL('./fixtures/E110_ftw_turnover.xml', import.meta.url), 'utf8'));
+  const otio = JSON.parse(fs.readFileSync(new URL('./fixtures/E117_resolve_ftw_export.otio', import.meta.url), 'utf8'));
+  const exported = parseOTIO(otio, { fps: 24 });
+  assert.ok(exported.filter((e) => e.track === 'V').every((e) => e.color === undefined), 'the OTIO parser never sees a colour');
+  const honest = verifyRoundtrip(input, exported, { exportedFormat: 'otio' });
+  assert.equal(honest.pass, true, JSON.stringify(honest.mismatches));
+  assert.equal(honest.generatorColourNotInExport, true);
+  assert.equal(honest.generatorColours, undefined);
+  // Without the format declared the compare is strict — and honestly fails.
+  const strict = verifyRoundtrip(input, exported);
+  assert.equal(strict.pass, false);
+  assert.equal(strict.mismatches.filter((m) => m.kind === 'generator-colour').length, 2);
+  // An XML re-export IS colour-capable: declaring it keeps the compare strict.
+  const xmlExp = parseXMEMLEvents(fs.readFileSync(new URL('./fixtures/E112_resolve_ftw_export.xml', import.meta.url), 'utf8'));
+  const viaXml = verifyRoundtrip(input, xmlExp, { exportedFormat: 'xml' });
+  assert.equal(viaXml.pass, true);
+  assert.deepEqual(viaXml.generatorColours, { compared: 2, mismatches: [] });
+});
+
+// E118: Resolve's OTIO writer emits a Solid Color as a Clip with a NULL
+// media_reference named after the generator (E117 fixture). Read as a source
+// reel, the bridge refused the whole turnover ("unmapped source reel: Solid
+// Color"). Generator clips — null/Missing reference with a generator name, or
+// an OTIO GeneratorReference — now walk as BL legs with generatorName (and a
+// colour when a GeneratorReference carries one), so the export re-conforms.
+test('parseOTIO walks media-less generator clips as BL legs and the bridge authors them (E118)', () => {
+  const otio = JSON.parse(fs.readFileSync(new URL('./fixtures/E117_resolve_ftw_export.otio', import.meta.url), 'utf8'));
+  const ev = parseOTIO(otio, { fps: 24 });
+  const vid = ev.filter((e) => e.track === 'V');
+  assert.deepEqual(vid.map((e) => [e.source.split('/').pop(), e.generatorName, e.recIn, e.recOut]), [['cut_src.mp4', undefined, 0, 96], ['BL', 'Solid Color', 96, 192], ['BL', 'Solid Color', 192, 240]]);
+  const spec24 = { width: 640, height: 360, frameCount: 192, fps: 24 };
+  const { spec, report } = eventsToAssembleSpec(ev, { sourceMap: { [vid[0].source]: { mediaFilePath: '/m/cut_src.mp4', spec: spec24 } } });
+  assert.equal(spec.elements.filter((el) => el.type === 'generator').length, 2);
+  assert.equal(spec.transitions.length, 1);
+  assert.deepEqual(report.droppedTransitions, []);
+  // A GeneratorReference with a colour carries it; a real media clip stays a clip.
+  const rt = (v) => ({ OTIO_SCHEMA: 'RationalTime.1', rate: 24, value: v });
+  const tr = (s, d) => ({ OTIO_SCHEMA: 'TimeRange.1', start_time: rt(s), duration: rt(d) });
+  const gen = { OTIO_SCHEMA: 'Clip.2', name: 'White', source_range: tr(0, 24), media_reference: { OTIO_SCHEMA: 'GeneratorReference.1', generator_kind: 'SolidColor', parameters: { color: { r: 1, g: 1, b: 1 } } }, effects: [], markers: [] };
+  const clip = { OTIO_SCHEMA: 'Clip.2', name: 'Solid Color', source_range: tr(0, 24), media_reference: { OTIO_SCHEMA: 'ExternalReference.1', target_url: '/m/solid color.mp4' }, effects: [], markers: [] };
+  const ev2 = parseOTIO({ OTIO_SCHEMA: 'Timeline.1', tracks: { OTIO_SCHEMA: 'Stack.1', children: [{ OTIO_SCHEMA: 'Track.1', kind: 'Video', markers: [], children: [gen, clip] }] } }, { fps: 24 });
+  assert.deepEqual(ev2.map((e) => [e.source.split('/').pop(), e.color || null]), [['BL', { r: 1, g: 1, b: 1, a: 1 }], ['solid color.mp4', null]]);
+});
+
+// E120: Resolve's OTIO writer nests a COMPOUND CLIP as a Stack inside the
+// track (its source_range = the trim window into the compound, nested
+// recursively); parseOTIO silently dropped it — a 96-frame timeline parsed as
+// 48. Fixture = verbatim EXPORT_OTIO of the E57 nested-compound timeline
+// (depth 2). Stacks now flatten into the parent's record time with
+// fromCompound on each flattened cut.
+test('parseOTIO flattens nested Stacks (compound clips) into record time (E120)', () => {
+  const otio = JSON.parse(fs.readFileSync(new URL('./fixtures/E120_resolve_nested_export.otio', import.meta.url), 'utf8'));
+  const ev = parseOTIO(otio, { fps: 24 }).filter((e) => e.track === 'V');
+  assert.deepEqual(ev.map((e) => [e.source.split('/').pop(), e.srcIn, e.srcOut, e.recIn, e.recOut, e.fromCompound || null]), [
+    ['cut_src.mp4', 24, 72, 0, 48, null],
+    ['white_src.mp4', 0, 24, 48, 72, 'E57_OUT'],
+    ['cut_src.mp4', 96, 120, 72, 96, 'E57_OUT'],
+  ]);
+  // A trimmed window: a Stack whose source_range starts 6 frames in and runs 30 → the inner
+  // 24f white clip is cut to 18 frames from its 7th source frame; the inner second clip is clipped at 30.
+  const rt = (v) => ({ OTIO_SCHEMA: 'RationalTime.1', rate: 24, value: v });
+  const tr = (s, d) => ({ OTIO_SCHEMA: 'TimeRange.1', start_time: rt(s), duration: rt(d) });
+  const clip = (u, i, d) => ({ OTIO_SCHEMA: 'Clip.2', name: u, source_range: tr(i, d), media_reference: { OTIO_SCHEMA: 'ExternalReference.1', target_url: '/m/' + u }, effects: [], markers: [] });
+  const stack = { OTIO_SCHEMA: 'Stack.1', name: 'CMP', source_range: tr(6, 30), children: [{ OTIO_SCHEMA: 'Track.1', kind: 'Video', markers: [], children: [clip('w.mp4', 0, 24), clip('c.mp4', 100, 24)] }] };
+  const tl = { OTIO_SCHEMA: 'Timeline.1', tracks: { OTIO_SCHEMA: 'Stack.1', children: [{ OTIO_SCHEMA: 'Track.1', kind: 'Video', markers: [], children: [clip('a.mp4', 0, 10), stack] }] } };
+  const ev2 = parseOTIO(tl, { fps: 24 });
+  assert.deepEqual(ev2.map((e) => [e.source.split('/').pop(), e.srcIn, e.srcOut, e.recIn, e.recOut]), [['a.mp4', 0, 10, 0, 10], ['w.mp4', 6, 24, 10, 28], ['c.mp4', 100, 112, 28, 40]]);
+  // The bridge's ledger names the flattened compound.
+  const spec24 = { width: 640, height: 360, frameCount: 192, fps: 24 };
+  const { report } = eventsToAssembleSpec(ev, { sourceMap: { 'cut_src.mp4': { mediaFilePath: '/m/cut_src.mp4', spec: spec24 }, 'white_src.mp4': { mediaFilePath: '/m/white_src.mp4', spec: spec24 } } });
+  assert.deepEqual(report.flattenedCompounds, ['E57_OUT']);
+  assert.equal(report.flattenedCompoundEvents, 2);
+  // Null control: a stack-free OTIO walks exactly as before.
+  const plain = parseOTIO({ OTIO_SCHEMA: 'Timeline.1', tracks: { OTIO_SCHEMA: 'Stack.1', children: [{ OTIO_SCHEMA: 'Track.1', kind: 'Video', markers: [], children: [clip('a.mp4', 0, 10)] }] } }, { fps: 24 });
+  assert.deepEqual(plain.map((e) => [e.source.split('/').pop(), e.recIn, e.recOut, e.fromCompound]), [['a.mp4', 0, 10, undefined]]);
+});
+
+
+// E121: Resolve's FCP7 writer flattens a compound clip to ONE clipitem whose
+// <file> has an explicitly EMPTY <pathurl> and no inner content (fixture =
+// verbatim EXPORT_FCP_7_XML of the E57 nested timeline). Read as a source reel
+// it refused the whole turnover; now it is a named, dropped hole — unless the
+// sourceMap points the compound's name at a flattened media file.
+test('an XML compound clipitem drops with a reason instead of refusing the turnover (E121)', () => {
+  const xml = fs.readFileSync(new URL('./fixtures/E120_resolve_nested_export.xml', import.meta.url), 'utf8');
+  const ev = parseXMEMLEvents(xml);
+  const cmp = ev.find((e) => e.source === 'E57_OUT');
+  assert.equal(cmp.compound, 'E57_OUT');
+  assert.equal(ev.find((e) => e.source === 'cut_src.mp4').compound, undefined);
+  const spec24 = { width: 640, height: 360, frameCount: 192, fps: 24 };
+  const { spec, report } = eventsToAssembleSpec(ev, { sourceMap: { 'cut_src.mp4': { mediaFilePath: '/m/cut_src.mp4', spec: spec24 } } });
+  assert.equal(report.videoEvents, 1);
+  assert.deepEqual(report.unresolvedCompounds.map((c) => [c.name, c.track, c.recIn, c.recOut]), [['E57_OUT', 'V', 48, 96]]);
+  assert.match(report.unresolvedCompounds[0].reason, /OTIO/);
+  // Mapped to a flattened file, the compound authors like any clip.
+  const mapped = eventsToAssembleSpec(ev, { sourceMap: { 'cut_src.mp4': { mediaFilePath: '/m/cut_src.mp4', spec: spec24 }, E57_OUT: { mediaFilePath: '/m/e57_out_flat.mov', spec: spec24 } } });
+  assert.equal(mapped.report.videoEvents, 2);
+  assert.deepEqual(mapped.report.unresolvedCompounds, []);
+  assert.equal(spec.media.length, 1);
+});
+
+// E123: flattening keeps the JUNCTIONS — an inner dissolve inside a nested
+// Stack and a transition INTO the compound both author at their flattened
+// positions (offline-proven; the bridge places two dissolves, drops none).
+test('flattened stacks keep inner transitions and a transition into the compound (E123)', () => {
+  const rt = (v) => ({ OTIO_SCHEMA: 'RationalTime.1', rate: 24, value: v });
+  const tr = (s, d) => ({ OTIO_SCHEMA: 'TimeRange.1', start_time: rt(s), duration: rt(d) });
+  const clip = (u, i, d) => ({ OTIO_SCHEMA: 'Clip.2', name: u, source_range: tr(i, d), media_reference: { OTIO_SCHEMA: 'ExternalReference.1', target_url: '/m/' + u }, effects: [], markers: [] });
+  const T = (i, o) => ({ OTIO_SCHEMA: 'Transition.1', transition_type: 'SMPTE_Dissolve', in_offset: rt(i), out_offset: rt(o) });
+  const stack = { OTIO_SCHEMA: 'Stack.1', name: 'CMP', source_range: tr(0, 96), children: [{ OTIO_SCHEMA: 'Track.1', kind: 'Video', markers: [], children: [clip('a.mp4', 24, 48), T(12, 12), clip('b.mp4', 24, 48)] }] };
+  const tl = { OTIO_SCHEMA: 'Timeline.1', tracks: { OTIO_SCHEMA: 'Stack.1', children: [{ OTIO_SCHEMA: 'Track.1', kind: 'Video', markers: [], children: [clip('c.mp4', 0, 24), T(12, 12), stack] }] } };
+  const ev = parseOTIO(tl, { fps: 24 });
+  assert.deepEqual(ev.map((e) => [e.source.split('/').pop(), e.recIn, e.recOut, e.transition && e.transition.duration, e.fromCompound || null]),
+    [['c.mp4', 0, 24, null, null], ['a.mp4', 24, 72, 24, 'CMP'], ['b.mp4', 72, 120, 24, 'CMP']]);
+  const spec24 = { width: 640, height: 360, frameCount: 192, fps: 24 };
+  const sm = Object.fromEntries(['a.mp4', 'b.mp4', 'c.mp4'].map((u) => ['/m/' + u, { mediaFilePath: '/m/' + u, spec: spec24 }]));
+  const { spec, report } = eventsToAssembleSpec(ev, { sourceMap: sm });
+  assert.deepEqual(spec.transitions.map((t) => [t.atFrame - 86400, t.durationFrames]), [[24, 24], [72, 24]]);
+  assert.deepEqual(report.droppedTransitions, []);
+  assert.deepEqual(report.flattenedCompounds, ['CMP']);
+});
+
+
+// E123: round-trip QC across the two writers' compound forms. The OTIO export
+// flattens (E120); the XML export collapses the compound to one clipitem (E121).
+// Verifying flattened input cuts against a collapsed export is not drift.
+test('verifyRoundtrip reports compoundsCollapsedInExport instead of count/source drift (E123)', () => {
+  const otio = JSON.parse(fs.readFileSync(new URL('./fixtures/E120_resolve_nested_export.otio', import.meta.url), 'utf8'));
+  const input = parseOTIO(otio, { fps: 24 });
+  const self = verifyRoundtrip(input, parseOTIO(otio, { fps: 24 }), { exportedFormat: 'otio' });
+  assert.equal(self.pass, true);
+  assert.equal(self.compoundsCollapsedInExport, undefined);
+  const xml = parseXMEMLEvents(fs.readFileSync(new URL('./fixtures/E120_resolve_nested_export.xml', import.meta.url), 'utf8'));
+  const r = verifyRoundtrip(input, xml, { exportedFormat: 'xml' });
+  assert.equal(r.pass, true, JSON.stringify(r.mismatches));
+  assert.deepEqual(r.compoundsCollapsedInExport, [{ name: 'E57_OUT', track: 'V1', record: [48, 96], innerCuts: 2 }]);
+  assert.equal(r.pairs, 1);
+  // Null control: a collapsed compound over cuts that did NOT come from it is real drift.
+  const stranger = input.map((e) => (e.fromCompound ? { ...e, fromCompound: 'OTHER' } : e));
+  const r2 = verifyRoundtrip(stranger, xml, { exportedFormat: 'xml' });
+  assert.equal(r2.pass, false);
+  assert.equal(r2.compoundsCollapsedInExport, undefined);
+});
+
+// E131: a nested Stack's AUDIO tracks flatten onto the parent audio lanes
+// (A, A2 …) with fromCompound, and the bridge places them on those lanes.
+test('flattened stacks carry their audio tracks onto the parent audio lanes (E131)', () => {
+  const rt = (v) => ({ OTIO_SCHEMA: 'RationalTime.1', rate: 24, value: v });
+  const tr = (s, d) => ({ OTIO_SCHEMA: 'TimeRange.1', start_time: rt(s), duration: rt(d) });
+  const clip = (u, i, d) => ({ OTIO_SCHEMA: 'Clip.2', name: u, source_range: tr(i, d), media_reference: { OTIO_SCHEMA: 'ExternalReference.1', target_url: '/m/' + u }, effects: [], markers: [] });
+  const stack = { OTIO_SCHEMA: 'Stack.1', name: 'CMP', source_range: tr(0, 48), children: [
+    { OTIO_SCHEMA: 'Track.1', kind: 'Video', markers: [], children: [clip('v.mp4', 0, 48)] },
+    { OTIO_SCHEMA: 'Track.1', kind: 'Audio', markers: [], children: [clip('v.mp4', 0, 48)] },
+    { OTIO_SCHEMA: 'Track.1', kind: 'Audio', markers: [], children: [clip('bed.wav', 100, 48)] }] };
+  const tl = { OTIO_SCHEMA: 'Timeline.1', tracks: { OTIO_SCHEMA: 'Stack.1', children: [
+    { OTIO_SCHEMA: 'Track.1', kind: 'Video', markers: [], children: [clip('a.mp4', 0, 24), stack] },
+    { OTIO_SCHEMA: 'Track.1', kind: 'Audio', markers: [], children: [clip('a.mp4', 0, 24), stack] }] } };
+  const ev = parseOTIO(tl, { fps: 24 });
+  assert.deepEqual(ev.map((e) => [e.track, e.source.split('/').pop(), e.srcIn, e.recIn, e.recOut, e.fromCompound || null]), [
+    ['V', 'a.mp4', 0, 0, 24, null], ['V', 'v.mp4', 0, 24, 72, 'CMP'],
+    ['A', 'a.mp4', 0, 0, 24, null], ['A', 'v.mp4', 0, 24, 72, 'CMP'], ['A2', 'bed.wav', 100, 24, 72, 'CMP'],
+  ]);
+  const spec24 = { width: 640, height: 360, frameCount: 192, fps: 24 };
+  const sm = Object.fromEntries(['a.mp4', 'v.mp4', 'bed.wav'].map((u) => ['/m/' + u, { mediaFilePath: '/m/' + u, spec: spec24 }]));
+  const { spec, report } = eventsToAssembleSpec(ev, { sourceMap: sm });
+  assert.equal(report.authoredAudioEvents, 3);
+  assert.deepEqual(spec.media.flatMap((m) => m.cuts.filter((c) => c.audioOnly).map((c) => [m.mediaFilePath.split('/').pop(), c.track])).sort(), [['a.mp4', 1], ['bed.wav', 2], ['v.mp4', 1]]);
+});
+
+
+// E135: flattened nested Premiere sequences stack audio lanes far past A16
+// (A40 measured). The bridge authors A1–A16 and drops the rest with a reason.
+test('audio events above lane 16 drop with a reason instead of authoring blind (E135)', () => {
+  const spec24 = { width: 640, height: 360, frameCount: 192, fps: 24 };
+  const base = { srcIn: 0, srcOut: 48, recIn: 0, recOut: 48, speed: 100, reverse: false, transition: null, fps: 24 };
+  const ev = [{ index: 1, track: 'V', source: 'a.mp4', ...base }, { index: 2, track: 'A16', source: 'a.mp4', ...base }, { index: 3, track: 'A17', source: 'b.mp4', ...base }];
+  const { spec, report } = eventsToAssembleSpec(ev, { sourceMap: { 'a.mp4': { mediaFilePath: '/m/a.mp4', spec: spec24 }, 'b.mp4': { mediaFilePath: '/m/b.mp4', spec: spec24 } } });
+  assert.equal(report.authoredAudioEvents, 1);
+  assert.deepEqual(spec.media.flatMap((m) => m.cuts.filter((c) => c.audioOnly).map((c) => c.track)), [16]);
+  assert.deepEqual(report.audioLanesBeyondCeiling.map((d) => [d.track, d.source]), [['A17', 'b.mp4']]);
+  assert.match(report.audioLanesBeyondCeiling[0].reason, /A16 ceiling/);
+});
+
+// ── E145: named generators — black authors as black, a leader is a named hole, never a refused reel ──
+test('eventsToAssembleSpec authors a Black Video as a BL leg and drops a counting leader with a reason instead of refusing the reel (E145)', () => {
+  const ev = (track, source, srcIn, recIn, dur, extra = {}) => ({ track, source, srcIn, srcOut: srcIn + dur, recIn, recOut: recIn + dur, speed: 100, reverse: false, transition: null, fps: 24, ...extra });
+  const events = [
+    ev('V', 'Universal Counting Leader', 72, 0, 192, { generatorName: 'Universal Counting Leader' }),
+    ev('V', 'TAPE1', 96, 192, 48),
+    ev('V', 'Black Video', 0, 240, 48, { generatorName: 'Black Video' }),
+  ];
+  const { spec, report } = eventsToAssembleSpec(events, { sourceMap: MAP, timelineName: 'GEN' });
+  assert.deepEqual(report.unresolvedGenerators.map((g) => [g.name, g.track, g.recIn, g.recOut]), [['Universal Counting Leader', 'V', 0, 192]]);
+  assert.match(report.unresolvedGenerators[0].reason, /no Resolve equivalent/);
+  // the black window is a Solid Color generator element at its record position (origin 86400 anchors the earliest KEPT event)
+  const gens = (spec.elements || []).filter((el) => el.type === 'generator');
+  assert.equal(gens.length, 1);
+  assert.equal(gens[0].generatorName, 'Solid Color');
+  assert.equal(gens[0].durationFrames, 48);
+  assert.equal(spec.media.length, 1);
+  // null control: an unmapped REAL reel still refuses
+  assert.throws(() => eventsToAssembleSpec([ev('V', 'TAPE9', 0, 0, 24)], { sourceMap: MAP }), /unmapped source reel/);
+  // and a generator the sourceMap DOES map (a rendered leader file) places like media
+  const mapped = eventsToAssembleSpec(events, { sourceMap: { ...MAP, 'Universal Counting Leader': MAP.TAPE1 }, timelineName: 'GEN2' });
+  assert.deepEqual(mapped.report.unresolvedGenerators, []);
+});
+
+// ── E146: verify_roundtrip consults the changelist laws ──
+test('verifyRoundtrip adopts an inferred proxy→master rename, excuses a re-centred junction and names a missing leader — a real conform passes (E146)', () => {
+  const ev = (track, source, srcIn, recIn, dur, extra = {}) => ({ track, source, srcIn, srcOut: srcIn + dur, recIn, recOut: recIn + dur, speed: 100, reverse: false, transition: null, fps: 24, ...extra });
+  const dis = (type, recStart) => ({ type, duration: 24, recStart });
+  const input = [
+    ev('V', 'Universal Counting Leader', 72, 0, 192, { generatorName: 'Universal Counting Leader' }),
+    ev('V', 'Reel 4K-2K 0515.mov', 1000, 192, 100),
+    ev('V', 'Reel 4K-2K 0515.mov', 5000, 292, 100, { transition: dis('Cross Dissolve (Legacy)', 280) }),
+    ev('V', 'Reel 4K-2K 0520.mov', 300, 392, 60),
+    ev('V', 'Reel 4K-2K 0515.mov', 7000, 452, 48),
+  ];
+  // the online cut: masters, the leader dropped, the dissolve re-centred (cut 292 → 303 with both source windows sliding by 11)
+  const exported = [
+    ev('V', 'Reel 4K 0515.mov', 1000, 192, 111),
+    { ...ev('V', 'Reel 4K 0515.mov', 5011, 303, 89, { transition: dis('Cross Dissolve', 280) }), srcOut: 5100 },
+    ev('V', 'Reel 4K 0520.mov', 300, 392, 60),
+    ev('V', 'Reel 4K 0515.mov', 7000, 452, 48),
+  ];
+  const r = verifyRoundtrip(input, exported, { exportedFormat: 'drt' });
+  assert.deepEqual(r.mismatches, [], JSON.stringify(r));
+  assert.equal(r.pass, true);
+  assert.deepEqual(r.sourceAliases.map((a) => [a.from, a.to, a.inferred]).sort(), [['Reel 4K-2K 0515.mov', 'Reel 4K 0515.mov', true], ['Reel 4K-2K 0520.mov', 'Reel 4K 0520.mov', true]]);
+  // the leader's record window reads relative to the first REAL picture (192), which anchors both sides
+  assert.deepEqual(r.generatorsNotInExport, [{ name: 'Universal Counting Leader', track: 'V1', record: [-192, 0] }]);
+  assert.equal(r.junctionRealigned.length, 2, 'both sides of the re-centred junction are excused');
+  assert.equal(r.pairs, 4);
+  // null controls: inference off → the rename is real drift again; a genuinely different shot still fails 'source'
+  const off = verifyRoundtrip(input, exported, { exportedFormat: 'drt', inferAliases: false });
+  assert.ok(off.mismatches.some((m) => m.kind === 'source'));
+  const swapped = exported.map((e, i) => (i === 2 ? { ...e, source: 'ZEBRA_pickup.mov' } : e));
+  const sw = verifyRoundtrip(input, swapped, { exportedFormat: 'drt' });
+  assert.ok(sw.mismatches.some((m) => m.kind === 'source' && m.exported === 'zebra_pickup'));
+  assert.equal(sw.pass, false);
+  // a black generator by name is black on both sides — never a picture leg
+  const withBlack = [...input, ev('V', 'Black Video', 0, 500, 48, { generatorName: 'Black Video' })];
+  const withSolid = [...exported, ev('V', 'Solid Color', 0, 500, 48)];
+  const bk = verifyRoundtrip(withBlack, withSolid, { exportedFormat: 'drt' });
+  assert.equal(bk.pass, true);
+  assert.deepEqual(bk.blackSegments, { input: 1, exported: 1 });
+});
+
+// ── E147: verify pairs by window — one lost clip is one 'missing', not a cascade ──
+test('verifyRoundtrip reports a clip the export lost as one missing and an export-only clip as one extra, pairing the rest by window (E147)', () => {
+  const ev = (track, source, srcIn, recIn, dur, extra = {}) => ({ track, source, srcIn, srcOut: srcIn + dur, recIn, recOut: recIn + dur, speed: 100, reverse: false, transition: null, fps: 24, ...extra });
+  const input = [ev('V', 'A.mov', 0, 0, 48), ev('V', 'B.mov', 100, 48, 48), ev('V', 'C.mov', 200, 96, 48), ev('V', 'D.mov', 300, 144, 48), ev('V', 'E.mov', 400, 192, 48)];
+  // the export lost C (a hole) and everything after it kept its place
+  const lostC = input.filter((e) => e.source !== 'C.mov');
+  const r = verifyRoundtrip(input, lostC, { exportedFormat: 'drt' });
+  assert.deepEqual(r.mismatches.map((m) => [m.kind, m.source || m.input]), [['count', 5], ['missing', 'c']], JSON.stringify(r.mismatches));
+  assert.deepEqual(r.mismatches[1].record, [96, 144]);
+  assert.equal(r.pairs, 4);
+  // an export-only clip is one extra
+  const plusX = [...input, ev('V', 'X.mov', 0, 240, 24)];
+  const x = verifyRoundtrip(input, plusX, { exportedFormat: 'drt' });
+  assert.deepEqual(x.mismatches.map((m) => [m.kind, m.source ?? m.input]), [['count', 5], ['extra', 'x']]);
+  // a different shot in the same window is a source mismatch found by window, and nothing after it cascades
+  const swapped = input.map((e) => (e.source === 'C.mov' ? { ...e, source: 'ZEBRA.mov' } : e));
+  const sw = verifyRoundtrip(input, swapped, { exportedFormat: 'drt' });
+  assert.deepEqual(sw.mismatches.map((m) => [m.kind, m.input, m.exported]), [['source', 'c', 'zebra']]);
+  assert.equal(sw.pairs, 4);
+  // null control: identical sides still pass with every cut paired
+  const same = verifyRoundtrip(input, input.map((e) => ({ ...e })), { exportedFormat: 'drt' });
+  assert.equal(same.pass, true);
+  assert.equal(same.pairs, 5);
+});
+
+// ── E151: the fitted per-source offset is the source's dominant one ──
+test('verifyRoundtrip fits a source offset from the majority of its cuts, so two shifted cuts read as drift and fifty unchanged do not (E151)', () => {
+  const ev = (track, source, srcIn, recIn, dur) => ({ track, source, srcIn, srcOut: srcIn + dur, recIn, recOut: recIn + dur, speed: 100, reverse: false, transition: null, fps: 24 });
+  const input = Array.from({ length: 52 }, (_, i) => ev('V', 'S.mov', 1000 + 100 * i, 100 * i, 50));
+  // the FIRST two cuts shifted by 47745, the other fifty unchanged
+  const exported = input.map((e, i) => (i < 2 ? { ...e, srcIn: e.srcIn + 47745, srcOut: e.srcOut + 47745 } : { ...e }));
+  const r = verifyRoundtrip(input, exported, { exportedFormat: 'drt' });
+  assert.equal(r.srcOffsets['s'], 0, 'the dominant offset is 0');
+  assert.deepEqual(r.mismatches.map((m) => [m.kind, m.at, m.gotOffset]), [['source-frames', 0, 47745], ['source-frames', 1, 47745]]);
+  // a real whole-source rebase still fits as one offset and passes
+  const rebased = input.map((e) => ({ ...e, srcIn: e.srcIn + 500, srcOut: e.srcOut + 500 }));
+  const ok = verifyRoundtrip(input, rebased, { exportedFormat: 'drt' });
+  assert.equal(ok.pass, true);
+  assert.equal(ok.srcOffsets['s'], 500);
 });

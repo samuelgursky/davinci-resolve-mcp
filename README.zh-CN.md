@@ -2,7 +2,7 @@
 
 [English](README.md) | 简体中文
 
-[![Version](https://img.shields.io/badge/version-2.146.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
+[![Version](https://img.shields.io/badge/version-2.209.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![npm](https://img.shields.io/npm/v/davinci-resolve-mcp.svg?label=npm&color=CB3837)](https://www.npmjs.com/package/davinci-resolve-mcp)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](docs/reference/api-coverage.md)
 [![Tools](https://img.shields.io/badge/MCP%20Tools-36%20(353%20full)-blue.svg)](#服务器模式)
@@ -12,7 +12,7 @@
 [![Python](https://img.shields.io/badge/python-3.10+-green.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
-> 本翻译对应 v2.146.0 版 README。如与英文原版有出入，以 [英文原版](README.md) 为准。
+> 本翻译对应 v2.209.0 版 README。如与英文原版有出入，以 [英文原版](README.md) 为准。
 
 一个 Model Context Protocol (MCP) 服务器，让 AI 助手通过官方脚本 API 控制 DaVinci Resolve Studio（达芬奇）。它提供完整的 API 覆盖，外加带护栏的工作流助手，涵盖剪辑、媒体池整理、渲染设置、审阅标记、调色、Fusion、Fairlight、项目生命周期任务、扩展开发，以及不碰源媒体的媒体分析。
 
@@ -61,6 +61,12 @@ launchctl setenv PYTHON3HOME "$(python3 -c 'import sys; print(sys.prefix)')"
 
 必须用 `launchctl setenv` 而不是 `export`——Resolve 从 Dock 启动，看不到你 shell 的环境变量。之后重启 Resolve。安装时会顺带装一个 Lua 金丝雀脚本，帮你区分"Python 未被检测到"和"目录放错"。
 
+有两个坑（#182）。前缀里必须**同时**有 `lib/libpython3.X.dylib` 和 `bin/python3`——而且是这个**不带版本号**的名字。Homebrew 的 framework 构建经常只提供 `bin/python3.13`，在 Resolve 眼里这只算半个 Python；安装器的预检现在会明说这一点，而不是报告前缀可用。另外，`launchctl setenv` **在重启后不会保留**；如果几周之后脚本又不列出来了且没有任何报错，通常就是这个原因。想要持久生效，就把解释器放到 Resolve 本来就会查的位置（这条需要 `sudo`，并且先确认 `/usr/local/bin` 没有排在你常用 Python 的 `PATH` 前面）：
+
+```bash
+sudo ln -s "$(command -v python3)" /usr/local/bin/python3
+```
+
 已在免费版 21.0.3.7 和 Studio 19.1.3.7 上验证（均为 macOS）。v2.70.1（issue #106）加入的 Windows 路径发布时未经验证；后续免费版 21.0.1.11（issue #109）和免费版 21.0.3.7（issue #112）的用户报告证实，Windows 11 上桥接在 `%PROGRAMDATA%` 和 `%APPDATA%` **两处**都能安装、列出并正常服务，这些路径现在是已证实而非假设。Linux 同样已获证实：免费版 20.3.2.9 的用户报告（issue #129，Fedora 43）显示桥接可安装到 `~/.local/share/DaVinciResolve/Fusion/Scripts/Utility`，用系统 Python 就能直接枚举脚本（Linux 完全没有这套查找问题），并能端到端正常服务。现在没有任何平台停留在假设上：macOS 为本项目直接验证，Windows 和 Linux 来自用户报告。
 
 注意：桥接在服务期间会一直占用端口。v2.70.3 之前，Windows 上的桥接可能在 Resolve 退出后存活，挡住下一个会话的监听器；如果你用的是旧版本且桥接不响应了，检查是否有残留的 `fuscript.exe` 还占着端口。
@@ -104,6 +110,8 @@ DRX 调色写入**针对 Resolve Studio 做过实机校准**：调色参数默�
 ```
 
 `install.py` 会把两个配置条目都打印出来。核心是纯 JS/MIT，无必需的原生模块；少数功能需要用户自装工具（`audio` 需要 ffmpeg，部分路径需要 `sharp`/`better-sqlite3`）——调用 `capabilities` 工具可查看实时状态和安装提示。
+
+和 Python 服务器不同，这个服务器有 Node 依赖。`npx davinci-resolve-mcp setup` 会先把依赖装进托管安装目录（在 `resolve-advanced/` 下执行 `npm install --omit=dev --omit=optional`），装好之后才注册这个可执行文件。如果安装跑不起来（离线，或者没有 npm），setup 会改为给 advanced 服务器写一条 `npx` 命令，这样写出去的配置条目总是能启动。要修复一个已有的安装而不重跑 setup：`npx davinci-resolve-mcp sync`。
 
 ### Bradford Post Assistant——托管应用（封闭测试中）
 
@@ -149,6 +157,28 @@ DRX 调色写入**针对 Resolve Studio 做过实机校准**：调色参数默�
 | 音频与 Fairlight | 轨道/条目探测、源映射、带护栏的音频属性写入、人声分离、自动同步规划、转写/字幕探测 |
 | 渲染与交付 | 格式/编解码矩阵探测、渲染设置校验、队列任务生命周期检查、带护栏的快速导出 |
 | 扩展开发 | Fuse、DCTL、ACES DCTL 及 Resolve 页面 Lua/Python 脚本生命周期助手，带 MCP 标记的安全安装/移除 |
+
+### 操作信封（operation envelope）
+
+每个复合工具的返回值都会在原有 payload 旁边带一个 `_operation` 块，这样 agent 读的是同一种结构，而不是每个工具一套 key：`status`（`success` / `partial` / `blocked` / `failed`）、`verification`（其中 `contradiction` 单独成一档——Resolve 报告成功但回读结果不一致）、`changes`（语义增量）、`warnings`，以及一个 `execution_id`。
+
+有两种"缺失"是刻意保留其含义的。`verification.status: "unverified"` 表示*没有报告任何证据*，不等于"已检查且没问题"。`changes` 缺失表示这个动作没有报告增量，不等于什么都没改——在那里放一个空的 `{}`，等于对一次并未声明增量的剪辑给出一个自信而错误的回答。
+
+信封是带命名空间的，而不是平铺到顶层，因为 `status`、`operation`、`warnings`、`result` 和 `changes` 在这里本来就都是业务 key；平铺会改写后台任务的 `status: "done"` 和确认关卡的 `status: "confirmation_required"`。用 `setup(action="set_defaults", params={"result_envelope": "pure" | "legacy"})` 改变形态，单次调用用 `params={"envelope": ...}`，进程级用 `RESOLVE_MCP_RESULT_ENVELOPE`。
+
+### Agent 执行轨迹（"编辑器为什么这么做？"）
+
+多步 AI 操作会跨工具调用关联成统一的执行轨迹，聚合各工具耗时（`duration_ms`）、调用次数、累计语义增量（`items_deleted`、`items_added`）以及回读校验结果。通过 `resolve_control` 查看：`get_execution_trace(execution_id?)`、`list_recent_executions()`，或用 `begin_execution(request="...")` / `end_execution()` 圈定一段执行。
+
+轨迹保存在一个容量 100 条的内存环形缓冲里，并追加写入 `logs/execution-traces.jsonl`（就在 `server.log` 旁边，可用 `RESOLVE_MCP_TRACE_FILE` 改位置），文件到 8 MB 会轮转并保留一份上一代。`list_recent_executions` 会返回该路径以及是否可写，这样"日志是空的"和"根本没在写"就能区分开。记录的内容是工具名、动作、耗时、状态、语义增量和校验结果——不记录参数，也不记录文件路径。唯一的自由文本是你传给 `begin_execution` 的 `request`，在客户项目上请把它当成提交信息来写。
+
+### 导出执行审计报告
+
+`export_execution_report(execution_id?, format="markdown"|"json")` 会把一条轨迹写成可供审阅的审计文件，默认落在 `logs/execution-reports/<execution_id>.md`。传 `path` 可以写到任何你想要的位置——比如跟着某次套底放进当天的 TransferFiles 文件夹——并且会自动创建沿途的目录，所以发出去之前请先确认路径。已存在的文件不会被覆盖，除非显式传 `overwrite: true`。`inspect_operation(tool?, target_action?, target_params?)` 会在执行前评估操作的风险等级（`low`、`medium`、`high`、`critical`）、破坏性以及影响范围（`item`、`track`、`timeline`、`project`、`system`），而 `list_lifecycle_hooks()` 则可以查看当前生效的生命周期钩子。
+
+需要强调的是：这是一套基于动作名称的启发式判断，**不是模拟执行**——它完全不碰项目，也不会校验你传的参数。`recognised: false` 表示没有任何规则命中，那些等级只是按名字给出的默认值，而不是对这次操作的结论；`snapshot_available: null` 表示"是否能回滚未确定"，而不是"不能回滚"。所有随包启用的钩子都只做观察，没有任何一个会替换工具的返回值——因此 `dry_run` 永远会走到真正的处理函数，不会有人替一个本身不支持 dry-run 的动作凭空编一份预览出来。
+
+如果这次运行根本没有做过校验，报告里写的是**"not established — no checks recorded"（未确立——没有记录任何检查）**，而不是"通过"。没有证据是一个仍然悬而未决的问题；审计文件恰恰是最不该让读者把它读成"一切正常"的地方。
 
 ## 可选增强
 
@@ -221,6 +251,8 @@ DRX 调色写入**针对 Resolve Studio 做过实机校准**：调色参数默�
 | [多机位设置助手指南](docs/guides/multicam-setup-guide.md) | 堆叠时间线准备、助手/API 边界、Resolve UI 转换步骤 |
 | [剪辑决策指南](docs/guides/editorial-decision-guide.md) | 项目自有的剪辑手艺指引，用于分析与时间线决策 |
 | [套底 Avid AAF](docs/guides/conforming-an-avid-aaf.md) | 为何三条 Resolve 原生路径在合并交接上全部失败，以及哪条最危险 |
+| [原生 .drt 离线创作](docs/guides/native-drt-authoring.md) | 离线模板拼接式时间线创作：剪切、变速、转场、淡入淡出、标记、复合片段，以及背后的实测规律 |
+| [无界面剪辑循环](docs/guides/headless-edit-loop.md) | 纯命令行驱动 Resolve：哪些交换格式能重新链接并往返，GUI 与 -nogui 双双实测 |
 | [调色决策指南](docs/guides/color-decision-guide.md) | 项目自有的校色指引与 Resolve 调色 API 边界 |
 | [贡献与项目布局](docs/contributing.md) | 贡献流程、平台支持、安全说明、仓库结构 |
 | [安全策略](SECURITY.md) | 本地 stdio 信任边界、工具元数据、确认指引、漏洞报告 |

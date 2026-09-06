@@ -41,6 +41,14 @@ Existing tool call sites work unchanged. Two things to know when diagnosing it:
   canary, which always lists, so "Python not detected" is distinguishable from
   "wrong folder". The preflight is macOS-only — off macOS Resolve finds Python
   by other means, and running the check there was a false alarm (#106).
+  Two follow-ups from #182 worth having in hand when a user says the menu is
+  empty despite a set `PYTHON3HOME`: the prefix needs **both**
+  `lib/libpython3.X.dylib` and `bin/python3` under that **unversioned** name
+  (Homebrew framework builds often ship only `python3.X`, so half the check
+  passes on the very interpreter people reach for), and `launchctl setenv` does
+  not survive a reboot — a bridge that listed for weeks and then stopped, with
+  no error anywhere, is usually that. `sudo ln -s "$(command -v python3)"
+  /usr/local/bin/python3` is the persistent alternative.
 - **Windows: both script folders confirmed.** `%PROGRAMDATA%` (#109) and
   `%APPDATA%` (#112) have each been shown serving the bridge on Windows 11 free
   builds. If a user reports the menu entry missing on Windows, ask whether the
@@ -155,6 +163,170 @@ annotations as conservative because a single compound tool may expose both probe
 and mutation actions behind its `action` parameter. Continue to prefer
 `safe_*`, `dry_run`, `probe_*`, `capabilities`, and `boundary_report` actions
 before mutating Resolve state.
+
+---
+
+## Reading A Result: The Operation Envelope
+
+Every compound tool return carries an `_operation` block alongside its normal
+payload. It answers the three questions that otherwise need a different key per
+tool — did it happen, was it verified, what changed:
+
+```json
+{
+  "success": true,
+  "insert_frame_absolute": 86400,
+  "shift_frames": 48,
+
+  "_operation": {
+    "status": "success",
+    "operation": "timeline.ripple_insert",
+    "execution_id": "exec_d2c123817bee",
+    "verification": {
+      "status": "passed",
+      "checks": [{"check": "readback_verification", "passed": true, "missing_items": 0}],
+      "contradiction": false
+    },
+    "changes": {"items_added": 3, "items_moved": 17, "items_deleted": 0}
+  }
+}
+```
+
+- **`status`** — `success` | `partial` | `blocked` | `failed`. `blocked` means a
+  confirm gate is waiting; the payload still carries the `confirm_token` and
+  `preview` to act on.
+- **`verification.status`** — `passed` | `failed` | `partial` | `contradiction`
+  | `unverified`. **`contradiction` is the one to stop on**: Resolve reported
+  success and the readback disagrees. **`unverified` means no evidence was
+  reported, not that the operation was checked and found clean** — if you need
+  certainty there, go and read the state back.
+- **`changes`** — the semantic delta, present only when the action declared or
+  reported one. **Absent means "not reported", never "nothing changed"**, so do
+  not read a missing `changes` as a no-op.
+- **`warnings`** — present only when there are any.
+- **`execution_id`** — correlates one call across logs and transcripts.
+
+The envelope is namespaced under `_operation` rather than merged into the top
+level because `status`, `operation`, `warnings`, `result` and `changes` are all
+already domain keys on this server (a background job's `status` is `"done"`, a
+confirm gate's is `"confirmation_required"`). The payload is passed through
+untouched; read domain values where you always read them.
+
+Change the shape with `setup(action="set_defaults", params={"result_envelope": "pure" | "legacy" | "dual"})`,
+per call with `params={"envelope": "pure"}`, or per process with
+`RESOLVE_MCP_RESULT_ENVELOPE`. `pure` returns only the envelope with the payload
+nested under `result`; `legacy` adds nothing.
+
+---
+
+## Agent Observability: Execution Traces ("Why did the editor do this?")
+
+Multi-step AI operations (such as detecting pauses, deleting multiple timeline
+items, and verifying the result) correlate across calls into unified execution
+traces. Each trace captures the user request or prompt, tool execution timing,
+cumulative semantic deltas, and verification outcomes.
+
+Example trace shape returned by `resolve_control(action="get_execution_trace")`:
+
+```json
+{
+  "execution_id": "exec_8f91c7a210bc",
+  "request": "Remove all pauses longer than 800ms",
+  "status": "success",
+  "started_at": "2026-09-04T07:30:00Z",
+  "ended_at": "2026-09-04T07:30:02Z",
+  "duration_ms": 2845,
+  "tools": [
+    {
+      "tool": "media_analysis.analyze_timeline",
+      "count": 1,
+      "duration_ms": 821
+    },
+    {
+      "tool": "timeline.delete_item",
+      "count": 17,
+      "duration_ms": 1420
+    }
+  ],
+  "changes": {
+    "items_deleted": 17
+  },
+  "verification": {
+    "status": "passed",
+    "passed": true,
+    "checks": [{"check": "readback_verification", "passed": true}]
+  },
+  "warnings": []
+}
+```
+
+### Trace Actions on `resolve_control`
+
+- **`begin_execution(request?, execution_id?, initiator?)`**: Opens a scoped
+  multi-step execution. Subsequent tool calls in the session automatically thread
+  under this `execution_id` until ended.
+- **`end_execution(execution_id?, verification?, status?, notes?)`**: Closes the
+  active execution, finalizes timestamps and aggregated metrics.
+- **`get_execution_trace(execution_id?)`** / **`get_execution(execution_id)`**:
+  Fetches the trace for a specific ID, or the most recent execution if omitted.
+- **`list_recent_executions(limit?)`**: Returns the recent execution traces
+  (newest first, default limit 20).
+- **`export_execution_report(execution_id?, format?, path?, overwrite?, include_steps?)`**:
+  Writes a Markdown or JSON audit report for a trace. The default destination is
+  `logs/execution-reports/<execution_id>.md`; pass `format: "json"` for
+  structured output, `include_steps: false` for a shorter summary, or
+  `overwrite: true` to replace an existing report.
+- **`clear_executions(dry_run?)`**: Clears the in-memory execution trace buffer.
+- **`inspect_operation(tool?, target_action?, target_params?)`**: Evaluates operation risk
+  level (`low`, `medium`, `high`, `critical`), destructive potential, confirmation
+  requirements, and blast radius scope before executing an action.
+
+  **It is a heuristic over action names, not a simulation.** It does not touch
+  the project, does not validate your parameters, and cannot tell you whether
+  the clip ids you are holding exist. Read three fields before trusting it:
+  `recognised: false` means no rule matched and the levels are name-based
+  defaults rather than a finding; `snapshot_available: null` means rollback
+  availability was not determined, never that there is none; and
+  `pre_state_available` separates "no project open" from "state never read".
+  For an actual preview, use the action's own `dry_run` where it has one.
+- **`list_lifecycle_hooks()`**: Returns active execution lifecycle pipeline hooks
+  (`risk_classification`, `resolve_state_inspection`, `readback_verification`,
+  `drift_detection`, `provenance_trace`). All of them observe; none replaces a
+  tool result. `dry_run` therefore always reaches the real handler — a tool
+  either implements it or does not, and nothing synthesises a preview on its
+  behalf.
+
+Explicit correlation is also supported per-call: pass `params={"execution_id": ...}`
+or `params={"trace_id": ...}` in any tool call to associate it with a specific trace.
+
+Two things to know when a trace is not where you expect it. The buffer holds the
+**100 most recent** executions and is in memory only — a server restart empties
+it, and the on-disk `logs/execution-traces.jsonl` is the durable record.
+`list_recent_executions` returns a `persistence` block naming that file and
+whether it is writable; check it before concluding that nothing was traced,
+since the append is best-effort and will never fail a real edit to report a
+logging problem.
+
+Recorded per step: tool, action, `duration_ms`, status, semantic deltas and
+verification. **Not** recorded: parameters, file paths, clip or project names.
+The only free text is the `request` string passed to `begin_execution`.
+
+The file rotates at 8 MB, keeping one previous generation as
+`execution-traces.jsonl.1`. Both are gitignored along with the rest of `logs/`.
+Audit reports are separate point-in-time exports; `RESOLVE_MCP_TRACE_REPORT_DIR`
+moves their default directory without moving the append-only trace log.
+
+`path` is honoured as given — the report can be written anywhere, and the
+directories are created to reach it. That is deliberate (a conform's paperwork
+belongs beside the conform, not in `logs/`), so treat it the way you would any
+other export destination and do not invent a path near source media. The
+`execution_id` route cannot escape the report directory: it is sanitised to a
+filename.
+
+A report whose run recorded no verification checks renders **"not established
+— no checks recorded"** in the Passed row, never "yes" — the same rule as
+`verification.status: "unverified"` in the envelope. Do not report such a run
+to the user as verified.
 
 ---
 

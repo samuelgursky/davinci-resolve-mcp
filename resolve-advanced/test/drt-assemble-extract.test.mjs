@@ -528,3 +528,39 @@ test('assemble_project merges timelines with the four hard-won laws (E85)', asyn
   await assert.rejects(drtTool.handler({ action: 'assemble_project', args: {
     outputPath: tmp('.drp'), timelines: [spec('X', 0), spec('X', 0)] } }), /unique/);
 });
+
+test('assemble_project folders: bins register in the parent folder blob (E86/E87)', async () => {
+  // The parent folder's FieldsBlob is the SUBFOLDER registry — with it
+  // blank, a bin's directory + MpFolder.xml import as NOTHING (its clips
+  // and their timelines vanish; measured). Media/timeline children are
+  // discovered by scan; subfolders are not. Assembled archives otherwise
+  // carry an EMPTY folder blob, matching Resolve's own native exports.
+  const requireC6 = createRequire(import.meta.url);
+  const { decodeKeyedDict } = requireC6('../vendor/drp-format/keyed-dict.js');
+  const out = tmp('.drp');
+  const spec = (name, folder) => ({ timelineName: name, folder, media: [{
+    mediaFilePath: '/m/a.mp4', spec: { width: 640, height: 360, frameCount: 480, fps: 24 },
+    cuts: [{ startFrame: 86400, durationFrames: 48 }] }] });
+  await drtTool.handler({ action: 'assemble_project', args: {
+    outputPath: out, targetAppVersion: '19.1.3',
+    timelines: [spec('R1', 'Reels'), spec('R2', 'Reels')],
+  }});
+  const zip = await JSZip.loadAsync(await fs.readFile(out));
+  const bin = await zip.file('MediaPool/Master/Reels/MpFolder.xml').async('string');
+  assert.equal((bin.match(/<Sm2MpTimelineClip DbId=/g) || []).length, 2, 'both reels in the bin');
+  const binId = bin.match(/<Sm2MpFolder DbId="([^"]+)"/)[1];
+  const master = await zip.file('MediaPool/Master/MpFolder.xml').async('string');
+  assert.equal((master.match(/<Sm2MpTimelineClip DbId=/g) || []).length, 0, 'no timeline clips left in Master');
+  assert.ok(master.includes(`<MpFolder>${binId}</MpFolder>`) === false, 'bin backref lives in the bin file, not Master');
+  const fb = master.match(/<Sm2MpFolder DbId="[^"]+">\s*<FieldsBlob>([0-9a-fA-F]+)<\/FieldsBlob>/);
+  assert.ok(fb, 'Master folder blob carries the registry');
+  // wrapper [u32 2][u32 len][0x81][zstd(inner protobuf f2=keyedDict)]
+  const raw = Buffer.from(fb[1], 'hex');
+  assert.equal(raw.readUInt32BE(0), 2);
+  assert.equal(raw[8], 0x81);
+  // find the keyed dict inside the inner bytes: field 0x12 len at inner[0]
+  const { zstdRawFrame } = requireC6('../vendor/drp-format/timeline-markers-blob.js');
+  assert.ok(zstdRawFrame, 'frame helper exported');
+  assert.ok(bin.includes('<FieldsBlob/>'), 'the bin itself carries an empty blob (native-export convention)');
+  await fs.unlink(out);
+});

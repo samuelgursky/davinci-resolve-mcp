@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xmeml version="5"><sequence><name>E110_FTW</name><rate><timebase>24</timebase><ntsc>FALSE</ntsc></rate>
+<media><video><format><samplecharacteristics><width>640</width><height>360</height><rate><timebase>24</timebase><ntsc>FALSE</ntsc></rate></samplecharacteristics></format>
+<track>
+<clipitem id="c1"><name>cut_src.mp4</name><start>0</start><end>96</end><in>24</in><out>120</out><file id="f1"><name>cut_src.mp4</name><pathurl>file:///m/cut_src.mp4</pathurl></file></clipitem>
+<transitionitem><start>84</start><end>108</end><alignment>center</alignment><effect><name>Cross Dissolve</name><effectid>Cross Dissolve</effectid><mediatype>video</mediatype></effect></transitionitem>
+<generatoritem id="g1"><name>Color Matte</name><start>96</start><end>192</end><in>0</in><out>96</out><effect><name>Color</name><effectid>Color</effectid><effectcategory>Matte</effectcategory><effecttype>generator</effecttype><mediatype>video</mediatype><parameter><parameterid>fillcolor</parameterid><name>Color</name><value><alpha>255</alpha><red>255</red><green>255</green><blue>255</blue></value></parameter></effect></generatoritem>
+<generatoritem id="g2"><name>Solid Color</name><start>192</start><end>240</end><in>0</in><out>48</out><effect><name>Solid Color</name><effectid>Solid Color</effectid><effecttype>generator</effecttype><mediatype>video</mediatype><parameter><parameterid>fillcolor</parameterid><name>Color</name><value><alpha>255</alpha><red>128</red><green>64</green><blue>191</blue></value></parameter></effect></generatoritem>
+</track></video></media></sequence></xmeml>

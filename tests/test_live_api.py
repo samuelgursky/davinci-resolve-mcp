@@ -16,6 +16,15 @@ import DaVinciResolveScript as dvr
 def test_api():
     results = {}
 
+    # This file is a live harness, not a unit test — it is named for how it is
+    # run by hand (`python3 tests/test_live_api.py`), which also makes pytest
+    # collect it. Off a machine with Resolve installed and running there is
+    # nothing here to exercise: `scriptapp` is not even present on the import
+    # stub the offline suite substitutes.
+    if not hasattr(dvr, 'scriptapp'):
+        print("SKIP: no DaVinci Resolve scripting module on this machine")
+        return
+
     # Connect
     resolve = dvr.scriptapp('Resolve')
     if not resolve:

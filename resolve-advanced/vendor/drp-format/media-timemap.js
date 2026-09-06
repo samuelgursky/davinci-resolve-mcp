@@ -86,6 +86,27 @@ function _decodeKeyframePoint(buf) {
  */
 function _decodeKeyframes(hex) {
   if (hex == null) return { origin: { recordSec: 0, sourceSec: 0 }, keyframes: [] };
+  // r19 KEYED-DICT form (E144): Resolve 19.1.3.7 itself writes KeyframesBA
+  // as a keyed dict of keyed-dict keyframes ({interp,YOut,YIn,Y,XOut,XIn,X}
+  // under keys '0','1',…) on every retime it makes (XMEML import, UI speed
+  // change, EDL M2 freeze) — the same shape buildConstantSpeedTimemapKeyed
+  // emits — while an EXPORT_DRT of a hand-conformed reel carried protobuf
+  // points. The reader used to throw on the keyed form ("unsupported wire
+  // type 7"), so a Resolve-made retime read as unknown. Keyframe 0 at X=0 is
+  // the origin (its Y = the source second the map starts on: 4.0 on a real
+  // ramp harvest); the rest are the points.
+  const kh = String(hex).replace(/[^0-9a-fA-F]/g, '');
+  if (kh.startsWith('00000001')) {
+    const pts = [];
+    for (const e of decodeKeyedDict(Buffer.from(kh, 'hex')).entries) {
+      const inner = decodeKeyedDict(Buffer.from(String(e.value), 'hex')).entries;
+      const get = (k) => { const f = inner.find((x) => x.key === k); return f ? Number(f.value) : 0; };
+      pts.push({ recordSec: get('X'), sourceSec: get('Y') });
+    }
+    pts.sort((a, b) => a.recordSec - b.recordSec);
+    const origin = pts.length && pts[0].recordSec === 0 ? pts.shift() : { recordSec: 0, sourceSec: 0 };
+    return { origin, keyframes: pts, keyed: true };
+  }
   const fields = decodeProtobuf(hex);
   const originField = fields.find((f) => f.field === 2 && f.wire === 1);
   const originSource = originField
@@ -120,7 +141,7 @@ function decodeTimemap(input) {
     const get = (k) => { const e = entries.find((x) => x.key === k); return e ? e.value : undefined; };
     const recordDurationSec = get('XMax');
     const sourceDurationSec = get('LastValidYOffset');
-    const { origin, keyframes } = _decodeKeyframes(get('KeyframesBA'));
+    const { origin, keyframes, keyed } = _decodeKeyframes(get('KeyframesBA'));
     const segments = _segments(keyframes, origin);
     // The EXACT speed lives in the keyframe ratios (source/record per segment); XMax and
     // LastValidYOffset are frame-quantized. `speed` is the first segment's (whole clip if 1 kf);
@@ -128,7 +149,7 @@ function decodeTimemap(input) {
     const speed = segments.length ? segments[0].speed : sourceDurationSec / recordDurationSec;
     const variable = segments.length > 1;
     return {
-      form: 'retimed', variable, speed, segments, keyframes,
+      form: 'retimed', variable, speed, segments, keyframes, origin, keyframeForm: keyed ? 'keyed' : 'protobuf',
       sourceDurationSec, recordDurationSec, entries,
     };
   }

@@ -418,6 +418,35 @@ def _source_position_fields(clip):
     return fields
 
 
+def _nested_named_composition(clip):
+    """(CompositionMob, inner segment) when `clip` references a NAMED CompositionMob
+    whose referenced slot holds editorial content — an Avid nested sequence used as a
+    clip (E125). None for MasterMobs and for the unnamed intermediate compositions
+    that subclips and group clips route through (those keep the reference chase)."""
+    try:
+        mob = getattr(clip, "mob", None)
+    except Exception:
+        return None
+    if mob is None or type(mob).__name__ != "CompositionMob" or not _usable_name(mob):
+        return None
+    try:
+        slot_id = getattr(clip, "slot_id", None)
+        slot = None
+        for candidate in getattr(mob, "slots", []) or []:
+            if slot_id is None or getattr(candidate, "slot_id", None) == slot_id:
+                if _is_editorial_slot(candidate):
+                    slot = candidate
+                    break
+        if slot is None:
+            return None
+        segment = getattr(slot, "segment", None)
+    except Exception:
+        return None
+    if segment is None:
+        return None
+    return mob, segment
+
+
 def _emit_source_clip(clip, *, index, track, rec, fps, transition=None):
     """Turn a SourceClip into a normalized event. Returns (event, length)."""
     try:
@@ -726,6 +755,11 @@ def _retime_fields(op_group):
     play = None
     speed_map = None
     offset_map = None
+    # An EXPLICIT zero play rate is a freeze (Avid motion effect at 0%,
+    # E104): PARAM_SPEED_RATIO_U == 0.0 or a flat PARAM_SPEED_MAP_U at 0.
+    # It must not read as "nothing recoverable" — a freeze that silently
+    # became 100% is the loudest timing lie of all.
+    zero_seen = False
     length = _length(op_group)
     for param in _op_parameters(op_group):
         cls = type(param).__name__
@@ -754,6 +788,8 @@ def _retime_fields(op_group):
                 continue
             if value:
                 play = value  # *_U family stores the play rate directly
+            else:
+                zero_seen = True
     curve = {}
     for key, param in (("playRate", speed_map), ("sourceOffset", offset_map)):
         if param is None:
@@ -782,7 +818,11 @@ def _retime_fields(op_group):
             return {"speedVarying": True, **extra}
         if play is None and values and values[0]:
             play = values[0]  # a flat map's single value IS the constant play rate
+        elif play is None and values and values[0] == 0:
+            zero_seen = True
     if not play:
+        if zero_seen:
+            return {"speedRatio": 0.0, "speed": 0, "reverse": False, "freeze": True, **extra}
         return extra
     return {
         "speedRatio": round(abs(play), 6),
@@ -1039,6 +1079,47 @@ def _walk_segment(segment, *, track, fps, rec, state, depth=0, transition=None):
         return declared
 
     if cls == "SourceClip":
+        # NESTED SEQUENCE (E125): a SourceClip that references a NAMED
+        # CompositionMob is an Avid nested timeline used as a clip. Its inner
+        # cuts are right here in the AAF, so flatten them into this record
+        # position through the reference's window (start/length) — the way
+        # OTIO Stacks flatten (E120) — instead of emitting the composition's
+        # NAME as a source reel the bridge cannot map. Unnamed compositions
+        # (subclips, group clips) keep the reference chase.
+        nested = _nested_named_composition(segment)
+        if nested is not None and depth < _MAX_DEPTH:
+            comp_mob, inner_segment = nested
+            state.setdefault("nestedRefs", set()).add(_usable_name(comp_mob))
+            length = _length(segment)
+            try:
+                start = int(getattr(segment, "start", 0) or 0)
+            except Exception:
+                start = 0
+            sub = {"idx": 1, "events": [], "unhandled": state.setdefault("unhandled", {}), "effectsWithoutEvents": state.setdefault("effectsWithoutEvents", {})}
+            _walk_segment(inner_segment, track=track, fps=fps, rec=0, state=sub, depth=depth + 1)
+            first = True
+            for ev in sub["events"]:
+                if ev.get("recIn") is None or ev.get("recOut") is None:
+                    continue
+                a, b = ev["recIn"] - start, ev["recOut"] - start
+                a2, b2 = max(0, a), min(length, b)
+                if b2 <= a2:
+                    continue
+                k = (float(ev.get("speed") or 100) / 100.0) * (-1 if ev.get("reverse") else 1)
+                flat = dict(ev)
+                flat["index"] = state["idx"]
+                flat["recIn"], flat["recOut"] = rec + a2, rec + b2
+                if flat.get("srcIn") is not None:
+                    flat["srcIn"] = int(round(flat["srcIn"] + (a2 - a) * k))
+                if flat.get("srcOut") is not None:
+                    flat["srcOut"] = int(round(flat["srcOut"] - (b - b2) * k))
+                flat["fromCompound"] = _usable_name(comp_mob)
+                if first and transition is not None and not flat.get("transition"):
+                    flat["transition"] = transition
+                first = False
+                state["events"].append(flat)
+                state["idx"] += 1
+            return length
         ev, length = _emit_source_clip(
             segment, index=state["idx"], track=track, rec=rec, fps=fps, transition=transition
         )
@@ -1161,6 +1242,21 @@ def _walk_components(sequence, *, track, fps, rec, state, depth, transition=None
     """
     start = rec
     pending_transition = transition
+    # Sequence start counts as black: a Transition with Filler (or nothing)
+    # on one side is a FADE. Synthesize zero-length BL pseudo-events so the
+    # bridge's black machinery (E91-E93) authors a real clip-to-generator
+    # dissolve — Resolve renders empty track as black, and the bridge grows
+    # the BL leg to cover its side of the overlap.
+    at_black = True
+
+    def _emit_bl(rec_pos, trans):
+        state["events"].append({
+            "index": state["idx"], "track": track, "source": "BL",
+            "srcIn": 0, "srcOut": 0, "recIn": rec_pos, "recOut": rec_pos,
+            "speed": 100, "reverse": False, "transition": trans, "fps": fps,
+        })
+        state["idx"] += 1
+
     components = getattr(sequence, "components", None)
     if components is None:
         components = [sequence]
@@ -1190,15 +1286,29 @@ def _walk_components(sequence, *, track, fps, rec, state, depth, transition=None
                 # be a worse lie than the malformed AAF that produced it.
                 rec = max(start, rec - duration)
                 continue
+            if pending_transition is not None and cls in ("Filler", "ScopeReference"):
+                # Transition then Filler = fade-OUT into black: the fade
+                # attaches to a synthetic BL leg at the overlap start.
+                _emit_bl(rec, pending_transition)
+                pending_transition = None
+            elif pending_transition is not None and at_black:
+                # Filler (or sequence start) then Transition then clip =
+                # fade-IN from black: zero-length BL predecessor at the
+                # overlap start; the bridge's boundary shift grows it.
+                _emit_bl(rec, None)
             rec += _walk_segment(
                 comp, track=track, fps=fps, rec=rec, state=state, depth=depth, transition=pending_transition
             )
             pending_transition = None
+            at_black = cls in ("Filler", "ScopeReference")
         except Exception:
             # Never let one bad component abort the whole sequence — but say so.
             _note_unhandled(state, cls)
             pending_transition = None
             continue
+    if pending_transition is not None:
+        # Transition as the LAST component = fade-out to the sequence end.
+        _emit_bl(rec, pending_transition)
     return rec - start
 
 
@@ -1208,7 +1318,8 @@ def _walk_slot(segment, *, prefix, fps, state):
 
     A NestedScope slot is a multi-layer track: each layer gets its own numbered label
     (V1..Vn / A1..An) and restarts at record 0, because layers are parallel, not
-    sequential. A plain (single-layer) slot keeps the flat "V"/"A" label.
+    sequential. A plain (single-layer) slot keeps the label the caller numbered it
+    with (first of its kind bare "V"/"A", then "A2", "A3" … per slot order — E109).
     """
     if type(segment).__name__ == "NestedScope":
         for n, layer in enumerate(_nested_layers(segment), start=1):
@@ -1416,6 +1527,13 @@ def probe(path):
             # `idx` is monotonic across the WHOLE mob, every slot and every nested layer.
             state = {"idx": 1, "events": [], "unhandled": {}, "effectsWithoutEvents": {}}
             edit_fps = None
+            # FLAT slots number per media kind in slot order (A, A2, A3 … / V, V2 …):
+            # an Avid turnover carries dialog, music and effects as SEPARATE flat
+            # sound MobSlots, and labelling them all "A" stacked every bed onto one
+            # lane where the bridge refuses the overlap (measured, E109). The first
+            # slot of a kind keeps the bare letter (compat with every reader that
+            # matches /^A$/); NestedScope layers keep their own layer numbering.
+            kind_ordinal = {"A": 0, "V": 0}
             for slot in getattr(mob, "slots", []) or []:
                 seg = getattr(slot, "segment", None)
                 if seg is None:
@@ -1427,7 +1545,11 @@ def probe(path):
                 fps = _fps_from_edit_rate(getattr(slot, "edit_rate", None))
                 if edit_fps is None:
                     edit_fps = fps  # picks the timecode slot to trust — see above
-                _walk_slot(seg, prefix=_media_kind_to_track(slot), fps=fps, state=state)
+                letter = _media_kind_to_track(slot)
+                kind_ordinal[letter] += 1
+                is_nested = getattr(seg, "class_name", "") == "NestedScope" or type(seg).__name__ == "NestedScope"
+                label = letter if (kind_ordinal[letter] == 1 or is_nested) else f"{letter}{kind_ordinal[letter]}"
+                _walk_slot(seg, prefix=label, fps=fps, state=state)
             events = state["events"]
             sequences.append(
                 {
@@ -1457,9 +1579,24 @@ def probe(path):
                     # A conform that silently loses 29 titles looks exactly like a
                     # conform that had none. Counted by operation name so it cannot.
                     "effectsWithoutEvents": dict(sorted(state.get("effectsWithoutEvents", {}).items())),
+                    # Compositions this sequence uses as clips (E126): the picker
+                    # should not offer a NESTED sequence as a turnover of its own.
+                    "nests": sorted(state.get("nestedRefs", set())),
+                    "nestedIn": [],
                     "events": events,
                 }
             )
+    # A composition used as a clip by another composition is NESTED in it — flag the
+    # child so a "which sequence?" picker can demote it (it still lists; its cuts also
+    # arrive flattened inside the parent, E125).
+    by_name = {}
+    for seq in sequences:
+        by_name.setdefault(seq["name"], []).append(seq)
+    for parent in sequences:
+        for child_name in parent.get("nests", []):
+            for child in by_name.get(child_name, []):
+                if child is not parent and parent["name"] not in child["nestedIn"]:
+                    child["nestedIn"].append(parent["name"])
     return sequences
 
 

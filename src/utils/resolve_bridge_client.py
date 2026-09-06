@@ -33,6 +33,18 @@ proxy deliberately does not.
   timeline item-by-item is the shape that bites.
 - **Bridge absence.** If the in-Resolve script is not running, construction fails
   with a clear message rather than pretending; there is nothing to fall back to.
+- **Incomplete replies.** A returned container longer than the surface's
+  `max_items` comes back short. That used to be invisible, and a short list is
+  indistinguishable from a genuinely short result — an 864-clipInfo
+  `AppendToTimeline` returned 500 items and a caller counted them as the whole
+  answer. The surface now reports every drop and `_BoundMethod` surfaces it
+  (`transport.truncations`, plus a warning naming the method).
+
+  It warns rather than raising, deliberately: the native call has already *run*
+  by the time the reply is encoded, so raising would turn completed Resolve work
+  — a placed 864-item assembly — into an error and orphan the result. The honest
+  handling is for the caller to stop treating a returned list as a count, which
+  is why the tools that report item counts re-read them from the timeline.
 """
 
 from __future__ import annotations
@@ -117,6 +129,31 @@ class BridgeTransport:
         # keeps request/response pairing simple and matches the _bridge_lock
         # discipline the rest of the server already follows.
         self._lock = threading.RLock()
+        #: Replies the surface reported as incomplete, newest last: one row per
+        #: (method, dropped, total). Kept so a caller that suspects a short
+        #: enumeration can prove it instead of inferring it from a count that
+        #: looks plausible. Bounded — this is a diagnostic, not a log.
+        self.truncations: List[Dict[str, Any]] = []
+
+    def note_truncation(self, method: str, truncated: Any) -> None:
+        """Record and announce a reply the surface could not carry in full."""
+        if not isinstance(truncated, dict):
+            return
+        row = {"method": method, **truncated}
+        with self._lock:
+            self.truncations.append(row)
+            del self.truncations[:-32]
+        # Shapes here come off the wire from a bridge that may be older than
+        # this client, so nothing is indexed or assumed present.
+        containers = truncated.get("containers")
+        first = containers[0] if isinstance(containers, list) and containers else {}
+        logger.warning(
+            "bridge reply for %s was TRUNCATED: %s of %s elements dropped (limit %s). "
+            "The returned list is not a count — re-read the object instead.",
+            method, truncated.get("dropped"),
+            first.get("total") if isinstance(first, dict) else None,
+            truncated.get("limit"),
+        )
 
     def request(self, operation: str, arguments: Dict[str, Any]) -> Any:
         payload = {
@@ -251,6 +288,7 @@ class _BoundMethod:
             {"target": self._handle, "method": self._name,
              "args": [_encode_argument(a) for a in args]},
         )
+        self._transport.note_truncation(self._name, (result or {}).get("truncated"))
         return _decode_value(self._transport, (result or {}).get("value"))
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
@@ -345,6 +383,7 @@ class BridgeProxy:
                 probe = self._transport.request("get_attribute",
                                                 {"target": self._handle, "name": name}) or {}
                 if probe.get("kind") == "value":
+                    self._transport.note_truncation(name, probe.get("truncated"))
                     return _decode_value(self._transport, probe.get("value"))
                 if (name in _FUSION_UNENUMERATED_METHODS
                         and self._methods() & _FUSION_OBJECT_MARKERS):

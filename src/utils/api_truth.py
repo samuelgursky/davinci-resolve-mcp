@@ -889,7 +889,20 @@ API_TRUTH: List[Dict[str, Any]] = [
                    "comp. WHAT IS GENUINELY MISSING: creation, cloning, and any "
                    "type/alignment/parameter detail — the transition's kind is "
                    "knowable ONLY from its name string, and there is no way to "
-                   "read its alignment (centered/start/end) or edit its duration.",
+                   "read its alignment (centered/start/end) or edit its duration. "
+                   "AUDIO NUANCE (measured 2026-09-01 on 19.1.3.7, E113): an "
+                   "audio cross-fade enumerates in GetItemListInTrack('audio', n) "
+                   "with an EMPTY GetName() (24 frames, centered on the cut, "
+                   "between the two clips) — so on audio lanes even the kind is "
+                   "not readable from the name. The discriminator that holds for "
+                   "BOTH: GetMediaPoolItem() is None AND GetProperty() is empty — "
+                   "BUT a Solid Color generator AND a subtitle item read the same "
+                   "way (GetProperty() None, no MediaPoolItem; measured E115), so "
+                   "that pair only separates clips from non-clips. What separates "
+                   "a transition from a generator is GEOMETRY: a transition "
+                   "straddles a cut (one neighbour ends inside its span, another "
+                   "starts inside it) while a generator owns its span. "
+                   "timeline.get_items reports `kind` on that basis.",
         "recommended": "Automated QC of existing transitions IS possible and is "
                        "the main practical need — enumerate GetItemListInTrack, "
                        "treat any item whose GetProperty() is empty and whose "
@@ -2715,6 +2728,359 @@ API_TRUTH: List[Dict[str, Any]] = [
         "tags": ["timeline", "export", "drt", "markers", "silent-failure"],
         "submit": "bug",
         "mitigation": ["drt.assemble cuts[].markers"],
+    },
+    {
+        "symbol": "Timeline.Export EXPORT_DRT (clip, transition and pool-sequence field encodings)",
+        "object": "Timeline",
+        "signature": "(filePath, EXPORT_DRT) -> bool",
+        "reality": "Measured on a Studio 19.1.3.7 export of a 229-clip reel "
+                   "(E139). A SeqContainer clip (Sm2TiVideoClip / "
+                   "Sm2TiAudioClip) carries its record window as <Start> and "
+                   "<Duration> (frames, absolute), its SOURCE in-point as <In> "
+                   "(frames) — written EMPTY (<In/>) on every audio clip and on "
+                   "generator tails — <MediaFilePath>, <MediaStartTime> "
+                   "(seconds), <MediaFrameRate> as a 16-hex blob = one "
+                   "little-endian IEEE double + 8 pad bytes (24.0 = "
+                   "0000000000003840…), and <MediaTimemapBA>: tag byte 0x02 + "
+                   "one double (the media length in seconds) on a 100% clip, a "
+                   "keyed Sm2TimeMap opening 00000001… on a retimed clip and on "
+                   "generators — its KeyframesBA is the protobuf point form on "
+                   "that hand-conformed export, while every retime Resolve "
+                   "19.1.3.7 MAKES itself (XMEML import, UI speed change, EDL "
+                   "M2 freeze, speed ramp) writes the KEYED-DICT form (E144: "
+                   "keyframes {interp,YOut,YIn,Y,XOut,XIn,X} under keys "
+                   "'0','1',…; keyframe 0 at X=0 is the origin and its Y the "
+                   "source second the map starts on — 4.0 on a real ramp); "
+                   "both decode with the DRP library's decodeTimemap: "
+                   "the keyframe slope is the speed (0.79999 on all four "
+                   "retimed clips of a real reel = Premiere's 80 for the same "
+                   "cuts, srcOut = In + round(Duration × 0.8) matching "
+                   "Premiere's frame for frame), XMax 60000 with a zero slope "
+                   "is the freeze sentinel — a FREEZE at the source second the "
+                   "flat map holds, even when <In> is present: an XMEML import "
+                   "of a 100% clip came back with that flat map at Y=0 and In "
+                   "24, and its render is static at the source's frame 0 "
+                   "(E144, inter-frame change 0.02 vs 0.42 in the source) — "
+                   "Resolve's XMEML importer froze the clip silently; a "
+                   "negative slope is a reverse (a reversed tail leader). On a "
+                   "retimed clip <In> is RECORD-domain (E143): the map spans the "
+                   "whole source stretched by 1/speed and the clip windows into "
+                   "that, so the first source frame shown is In × speed — two "
+                   "timelines of the same reel carried the same 80% map with In "
+                   "52682 (bridge-authored: source 42145, Premiere's frame) and "
+                   "In 42145 (hand conform: source 33716, 8,429 frames early). An "
+                   "Sm2TiTransition sits in the same <Items> "
+                   "list as the clips with <Start>/<Duration> (its span), "
+                   "<PrettyType> (Cross Dissolve), <AlignmentType> and "
+                   "<Position>: type 2 centres the span on the cut, type 3 ends "
+                   "it at the cut (11/11 witnessed against the clip edges; the "
+                   "one-sided 8-frame fade-in is type 3 / Position 1). The "
+                   "container carries NO frame rate, start or resolution — they "
+                   "live in the pool folder's embedded Sm2Sequence: <FrameRate> "
+                   "(LE double blob), <MediaExtents> = two LE doubles, record "
+                   "start SECONDS then duration SECONDS (7192.0 → frame 172608 "
+                   "= 01:59:52:00 at 24), <Resolution> = two big-endian uint64, "
+                   "width then height.",
+        "recommended": "Read record timing from Start/Duration, source in from "
+                       "In (null when empty — do not fake 0 silently), fps and "
+                       "start from the pool sequence (frames = round(seconds × "
+                       "fps)); decode a keyed timemap to its speed (E140) and "
+                       "report a map the decoder cannot read as speed null "
+                       "rather than 100%. The "
+                       "parser exposes these and editorial.parse_interchange "
+                       "{format:'drt', content: PATH} walks one timeline into "
+                       "normalized events so two timeline versions diff through "
+                       "turnover_changelist (v19 vs v20 of a real reel: "
+                       "identical, 229 of 229 retained).",
+        "tags": ["timeline", "export", "drt", "interchange"],
+        "submit": "missing",
+        "mitigation": ["editorial.parse_interchange drt", "drt.parse"],
+    },
+    {
+        "symbol": "Timeline.Export EXPORT_OTIO (drops timeline markers)",
+        "object": "Timeline",
+        "signature": "(filePath, EXPORT_OTIO) -> bool",
+        "reality": "Timeline markers present and readable through the marker "
+                   "API do not appear in the exported .otio at all — the OTIO "
+                   "Marker schema exists and Resolve's importer reads it, but "
+                   "the exporter writes none (measured on Studio 19.1.3.7: two "
+                   "markers read back at frames 12/72; the export carried "
+                   "zero). Any marker-fidelity QC built on an OTIO re-export "
+                   "silently sees an unmarked timeline.",
+        "recommended": "Do not use EXPORT_OTIO to carry or verify markers. "
+                       "editorial.verify_roundtrip reports this case as "
+                       "`markersNotInExport` (honesty flag, not a failure); "
+                       "read markers through the marker API for fidelity "
+                       "checks, and author them offline via drt.assemble "
+                       "spec.markers when a .drt must carry them.",
+        "tags": ["timeline", "export", "otio", "markers", "silent-failure"],
+        "submit": "bug",
+        "mitigation": ["editorial.verify_roundtrip markersNotInExport"],
+    },
+    {
+        "symbol": "MediaPool.ImportTimelineFromFile EDL (drops BL fades)",
+        "object": "MediaPool",
+        "signature": "(filePath.edl, importOptions) -> Timeline",
+        "reality": "EDL dissolves involving the BL (black) reel are dropped "
+                   "silently on import (measured on Studio 19.1.3.7, E91): a "
+                   "CMX fade-in (zero-length BL cut + D event) vanishes "
+                   "wholesale — frame 0 renders at full brightness — and a "
+                   "fade-out to a BL leg imports the BL as a Solid Color "
+                   "generator but drops the dissolve, leaving a hard cut to "
+                   "black. Import succeeds; the importer authors dissolves "
+                   "normally between two real media clips. A related law: a "
+                   "hand-authored SINGLE-SIDED transition element (span at a "
+                   "lone clip head or tail, only one neighboring item) "
+                   "refuses to import entirely — Resolve creates no timeline.",
+        "recommended": "Conform EDLs with fades through "
+                       "drt.assemble_from_interchange: BL legs author as "
+                       "Solid Color generator elements and the fades as real "
+                       "clip-to-generator dissolves (render-verified: luma "
+                       "ramps 18->123 across a 24f fade-in and 123->16 "
+                       "across the fade-out, black tail holding 16). Audio "
+                       "BL fades (to silence) drop with a stated reason — "
+                       "there is no silence source to cross-fade against.",
+        "tags": ["edl", "import", "transitions", "fades", "silent-failure"],
+        "submit": "bug",
+        "mitigation": ["drt.assemble_from_interchange black-leg authoring"],
+    },
+    {
+        "symbol": "Timeline.Export EXPORT_EDL (video-only, reel AX, clip-name comments)",
+        "object": "Timeline",
+        "signature": "(filePath, EXPORT_EDL, EXPORT_NONE) -> bool",
+        "reality": "Resolve's CMX EDL writer (measured on Studio 19.1.3.7, "
+                   "E105) emits VIDEO events only — audio legs never appear; "
+                   "names every file source by the generic reel AX and carries "
+                   "the real names in `* FROM CLIP NAME:` / `* TO CLIP NAME:` "
+                   "comments; writes black legs as reel BL; places dissolve "
+                   "junctions at the CMX start-at-cut position (the overlap "
+                   "start, not the centered junction the timeline holds); and "
+                   "WRITES BL fades that its own EDL importer then drops. The "
+                   "FCP7 XML writer, by contrast, carries audio, writes "
+                   "transition-adjacent clip edges as -1 (the junction), and "
+                   "emits `speed` followed by `variablespeed` 0 in the same "
+                   "timeremap effect. AUDIO cross-fades are written the same way "
+                   "— a transitionitem on the audio track between -1-edged "
+                   "clipitems (measured E114); the OTIO writer emits them as a "
+                   "`Custom_Transition` with symmetric offsets on the Audio "
+                   "track.",
+        "recommended": "For round-trip QC prefer EXPORT_OTIO (carries audio, "
+                       "retimes as LinearTimeWarp/FreezeFrame, exact spans). "
+                       "When an EDL is the required deliverable, expect no "
+                       "audio (editorial.verify_roundtrip reports "
+                       "audioNotInExport) and resolve AX reels through the "
+                       "clip-name comments (parseEDL does). Use EXPORT_EDL — "
+                       "there is no EXPORT_CMX_3600 constant, and an unknown "
+                       "name reaches Export as a string that returns a bare "
+                       "False (timeline.export_timeline_checked now refuses "
+                       "it loudly).",
+        "tags": ["timeline", "export", "edl", "audio", "silent-failure"],
+        "submit": "missing",
+        "mitigation": ["editorial.verify_roundtrip audioNotInExport", "timeline.export_timeline_checked"],
+    },
+    {
+        "symbol": "ImportTimelineFromFile FCP7 XML generatoritem fillcolor (honoured; EXPORT_DRT blob layout)",
+        "object": "MediaPool",
+        "signature": "(filePath.xml) -> Timeline",
+        "reality": "Resolve's FCP7 XML importer HONOURS a generatoritem's "
+                   "`fillcolor` parameter (measured on Studio 19.1.3.7, E110): "
+                   "a Premiere-shaped Color Matte (effectid Color, category "
+                   "Matte) and a Solid Color generatoritem, both with "
+                   "<red>/<green>/<blue>/<alpha> 0..255 values, imported as "
+                   "Solid Color items and rendered Y81 U90 V240 (red) and "
+                   "Y41 U240 V110 (blue) — exact BT.601 limited-range values "
+                   "for a 640x360 timeline. EXPORT_FCP_7_XML writes the "
+                   "fillcolor back (same 0..255 channels). EXPORT_DRT carries "
+                   "the colour as a 55-byte <EffectFiltersBA> on the "
+                   "Sm2TiGenerator: 8-byte header (version 2, length 47), a "
+                   "fixed 20-byte prefix, a flag byte, then big-endian uint16 "
+                   "A R G B (0xffff = full) plus a pad word, then a second, "
+                   "black colour record; only the ARGB words differed between "
+                   "the red and blue captures. The default generator has an "
+                   "EMPTY EffectFiltersBA. The same importer does NOT carry a "
+                   "TRANSITION's parameters: a `Dip to Color Dissolve` "
+                   "transitionitem with a white and with a red `color` "
+                   "parameter imported as `Dip To Color Dissolve` elements "
+                   "whose 37-byte EffectFiltersBA were byte-identical "
+                   "(defaults), and the transition rendered inert (luma flat "
+                   "through its window, the E66 law) — the dip colour stays "
+                   "GUI-only on 19.1.3.7 (measured, E111). The writer emits "
+                   "a Solid Color's colour as the FxPlug parameter `input_1` "
+                   "(effectid FxPlugWrapper:C18E8B62_…), not `fillcolor` — an "
+                   "authored EffectFiltersBA colour came back exactly (white, "
+                   "128/64/191; E112). The OTIO writer CANNOT: EXPORT_OTIO "
+                   "emits a Solid Color as a Clip.2 named 'Solid Color' with a "
+                   "NULL media_reference, metadata {\"Resolve_OTIO\": {}} and a "
+                   "parameterless Transform effect — no colour anywhere "
+                   "(measured E117) — so only an XML re-export witnesses a "
+                   "generator colour (editorial.verify_roundtrip exportedFormat "
+                   "→ generatorColourNotInExport). Such an OTIO export DOES "
+                   "re-conform through drt.assemble_from_interchange (E118): the "
+                   "media-less generator clips walk as black legs and the "
+                   "clip→generator fade renders 124→16 — black, the colour "
+                   "having been lost by the writer. COMPOUND CLIPS: EXPORT_OTIO "
+                   "nests a compound as a Stack.1 inside the track (its "
+                   "source_range = the trim window into the compound; nested "
+                   "compounds nest Stacks recursively — measured E120 on a "
+                   "depth-2 timeline), while EXPORT_FCP_7_XML flattens the "
+                   "compound to a single media-less clipitem named after it "
+                   "(no inner content). editorial.parse_interchange flattens "
+                   "the OTIO Stacks into record time (fromCompound on each "
+                   "cut). EXPORT_DRT of the same timeline holds THREE "
+                   "SeqContainers (top + one per compound); a SeqContainer XML "
+                   "carries NO timeline name — its first <Name> is the first "
+                   "clip's — while MediaPool/Master/MpFolder.xml's "
+                   "Sm2MpTimelineClip / Sm2MpCompoundClip embed the "
+                   "<Sm2Sequence DbId> the container's track-level <Sequence> "
+                   "names (measured E127); the compound on the parent track is "
+                   "a plain Sm2TiVideoClip named after it with no MediaFilePath.",
+        "recommended": "Author fade-to-white / colour mattes by placing a "
+                       "Solid Color generator with that blob "
+                       "(drp-format placeGenerator `color`, drt.assemble "
+                       "elements[].color) — or carry an XMEML generatoritem "
+                       "fillcolor through editorial.parse_interchange; the "
+                       "bridge authors the coloured leg.",
+        "tags": ["xml", "import", "generator", "colour", "export", "drt"],
+        "submit": "missing",
+        "mitigation": ["drp-format placeGenerator color", "editorial.parse_interchange fillcolor", "drt.assemble_from_interchange"],
+    },
+    {
+        "symbol": "Premiere .prproj (2025, project Version 45) object graph — what a real file looks like",
+        "object": "editorial.parse_interchange / list_sequences (prproj)",
+        "signature": "(path.prproj) -> sequences/events",
+        "reality": "Measured on a real 130 MB colour turnover (E132): objects "
+                   "are defined in TWO id spaces — numeric ObjectID referenced "
+                   "by ObjectRef, and uuid ObjectUID referenced by ObjectURef — "
+                   "and Sequence, ClipProjectItem, MasterClip, Media, "
+                   "VideoClipTrack and AudioClipTrack are all UID-defined. A "
+                   "Sequence lists its tracks through <TrackGroups><TrackGroup>"
+                   "<Second ObjectRef> → VideoTrackGroup / AudioTrackGroup "
+                   "(a third DataTrackGroup is empty) → <TrackGroup><Tracks>"
+                   "<Track ObjectURef> → Video/AudioClipTrack → <ClipTrack>"
+                   "<ClipItems><TrackItems><TrackItem ObjectRef>. An item's "
+                   "record span sits under <ClipTrackItem><TrackItem> "
+                   "(Start/End ticks) and its source under ClipTrackItem.SubClip "
+                   "→ SubClip.Clip → VideoClip.Clip (InPoint/OutPoint, Source) → "
+                   "VideoMediaSource.MediaSource.Media (ObjectURef) → Media "
+                   "(FilePath / ActualMediaFilePath); SubClip.Name and "
+                   "MasterClip.Name are the fallbacks. A ZERO is written as "
+                   "ABSENCE (the counting leader at record 0 has End and no "
+                   "Start). Names are direct <Name> children. Legacy/synthetic "
+                   "files instead use ObjectID/ObjectRef throughout, "
+                   "<VideoTracks>/<AudioTracks> track lists, Start/End/InPoint/"
+                   "OutPoint on the item and Node/Properties names.",
+        "recommended": "Index both id spaces and follow both reference "
+                       "attributes; walk TrackGroups when present; read timing "
+                       "through the *TrackItem child; treat a missing Start/"
+                       "InPoint beside a present End/OutPoint as 0. With that, "
+                       "the turnover lists all 739 sequences and its reel walks "
+                       "335 events (it listed ZERO before). A NESTED SEQUENCE "
+                       "used as a clip has Clip.Source → VideoSequenceSource / "
+                       "AudioSequenceSource → SequenceSource.Sequence ObjectURef "
+                       "→ the nested Sequence (E133: 3607 such items in the "
+                       "reels project); parse_interchange flattens them through "
+                       "the clip\'s InPoint window with fromCompound. "
+                       "TRANSITIONS sit in a SEPARATE track list, "
+                       "ClipTrack.TransitionItems.TrackItems (E134): a "
+                       "Video/AudioTransitionTrackItem carries "
+                       "TransitionTrackItem.TrackItem{Start,End} (the span), "
+                       "DisplayName / MatchName (the effect), Alignment (ticks) "
+                       "and HasIncomingClip / HasOutgoingClip — false marks a "
+                       "fade from/to black or silence. MARKERS (E136): a "
+                       "sequence owns its markers through Sequence.MarkerOwner."
+                       "Markers → a Markers container → <Markers><Marker><Second "
+                       "ObjectRef> → a Marker object whose payload is a DVAMarker "
+                       "JSON string ({mMarkerID, mStartTime.ticks, mType, mName?, "
+                       "mComment?, mEndTime?}); clips own theirs the same way via "
+                       "Clip.MarkerOwner. Marker objects exist project-wide (1228 "
+                       "on the turnover) — only the owner chain says whose they are.",
+        "tags": ["prproj", "premiere", "interchange", "silent-failure"],
+        "submit": "missing",
+        "mitigation": ["editorial.parse_interchange prproj", "editorial.list_sequences"],
+    },
+    {
+        "symbol": "ProjectManager.CreateProject (discards an unsaved current project)",
+        "object": "ProjectManager",
+        "signature": "(projectName) -> Project",
+        "reality": "CreateProject replaces the CURRENT project with the new "
+                   "one. If the current project was never saved it is simply "
+                   "gone — no dialog headless, no error, and a later "
+                   "LoadProject of its name fails because the name existed "
+                   "only in memory (measured on Studio 19.1.3.7, E108: a "
+                   "project created via CreateProject with two imported "
+                   "timelines vanished when a media-template capture created "
+                   "its scratch project; the restore landed on a transient "
+                   "\"Untitled Project\" that is not in the project list "
+                   "either).",
+        "recommended": "SaveProject() before any CreateProject/LoadProject "
+                       "switch when the current project may be unsaved; the "
+                       "MCP's capture_media_template now does and refuses on a "
+                       "failed save.",
+        "tags": ["project", "lifecycle", "silent-failure", "headless"],
+        "submit": "missing",
+        "mitigation": ["media_pool.capture_media_template saves first", "project_manager.save"],
+    },
+    {
+        "symbol": "Timeline.Export EXPORT_FCP_7_XML (no pproTicksIn, -1 edges under transitions)",
+        "object": "Timeline",
+        "signature": "(filePath, EXPORT_FCP_7_XML, EXPORT_NONE) -> bool",
+        "reality": "Resolve's FCP7 XML writer (measured on Studio 19.1.3.7, "
+                   "E107, verbatim export kept as a fixture) emits NO "
+                   "pproTicksIn/pproTicksOut on any clipitem — the Premiere "
+                   "tick fields a Premiere-shaped oracle treats as the "
+                   "authoritative source position are simply absent, so a "
+                   "reader that requires them derives no source frame for "
+                   "ANY cut of a Resolve export. Every clipitem edge that "
+                   "sits under a transitionitem is written as -1 and means "
+                   "the transition's junction (span center for alignment "
+                   "center; the writer emitted `center` for every dissolve "
+                   "and fade authored centered), `out - in` is the record "
+                   "duration, and a -1 START edge's <in> is the source at the "
+                   "overlap start. With three centered transitions two "
+                   "equal-length clips both carry -1/-1 edges, so a reader "
+                   "must pair junctions in record order — the first pair "
+                   "that fits places both clips at the same position. Black "
+                   "legs are Solid Color generatoritems whose -1 edge "
+                   "resolves the same way.",
+        "recommended": "Read <in> as the literal source frame (Resolve reads "
+                       "and writes it that way), record-align it by the "
+                       "junction-minus-span-start offset on a -1 start, and "
+                       "walk -1/-1 clips with a record-order cursor. "
+                       "conform.snapshot ingest_xml and "
+                       "editorial.parse_interchange both do; the frame QC "
+                       "then samples each cut CLEAR of its transition "
+                       "windows (inside one the reference is a blend, or "
+                       "black for a fade).",
+        "tags": ["timeline", "export", "xml", "fcp7", "transitions", "silent-failure"],
+        "submit": "missing",
+        "mitigation": ["conform.snapshot ingest_xml", "editorial.parse_interchange", "conform.qc"],
+    },
+    {
+        "symbol": "Project.SetRenderSettings ExportSubtitle/SubtitleFormat (inert on 19.x)",
+        "object": "Project",
+        "signature": "({'ExportSubtitle': bool, 'SubtitleFormat': str}) -> bool",
+        "reality": "On Studio 19.1.3.7 the subtitle-delivery keys documented "
+                   "in the Resolve 21 API reference are accepted and fully "
+                   "inert: SetRenderSettings returns True for all three "
+                   "SubtitleFormat modes ('BurnIn', 'SeparateFile', "
+                   "'EmbeddedCaptions'), and the renders carry no burned-in "
+                   "pixels (frame-extract verified), no sidecar subtitle "
+                   "file, and no embedded caption track (stream-probe "
+                   "verified) — with the subtitle cues readback-verified on "
+                   "the timeline and the subtitle track enabled. Quirk: "
+                   "ExportSubtitle alone returns False; the pair returns "
+                   "True. All three outputs are stream-identical to a "
+                   "no-subtitle render.",
+        "recommended": "Do not trust a True return for subtitle delivery on "
+                       "a pre-21 host — verify the output (extract a frame "
+                       "for burn-in, list the target directory for a "
+                       "sidecar, ffprobe streams for embedded captions). On "
+                       "19.x subtitle export requires the UI render page. "
+                       "render.set_settings warns when these keys are set on "
+                       "a pre-21 host.",
+        "tags": ["render", "subtitle", "burn-in", "silent-failure", "version-gated"],
+        "submit": "bug",
+        "mitigation": ["render.set_settings warnings"],
     },
 ]
 

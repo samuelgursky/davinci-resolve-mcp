@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 353-tool granular server instead
 """
 
-VERSION = "2.146.0"
+VERSION = "2.209.0"
 
 import base64
 import os
@@ -60,6 +60,27 @@ from src.utils.page_lock import (
 )
 from src.utils.proc import safe_run
 from src.utils.readback import verify_by_readback, verification_stats as _verification_stats
+from src.utils import operation_result as _operation_result
+from src.utils.operation_result import (
+    build_operation_envelope as _build_operation_envelope,
+    get_envelope_mode as _get_envelope_mode,
+    set_envelope_mode as _set_envelope_mode,
+)
+from src.utils import execution_trace as _execution_trace
+from src.utils.execution_trace import (
+    get_execution_trace,
+    get_execution,
+    list_recent_executions,
+    begin_execution,
+    end_execution,
+    clear_executions,
+    export_execution_report,
+)
+from src.utils import execution_lifecycle as _execution_lifecycle
+from src.utils.execution_lifecycle import (
+    inspect_operation,
+    list_lifecycle_hooks,
+)
 from src.utils.render_ids import (
     render_codec_id_from_codecs as _render_codec_id_from_codecs,
     render_format_id_from_formats as _render_format_id_from_formats,
@@ -871,6 +892,37 @@ def _try_connect():
             resolve = None
             return None
 
+def _get_resolve_lifecycle_state() -> Optional[Dict[str, Any]]:
+    """Capture non-blocking pre-flight Resolve project and timeline metadata."""
+    global resolve
+    r = resolve
+    if r is None:
+        try:
+            r = _try_connect()
+        except Exception:
+            r = None
+    if r is None:
+        return None
+    try:
+        pm = r.GetProjectManager()
+        if not pm:
+            return None
+        proj = pm.GetCurrentProject()
+        if not proj:
+            return None
+        state: Dict[str, Any] = {"project_name": proj.GetName()}
+        tl = proj.GetCurrentTimeline()
+        if tl:
+            state["timeline_name"] = tl.GetName()
+            state["duration_frames"] = tl.GetEndFrame() - tl.GetStartFrame()
+            state["track_count_video"] = tl.GetTrackCount("video")
+            state["track_count_audio"] = tl.GetTrackCount("audio")
+        return state
+    except Exception:
+        return None
+
+_execution_lifecycle.get_lifecycle_pipeline().set_state_provider(_get_resolve_lifecycle_state)
+
 def _launch_resolve(headless: Optional[bool] = None):
     """Launch DaVinci Resolve and wait for it to become available.
 
@@ -1477,6 +1529,61 @@ def _guarded_action_name(args, kwargs) -> str:
     return str(args[0]) if args else "?"
 
 
+def _guarded_params(args, kwargs) -> Optional[Dict[str, Any]]:
+    """This call's `params` dict, wherever in the signature it was passed."""
+    if isinstance(kwargs.get("params"), dict):
+        return kwargs["params"]
+    if len(args) > 1 and isinstance(args[1], dict):
+        return args[1]
+    return None
+
+
+_TRACE_OBSERVER_ACTIONS = {
+    "get_execution_trace", "get_execution", "list_recent_executions",
+    "clear_executions", "begin_execution", "end_execution",
+    "export_execution_report",
+    "inspect_operation", "list_lifecycle_hooks",
+}
+
+
+def _record_execution_step(
+    tool_name: str,
+    action: str,
+    params: Optional[Dict[str, Any]],
+    raw_result: Any,
+    enveloped: Any,
+    duration_ms: int,
+) -> None:
+    if tool_name == "resolve_control" and action in _TRACE_OBSERVER_ACTIONS:
+        return
+    try:
+        env = None
+        if isinstance(enveloped, dict):
+            env = enveloped.get(_operation_result.ENVELOPE_KEY)
+            if not env and "execution_id" in enveloped:
+                env = enveloped
+        exec_id = env.get("execution_id") if isinstance(env, dict) else None
+        status = env.get("status") if isinstance(env, dict) else None
+        verification = env.get("verification") if isinstance(env, dict) else None
+        changes = env.get("changes") if isinstance(env, dict) else None
+        warnings = env.get("warnings") if isinstance(env, dict) else None
+
+        _execution_trace.record_step(
+            tool=tool_name,
+            action=action,
+            params=params if isinstance(params, dict) else None,
+            raw_result=raw_result,
+            duration_ms=duration_ms,
+            execution_id=exec_id,
+            status=status,
+            verification=verification,
+            changes=changes,
+            warnings=warnings,
+        )
+    except Exception as exc:  # pragma: no cover
+        logger.debug("Failed to record execution step: %s", exc)
+
+
 def _guard_missing_params(fn):
     """Tool decorator: report a missing parameter instead of leaking a KeyError.
 
@@ -1494,21 +1601,75 @@ def _guard_missing_params(fn):
     - **The signature is not (action, params).** `media_analysis` also takes
       `ctx: Optional[Context]`, so the wrapper forwards `*args, **kwargs` rather
       than naming parameters it does not know about.
+
+    It is also where the operation envelope is attached, for the same reason it
+    is where the missing-parameter guard lives: this is the one seam every tool
+    return passes through. In the default `dual` mode the payload is untouched
+    and the envelope rides under `_operation` — see `src/utils/operation_result`
+    for why it is namespaced rather than flattened.
     """
+    tool_name = getattr(fn, "__name__", "tool")
+
     if inspect.iscoroutinefunction(fn):
         @functools.wraps(fn)
         async def wrapper(*args, **kwargs):
+            action = _guarded_action_name(args, kwargs)
+            params = _guarded_params(args, kwargs)
+            lifecycle = _execution_lifecycle.get_lifecycle_pipeline()
+            ctx = _execution_lifecycle.ToolCallContext(
+                tool_name=tool_name,
+                action=action,
+                params=params or {},
+            )
+            decision = lifecycle.run_before(ctx)
+            if decision and not decision.proceed and decision.short_circuit_result is not None:
+                return _build_operation_envelope(tool_name, action, params, decision.short_circuit_result, duration_ms=0)
+
+            t0 = time.perf_counter()
             try:
-                return await fn(*args, **kwargs)
+                result = await fn(*args, **kwargs)
             except _MissingParam as exc:
-                return _missing_param_error(exc, _guarded_action_name(args, kwargs))
+                result = _missing_param_error(exc, action)
+            except Exception as exc:
+                duration_ms = max(0, int((time.perf_counter() - t0) * 1000))
+                lifecycle.run_on_error(ctx, exc, duration_ms)
+                raise
+            duration_ms = max(0, int((time.perf_counter() - t0) * 1000))
+            enveloped = _build_operation_envelope(
+                tool_name, action, params, result, duration_ms=duration_ms)
+            enveloped = lifecycle.run_after(ctx, enveloped, duration_ms)
+            _record_execution_step(tool_name, action, params, result, enveloped, duration_ms)
+            return enveloped
     else:
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
+            action = _guarded_action_name(args, kwargs)
+            params = _guarded_params(args, kwargs)
+            lifecycle = _execution_lifecycle.get_lifecycle_pipeline()
+            ctx = _execution_lifecycle.ToolCallContext(
+                tool_name=tool_name,
+                action=action,
+                params=params or {},
+            )
+            decision = lifecycle.run_before(ctx)
+            if decision and not decision.proceed and decision.short_circuit_result is not None:
+                return _build_operation_envelope(tool_name, action, params, decision.short_circuit_result, duration_ms=0)
+
+            t0 = time.perf_counter()
             try:
-                return fn(*args, **kwargs)
+                result = fn(*args, **kwargs)
             except _MissingParam as exc:
-                return _missing_param_error(exc, _guarded_action_name(args, kwargs))
+                result = _missing_param_error(exc, action)
+            except Exception as exc:
+                duration_ms = max(0, int((time.perf_counter() - t0) * 1000))
+                lifecycle.run_on_error(ctx, exc, duration_ms)
+                raise
+            duration_ms = max(0, int((time.perf_counter() - t0) * 1000))
+            enveloped = _build_operation_envelope(
+                tool_name, action, params, result, duration_ms=duration_ms)
+            enveloped = lifecycle.run_after(ctx, enveloped, duration_ms)
+            _record_execution_step(tool_name, action, params, result, enveloped, duration_ms)
+            return enveloped
 
     wrapper.__wrapped_by_missing_param_guard__ = True
     return wrapper
@@ -2607,6 +2768,53 @@ def _find_timeline_item_by_id(tl, timeline_item_id) -> Optional[Any]:
                 except Exception:
                     continue
     return None
+
+
+_TRANSITION_NAMES = {
+    "cross dissolve", "dip to color dissolve", "additive dissolve", "non-additive dissolve",
+    "smooth cut", "blur dissolve", "cross fade", "cross fade 0db", "cross fade +3db", "cross fade -3db",
+}
+
+
+def _describe_track_items(items, track_type: str):
+    """GetItemListInTrack entries → [{name, id, start, end, duration, kind}].
+
+    Transitions ARE items in that list (api_truth). What does NOT tell them
+    apart, measured 2026-09-01 on Studio 19.1.3.7 (E113/E115): the name (an
+    AUDIO cross-fade enumerates with an EMPTY name), GetMediaPoolItem() (a
+    Solid Color generator and a subtitle have none either) and GetProperty()
+    (generator and subtitle both return None, like a transition). What does:
+    GEOMETRY — a transition straddles a cut, so one neighbour ENDS inside its
+    span and another STARTS inside it; a generator or clip owns its span.
+    kind: clip (has a MediaPoolItem) | transition (known name, or no media and
+    straddles a cut) | generator (no media, owns its span) | subtitle (track).
+    """
+    raw = []
+    for it in items or []:
+        try:
+            has_media = it.GetMediaPoolItem() is not None
+        except Exception:
+            has_media = True  # an API surprise must not demote a clip
+        raw.append({
+            "name": it.GetName(), "id": it.GetUniqueId(), "start": it.GetStart(),
+            "end": it.GetEnd(), "duration": it.GetDuration(), "_media": has_media,
+        })
+    out = []
+    for r in raw:
+        name = str(r["name"] or "").strip().lower()
+        if track_type == "subtitle":
+            kind = "subtitle"
+        elif r["_media"]:
+            kind = "clip"
+        elif name in _TRANSITION_NAMES:
+            kind = "transition"
+        else:
+            s0, e0 = r["start"], r["end"]
+            ends_inside = any(o is not r and o["end"] is not None and s0 < o["end"] <= e0 for o in raw)
+            starts_inside = any(o is not r and o["start"] is not None and s0 <= o["start"] < e0 for o in raw)
+            kind = "transition" if (ends_inside and starts_inside) else "generator"
+        out.append({k: v for k, v in r.items() if k != "_media"} | {"kind": kind})
+    return out
 
 
 def _get_timeline_item_for_fusion(p: Dict[str, Any]):
@@ -5196,6 +5404,15 @@ def _timeline_ripple_insert_impl(proj, tl, p: Dict[str, Any], *, resolve=None) -
         "readback": {"after_counts": after_counts, "missing": missing},
         "gap_frames_by_track": gap_by_track,
         "warnings": warnings,
+        # Semantic delta for the operation envelope. Declared rather than
+        # inferred: this action deletes and re-appends the tail to move it, so
+        # a reader counting raw API calls would see a deletion that the edit
+        # did not make.
+        "_changes": {
+            "items_added": len(built_inserts),
+            "items_moved": len(tail_rows),
+            "items_deleted": 0,
+        },
     }
     if failures:
         result["failures"] = failures
@@ -6394,6 +6611,26 @@ def _variant_item_placement(item) -> Dict[str, Any]:
     }
 
 
+def _snapshot_track_item_counts(snapshot: Dict[str, Any]) -> Dict[str, int]:
+    """Per-track-type item counts read from a conform snapshot of a live timeline.
+
+    This is the ONLY honest answer to "what did the assembly actually place".
+    The obvious alternative — counting what `MediaPool.AppendToTimeline`
+    returned — is a witness derived from the same call it would be checking, and
+    it lies in two measured ways: the in-app bridge caps any proxied list at
+    `max_items` (an 864-clipInfo append came back as 500 items, so a variant
+    holding 432 video + 432 audio was reported as 250 + 250), and Resolve drops
+    colliding records from the reply without an error (see the api_truth entry
+    "MediaPool.AppendToTimeline (overlapping records — earlier item wins)").
+    Re-reading the timeline per track cannot be fooled by either.
+    """
+    counts: Dict[str, int] = {}
+    for track_type, block in (snapshot.get("tracks") or {}).items():
+        rows = (block or {}).get("tracks") or []
+        counts[str(track_type)] = sum(int(row.get("item_count") or 0) for row in rows)
+    return counts
+
+
 def _variant_audio_summary(built):
     """Video/audio range counts for an assembled variant, warning when it carries
     no audio. create_variant_from_ranges places exactly the ranges given, so a
@@ -6404,6 +6641,61 @@ def _variant_audio_summary(built):
     if audio == 0:
         summary["warning"] = "video-only (no audio): add ranges with track_type='audio' to carry sound"
     return summary
+
+
+def _variant_audio_accounting(variant: Dict[str, Any], *, planned_video: int,
+                              planned_audio: int) -> Dict[str, Any]:
+    """The planned-vs-placed block on a tighten / silence-ripple readback.
+
+    Shared by execute_tighten and execute_silence_ripple so the two cannot
+    drift: they answer the same operator question, "did every range I planned
+    actually land in the variant".
+
+    Placed counts come from the assembler's post-assembly re-read of the
+    timeline, never from what `AppendToTimeline` returned — see
+    `_snapshot_track_item_counts` for why the append's reply is not evidence.
+    A count that is short for a *reporting* reason and a count that is short
+    because material was dropped must never look the same here: on a silence
+    ripple the operator's whole fear is dropped material, so a disagreement is
+    stated outright rather than left to be discovered by hand-auditing tracks.
+    """
+    placed = variant.get("placed_item_counts")
+    video = (placed or {}).get("video")
+    audio = (placed or {}).get("audio")
+    accounting: Dict[str, Any] = {
+        "planned_audio_ranges": planned_audio,
+        "planned_video_ranges": planned_video,
+        "variant_audio_items": audio,
+        "variant_video_items": video,
+        "counts_source": "post-assembly per-track read of the variant timeline",
+    }
+    if video is None or audio is None:
+        accounting["note"] = (
+            "Placed item counts are UNAVAILABLE — the variant could not be re-read "
+            "after assembly. Verify with timeline_item get_items_in_track before "
+            "using this variant."
+        )
+        return accounting
+    disagreements = []
+    if video != planned_video:
+        disagreements.append(f"video {video}/{planned_video}")
+    if audio != planned_audio:
+        disagreements.append(f"audio {audio}/{planned_audio}")
+    if disagreements:
+        accounting["note"] = (
+            "PLACED COUNT DISAGREES WITH THE PLAN (placed/planned: "
+            + ", ".join(disagreements)
+            + ") — ranges did not land. Resolve drops colliding records from an "
+            "append without erroring; check readback.gaps_overlaps and the "
+            "tracks themselves before using this variant."
+        )
+    elif planned_audio:
+        accounting["note"] = "Variant carries audio mirrored from the video cuts."
+    else:
+        accounting["note"] = (
+            "Variant is VIDEO-ONLY (silent) — re-plan with include_audio=True for sound."
+        )
+    return accounting
 
 
 def _timeline_create_variant_from_ranges(proj, source_tl, p: Dict[str, Any]) -> Dict[str, Any]:
@@ -6556,16 +6848,21 @@ def _timeline_create_variant_from_ranges(proj, source_tl, p: Dict[str, Any]) -> 
     if p.get("cdl"):
         target_ids = [row.get("timeline_item_id") for row in items_out if row.get("timeline_item_id") and row.get("range", {}).get("media_type") == 1]
         look_result = _timeline_apply_look_to_items(new_tl, {"target_ids": target_ids, "cdl": p.get("cdl")})
+    # One snapshot, two consumers: gap detection and the placed-item counts.
+    # `items` above is only as complete as the append's REPLY, so it is not
+    # evidence of what landed — `placed_item_counts` re-reads the timeline.
+    snapshot = _timeline_conform_snapshot(new_tl, {})
     return {
         "success": True,
         "name": new_tl.GetName(),
         "id": new_tl.GetUniqueId(),
         "items": items_out,
+        "placed_item_counts": _snapshot_track_item_counts(snapshot),
         "placement_mismatches": placement_mismatches,
         "audio": _variant_audio_summary(built),
         "markers": marker_results,
         "look": look_result,
-        "gaps_overlaps": _detect_gaps_overlaps_from_snapshot(_timeline_conform_snapshot(new_tl, {}), {}),
+        "gaps_overlaps": _detect_gaps_overlaps_from_snapshot(snapshot, {}),
     }
 
 
@@ -6932,6 +7229,26 @@ def _export_timeline_checked(tl, p: Dict[str, Any]):
     # (which can be None and silently degrade the EXPORT_* args to strings — the
     # same failure class as issue #70).
     spec = _timeline_export_spec(p, get_resolve())
+    # An export type that did not resolve to a Resolve constant reaches
+    # Timeline.Export as a STRING, which returns a bare False — reported as
+    # success:false with no reason (measured E105 with a made-up
+    # EXPORT_CMX_3600: the real constant is EXPORT_EDL). Refuse loudly with
+    # the vocabulary instead of letting a typo read as an export failure.
+    # Only when this build exposes the export vocabulary at all (a bare stub
+    # or a degraded connection resolves nothing, and the old passthrough
+    # stays the honest behavior there).
+    _probe_const, _ = _timeline_export_value("EXPORT_OTIO", get_resolve())
+    vocab_known = not isinstance(_probe_const, str)
+    for field in ("export_type", "export_subtype"):
+        val = spec.get(field)
+        if vocab_known and isinstance(val, str) and val.startswith("EXPORT_"):
+            return _err(
+                f"{field} {val!r} is not a Resolve export constant on this build. "
+                f"Known aliases: {', '.join(sorted(_TIMELINE_EXPORT_ALIASES))}; "
+                "constants: EXPORT_AAF, EXPORT_DRT, EXPORT_EDL, EXPORT_FCP_7_XML, "
+                "EXPORT_FCPXML_1_8/1_9/1_10, EXPORT_OTIO (subtypes EXPORT_NONE, "
+                "EXPORT_AAF_NEW, EXPORT_AAF_EXISTING, EXPORT_CDL, EXPORT_SDL, EXPORT_MISSING_CLIPS)."
+            )
     if p.get("dry_run"):
         return _ok(path=path, would_export=True, spec={k: v for k, v in spec.items() if k != "export_type"})
 
@@ -7512,17 +7829,58 @@ def _import_timeline_checked(proj, mp, p: Dict[str, Any]):
 _SEQ_CONTAINER_RE = re.compile(r"(^|/)SeqContainer(\d*\.xml|/[^/]+\.xml)$")
 
 
+def _drp_pool_sequence_names(zf) -> Dict[str, Dict[str, str]]:
+    """Map an embedded Sm2Sequence DbId → {name, kind} from every MpFolder*.xml.
+
+    A SeqContainer XML carries NO timeline name — its first <Name> is the first
+    CLIP's (measured on Resolve 19.1.3.7's EXPORT_DRT of a compound timeline,
+    E127/E129) — while the pool's Sm2MpTimelineClip (a timeline) and
+    Sm2MpCompoundClip (a compound) embed the Sm2Sequence whose DbId the
+    container's track-level <Sequence> names. That is where names and kinds live.
+    """
+    out: Dict[str, Dict[str, str]] = {}
+    for entry in zf.namelist():
+        if entry.endswith("/") or not re.search(r"(^|/)MpFolder[^/]*\.xml$", entry):
+            continue
+        try:
+            xml = zf.read(entry).decode("utf-8", "replace")
+        except Exception:
+            continue
+        for m in re.finditer(r'<(Sm2MpTimelineClip|Sm2MpCompoundClip) DbId="([^"]+)">([\s\S]*?)</\1>', xml):
+            body = m.group(3)
+            nm = re.search(r"<Name>([\s\S]*?)</Name>", body)
+            name = nm.group(1).strip() if nm else None
+            kind = "compound" if m.group(1) == "Sm2MpCompoundClip" else "timeline"
+            for sm in re.finditer(r'<Sm2Sequence DbId="([^"]+)">', body):
+                out.setdefault(sm.group(1), {"name": name, "kind": kind})
+    return out
+
+
 def _drp_seq_containers(zf) -> List[Dict[str, Any]]:
-    """List a .drp/.drt zip's SeqContainers as [{entry, name, index}] (0-based, sorted)."""
+    """List a .drp/.drt zip's SeqContainers as [{entry, name, kind, index}] (0-based, sorted).
+
+    `name` is the POOL's name for the sequence when the archive carries one
+    (the container's own first <Name> is a clip's — E129); `kind` is
+    'timeline' | 'compound' | None.
+    """
     entries = sorted(n for n in zf.namelist() if not n.endswith("/") and _SEQ_CONTAINER_RE.search(n))
+    pool = _drp_pool_sequence_names(zf)
     out = []
     for index, entry in enumerate(entries):
         try:
             xml = zf.read(entry).decode("utf-8", "replace")
         except Exception:
             xml = ""
+        sid = re.search(r"<Sequence>([0-9a-f-]{36})</Sequence>", xml)
+        info = pool.get(sid.group(1)) if sid else None
         m = re.search(r"<Name>([\s\S]*?)</Name>", xml)
-        out.append({"entry": entry, "name": (m.group(1).strip() if m else None), "index": index})
+        fallback = m.group(1).strip() if m else None
+        out.append({
+            "entry": entry,
+            "name": (info["name"] if info and info.get("name") else fallback),
+            "kind": (info["kind"] if info else None),
+            "index": index,
+        })
     return out
 
 
@@ -7546,11 +7904,49 @@ def _extract_seqcontainer_from_drp(drp_path: str, seq_entry: str, out_path: str)
         seq_entries = [n for n in names if _SEQ_CONTAINER_RE.search(n)]
         keep_xml = zf.read(seq_entry).decode("utf-8", "replace")
         keep_seq_ids = re.findall(r"<Sequence>([0-9a-f-]{36})</Sequence>", keep_xml)
+        # COMPOUND CLIPS (E130, the E45 law ported from drt.extract_from_drp): a
+        # compound is a pool Sm2MpCompoundClip with an EMBEDDED Sm2Sequence
+        # whose tracks live in their OWN SeqContainer — dropping that container
+        # ships a compound that imports and reads back but is hollow. Walk the
+        # kept container's MediaRefs → compound pool elements → embedded
+        # sequence ids → keep those containers too, recursively.
+        mp_texts = {}
+        for name in names:
+            if name.endswith("MpFolder.xml"):
+                mp_texts[name] = zf.read(name).decode("utf-8", "replace")
+        seq_xml_by_entry = {seq_entry: keep_xml}
+        keep_containers = {seq_entry}
+        seen_refs = set()
+        queue = [keep_xml]
+        while queue:
+            xml = queue.pop()
+            for ref in re.findall(r"<MediaRef>([0-9a-f-]{36})</MediaRef>", xml):
+                if ref in seen_refs:
+                    continue
+                for mp_xml in mp_texts.values():
+                    cm = re.search(r'<Sm2MpCompoundClip DbId="%s">[\s\S]*?</Sm2MpCompoundClip>' % re.escape(ref), mp_xml)
+                    if not cm:
+                        continue
+                    seen_refs.add(ref)
+                    im = re.search(r'<Sm2Sequence DbId="([0-9a-f-]{36})">', cm.group(0))
+                    if not im:
+                        continue
+                    inner = im.group(1)
+                    for entry_name in seq_entries:
+                        if entry_name in keep_containers:
+                            continue
+                        sx = seq_xml_by_entry.get(entry_name)
+                        if sx is None:
+                            sx = zf.read(entry_name).decode("utf-8", "replace")
+                            seq_xml_by_entry[entry_name] = sx
+                        if ("<Sequence>%s</Sequence>" % inner) in sx:
+                            keep_containers.add(entry_name)
+                            queue.append(sx)
         with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as out:
             for name in names:
                 if name == "Gallery.xml":
                     continue
-                if name in seq_entries and name != seq_entry:
+                if name in seq_entries and name not in keep_containers:
                     continue
                 data = zf.read(name)
                 if name.endswith("MpFolder.xml") and len(seq_entries) > 1:
@@ -7578,6 +7974,7 @@ def _extract_seqcontainer_from_drp(drp_path: str, seq_entry: str, out_path: str)
                         "source": "import_from_drp",
                         "sourceDrp": drp_path,
                         "sourceSeqContainer": seq_entry,
+                        "keptSeqContainers": sorted(keep_containers),
                         "exportedFrom": "davinci-resolve-mcp timeline.import_from_drp",
                     },
                     indent=2,
@@ -7619,7 +8016,7 @@ def _import_from_drp(proj, mp, p: Dict[str, Any]):
         want_indexes = [want_indexes]
 
     selected: List[Dict[str, Any]] = []
-    available = [{"name": c["name"], "index": c["index"]} for c in containers]
+    available = [{"name": c["name"], "kind": c.get("kind"), "index": c["index"]} for c in containers]
     if want_names:
         by_name = {}
         for c in containers:
@@ -7641,7 +8038,11 @@ def _import_from_drp(proj, mp, p: Dict[str, Any]):
                 return _err(f"timelineIndex {i} out of range (0..{len(containers) - 1})", category="invalid_input")
             selected.append(match)
     else:
-        selected = list(containers)
+        # ALL means every TIMELINE (E129): a compound's inner container is not a
+        # timeline of its own — extraction keeps it with the timeline that
+        # places it — so importing it separately lands a hollow duplicate.
+        timelines_only = [c for c in containers if c.get("kind") == "timeline"]
+        selected = timelines_only if timelines_only else list(containers)
 
     # Per-timeline options passthrough (importSourceClips etc.) minus selection
     # keys; background is a top-level option, so each sub-step import runs
@@ -9549,6 +9950,20 @@ def _media_analysis_bool(value: Any, default: bool = False) -> bool:
     return bool(value)
 
 
+def _media_analysis_plan_project_root(created: Any) -> str:
+    """Extract the project root path from a created batch job.
+
+    `plan["output_root"]` holds the mapping `resolve_output_root()` returns
+    ({"success", "base_root", "project_root", "project_directory", ...}), not a
+    path. `str()` on it yields a dict repr, which is a non-empty string and so
+    passes a truthiness guard while naming no directory that exists.
+    """
+    output_root = (created.get("plan") or {}).get("output_root") or ""
+    if isinstance(output_root, dict):
+        output_root = output_root.get("project_root") or ""
+    return str(output_root)
+
+
 MEDIA_ANALYSIS_ASYNC_QUEUED = "queued"
 MEDIA_ANALYSIS_ASYNC_RUNNING = "running"
 
@@ -10067,6 +10482,63 @@ def _read_json_strict(path: str) -> Dict[str, Any]:
     except json.JSONDecodeError as exc:
         raise ConfigParseError(f"{path}: {exc}") from exc
     return payload if isinstance(payload, dict) else {}
+
+
+_SERVER_PREFS_ENV = "RESOLVE_MCP_SERVER_PREFS"
+
+
+def _server_preferences_path() -> str:
+    """Where server-general defaults live.
+
+    Separate from the media-analysis preferences file: these are settings about
+    how the server answers, not about how it analyses media, and mixing them
+    would make either file's name a lie.
+    """
+    override = os.environ.get(_SERVER_PREFS_ENV)
+    if override:
+        return os.path.realpath(os.path.abspath(os.path.expanduser(override)))
+    return os.path.join(project_dir, "logs", "server-preferences.json")
+
+
+def _read_server_preferences() -> Dict[str, Any]:
+    try:
+        return _read_json_strict(_server_preferences_path())
+    except ConfigParseError:
+        return {}
+
+
+def _write_server_preferences(preferences: Dict[str, Any]) -> None:
+    # Same atomic replace as the other preference stores: a crash mid-write must
+    # not truncate a file whose reader falls back to {}, since the next save
+    # would then persist that empty state over the user's settings.
+    path = _server_preferences_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp_path = f"{path}.tmp-{os.getpid()}-{threading.get_ident()}-{time.time_ns()}"
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as handle:
+            json.dump(preferences, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+        os.replace(tmp_path, path)
+    finally:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+
+
+def _apply_persisted_envelope_mode() -> str:
+    """Restore the saved result_envelope default at startup.
+
+    An explicit RESOLVE_MCP_RESULT_ENVELOPE wins: a process-level override is a
+    deliberate act for this run, and a saved preference should not silently
+    outrank it.
+    """
+    if os.environ.get("RESOLVE_MCP_RESULT_ENVELOPE"):
+        return _get_envelope_mode()
+    saved = _read_server_preferences().get("result_envelope")
+    if isinstance(saved, str):
+        _set_envelope_mode(saved)
+    return _get_envelope_mode()
 
 
 def _read_media_analysis_preferences() -> Dict[str, Any]:
@@ -13870,8 +14342,10 @@ def _capture_media_template(r, pm, p: Dict[str, Any]) -> Dict[str, Any]:
     <Element> + the timeline clips' <MediaRef> id. drt.assemble then
     TRANSPLANTS the cached element, which renders identically to native.
 
-    Switches the current project to a scratch project during capture and
-    switches back; requires the media file to exist locally.
+    Saves the current project, switches to a scratch project during capture
+    and switches back (an unsaved current project would otherwise be LOST —
+    CreateProject replaces it and the restore cannot load an unsaved name);
+    requires the media file to exist locally.
     """
     import hashlib
     import zipfile as _zipfile
@@ -13898,6 +14372,21 @@ def _capture_media_template(r, pm, p: Dict[str, Any]) -> Dict[str, Any]:
     except Exception:
         previous = None
 
+    # CreateProject(scratch) replaces the CURRENT project, and a current
+    # project that was never saved is simply gone afterwards — the restore
+    # below cannot LoadProject a name that exists only in memory (measured
+    # 2026-09-01, E108: a freshly created project with two imported timelines
+    # vanished; Resolve fell back to a transient "Untitled Project"). Save it
+    # first so the switch-back lands on the caller's own project.
+    if previous:
+        try:
+            if not pm.SaveProject():
+                return _err(
+                    f"could not save the current project {previous!r} before the capture switches "
+                    "away from it — an unsaved project would be lost; save it (project_manager.save) and retry"
+                )
+        except Exception as exc:  # pragma: no cover - API surprise
+            return _err(f"SaveProject before capture raised: {exc}")
     scratch = f"_mcp_media_tpl_{int(time.time())}"
     proj = pm.CreateProject(scratch)
     if not proj:
@@ -14928,8 +15417,17 @@ def _setup_updates_defaults() -> Dict[str, Any]:
     }
 
 
+def _setup_general_defaults() -> Dict[str, Any]:
+    return {
+        "result_envelope": _get_envelope_mode(),
+        "options": {"result_envelope": list(_operation_result.MODES)},
+        "preferences_path": _server_preferences_path(),
+    }
+
+
 def _setup_defaults_snapshot() -> Dict[str, Any]:
     return {
+        "general": _setup_general_defaults(),
         "media_analysis": _setup_media_analysis_defaults(),
         "updates": _setup_updates_defaults(),
         "destructive": _setup_destructive_defaults(),
@@ -15028,6 +15526,43 @@ def _setup_set_destructive_defaults(destructive_defaults: Dict[str, Any], dry_ru
         "updated_at": updated_at,
         "preferences_path": _media_analysis_preferences_path(),
     }
+
+
+def _setup_set_general_defaults(general: Dict[str, Any], dry_run: bool) -> Dict[str, Any]:
+    """Persist server-general defaults. Currently just the result envelope."""
+    if not general:
+        return {"changed": False, "recognized": False}
+
+    mode = _first_param(
+        general, "result_envelope", "resultEnvelope", "envelope_mode", "envelopeMode",
+        default=None)
+    if mode is None:
+        return {"changed": False, "recognized": False}
+
+    cleaned = str(mode).strip().lower()
+    if cleaned not in _operation_result.MODES:
+        return _err(
+            f"result_envelope must be one of {', '.join(_operation_result.MODES)}",
+            code="INVALID_ENUM_VALUE", category="validation",
+            state={"result_envelope": mode})
+
+    if dry_run:
+        return {"changed": True, "recognized": True, "result_envelope": cleaned,
+                "current": _get_envelope_mode()}
+
+    # Persist before applying: a saved setting that does not survive a restart
+    # is a setting the caller was told they changed and did not.
+    try:
+        preferences = _read_json_strict(_server_preferences_path())
+    except ConfigParseError as exc:
+        return _err(
+            f"server preferences file is unreadable: {exc}",
+            code="CONFIG_UNREADABLE", category="state",
+            remediation=f"Repair or delete {_server_preferences_path()}, then retry.")
+    preferences["result_envelope"] = cleaned
+    _write_server_preferences(preferences)
+    _set_envelope_mode(cleaned)
+    return {"changed": True, "recognized": True, "result_envelope": _get_envelope_mode()}
 
 
 def _setup_set_media_analysis_defaults(media_defaults: Dict[str, Any], dry_run: bool) -> Dict[str, Any]:
@@ -15643,6 +16178,17 @@ def setup(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any
                 },
                 "updates.check_interval_hours": {"values": "number >= 0.1", "storage": str(update_state_path(project_dir))},
                 "updates.snooze_hours": {"values": "number >= 0.1", "storage": str(update_state_path(project_dir))},
+                "general.result_envelope": {
+                    "description": (
+                        "Where the operation envelope goes. 'dual' (default) leaves the "
+                        "payload untouched and adds the envelope under '_operation'; "
+                        "'pure' returns only the envelope with the payload under 'result'; "
+                        "'legacy' adds nothing. Override per call with params={'envelope': ...}."
+                    ),
+                    "values": list(_operation_result.MODES),
+                    "current": _get_envelope_mode(),
+                    "storage": _server_preferences_path(),
+                },
                 "destructive.require_confirm_token": {
                     "description": "Require one-time confirmation tokens for registered high-risk destructive actions.",
                     "values": [True, False],
@@ -15674,12 +16220,24 @@ def setup(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any
     if action in {"set_defaults", "set", "configure"}:
         defaults = p.get("defaults") if isinstance(p.get("defaults"), dict) else {}
         merged = {**defaults, **{k: v for k, v in p.items() if k != "defaults"}}
+        # media_analysis owns every unclaimed key, so anything another setter
+        # owns has to be named here or it lands in the wrong store.
+        _general_keys = {
+            "general", "result_envelope", "resultEnvelope",
+            "envelope_mode", "envelopeMode",
+        }
+        general_defaults = {
+            **_setup_nested(merged, "general"),
+            **{k: v for k, v in merged.items() if k in _general_keys and k != "general"},
+        }
         media_defaults = {
             **_setup_nested(merged, "media_analysis", "mediaAnalysis"),
             **{
                 key: value
                 for key, value in merged.items()
-                if key not in {"updates", "mcp_updates", "mcpUpdates", "destructive", "dry_run", "dryRun"}
+                if key not in {"updates", "mcp_updates", "mcpUpdates", "dry_run", "dryRun"}
+                and key not in _general_keys
+                and key != "destructive"
             },
             **({
                 "timed_markers_default": _first_param(
@@ -15767,6 +16325,9 @@ def setup(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any
             } if any(key in merged for key in ("audit_log_path", "auditLogPath")) else {}),
         }
 
+        general_result = _setup_set_general_defaults(general_defaults, dry_run)
+        if general_result.get("error"):
+            return general_result
         media_result = _setup_set_media_analysis_defaults(media_defaults, dry_run)
         if media_result.get("error"):
             return media_result
@@ -15777,6 +16338,8 @@ def setup(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any
         if destructive_result.get("error"):
             return destructive_result
         recognized = (
+            bool(general_result.get("recognized"))
+            or
             bool(media_result.get("recognized"))
             or bool(update_result.get("recognized"))
             or bool(destructive_result.get("recognized"))
@@ -15787,6 +16350,7 @@ def setup(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any
         return _ok(
             dry_run=dry_run,
             changes={
+                "general": general_result,
                 "media_analysis": media_result,
                 "updates": update_result,
                 "destructive": destructive_result,
@@ -15881,6 +16445,25 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         — Captures the current Resolve UI state so it can be restored after a preview.
       restore_state(state_token) -> {success, restored: {...}}
         — Returns Resolve to a previously-saved state.
+      get_execution_trace(execution_id?) -> {success, trace}
+        — Correlated agent execution trace by execution_id, or most recent if omitted (no connection needed).
+      get_execution(execution_id) -> {success, trace}
+        — Alias for get_execution_trace.
+      list_recent_executions(limit?) -> {success, executions, count}
+        — List recent execution traces with aggregated tool calls, durations, and verifications (no connection needed).
+      begin_execution(request?, execution_id?, initiator?) -> {success, execution_id, started_at, request}
+        — Open a multi-step execution trace so subsequent tool calls thread under this execution ID.
+      end_execution(execution_id?, verification?, status?, notes?) -> {success, trace}
+        — Conclude an execution trace and compute final rollups.
+      export_execution_report(execution_id?, format?, path?, overwrite?, include_steps?) -> {success, path, bytes}
+        — Write a Markdown or JSON audit report for an execution trace (no connection needed).
+      clear_executions(dry_run?) -> {success, cleared}
+        — Clear the in-memory execution trace buffer.
+      inspect_operation(tool?, target_action?, target_params?) -> {tool, action, risk, destructive, blast_radius, confirmation_required, snapshot_available, recognised, reasons, pre_state, pre_state_available}
+        — Name-based heuristic, NOT a simulation: it never touches the project and does not validate params. recognised=false means no rule matched; snapshot_available=null means rollback was not determined, not that none exists.
+        — Pre-flight risk assessment and blast radius inspection for any tool action before execution (no connection needed).
+      list_lifecycle_hooks() -> {success, hooks, count}
+        — List active agent tool execution lifecycle hooks and their enabled status (no connection needed).
     """
     p = _params(params)
 
@@ -15967,6 +16550,88 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         return status
     if action == "list_jobs":
         return {"jobs": background_jobs.list_jobs()}
+
+    if action in {"get_execution_trace", "get_execution"}:
+        exec_id = p.get("execution_id") or p.get("id")
+        trace = _execution_trace.get_execution_trace(exec_id)
+        if not trace:
+            return _err(f"No execution trace found for id: {exec_id or 'latest'}", code="NOT_FOUND", category="state")
+        return {"success": True, "trace": trace}
+    if action == "list_recent_executions":
+        limit = _safe_int(p.get("limit"), 20, minimum=1, maximum=100)
+        executions = _execution_trace.list_recent_executions(limit=limit)
+        # Say where the on-disk log is and whether it is actually writable.
+        # The traces themselves live in a 100-entry in-memory ring, so "the
+        # list is short" and "the log is not being written" are different
+        # facts, and a caller should not have to guess which one they have.
+        return {
+            "success": True,
+            "executions": executions,
+            "count": len(executions),
+            "buffer_capacity": _execution_trace.MAX_RECENT_EXECUTIONS,
+            "persistence": _execution_trace.persistence_status(),
+        }
+    if action == "begin_execution":
+        req = p.get("request") or p.get("prompt") or p.get("reason")
+        exec_id = p.get("execution_id") or p.get("id")
+        res = _execution_trace.begin_execution(
+            request=req,
+            execution_id=exec_id,
+            initiator=p.get("initiator") or "agent",
+        )
+        return res
+    if action == "end_execution":
+        exec_id = p.get("execution_id") or p.get("id")
+        trace = _execution_trace.end_execution(
+            execution_id=exec_id,
+            verification=p.get("verification"),
+            status=p.get("status"),
+            notes=p.get("notes"),
+        )
+        if not trace:
+            return _err("No active or matching execution to end", code="NOT_FOUND", category="state")
+        return {"success": True, "trace": trace}
+    if action == "export_execution_report":
+        exec_id = p.get("execution_id") or p.get("id")
+        report_format = p.get("format") or p.get("report_format") or "markdown"
+        include_steps = _setup_bool(p.get("include_steps", p.get("includeSteps")), True)
+        overwrite = _setup_bool(p.get("overwrite"), False)
+        try:
+            res = _execution_trace.export_execution_report(
+                execution_id=exec_id,
+                report_format=report_format,
+                output_path=p.get("path") or p.get("output_path") or p.get("outputPath"),
+                overwrite=overwrite,
+                include_steps=include_steps,
+            )
+        except FileExistsError as exc:
+            return _err(str(exc), code="REPORT_EXISTS", category="invalid_input")
+        except ValueError as exc:
+            return _err(str(exc), code="INVALID_REPORT_FORMAT", category="invalid_input")
+        except OSError as exc:
+            return _err(
+                "Could not write execution report",
+                code="REPORT_WRITE_FAILED",
+                category="io",
+                reason=str(exc),
+            )
+        if not res:
+            return _err(f"No execution trace found for id: {exec_id or 'latest'}", code="NOT_FOUND", category="state")
+        return res
+    if action == "clear_executions":
+        dry_run = _setup_bool(p.get("dry_run", p.get("dryRun")), False)
+        if dry_run:
+            return {"success": True, "dry_run": True, "count": len(_execution_trace.list_recent_executions(100))}
+        res = _execution_trace.clear_executions()
+        return res
+    if action == "inspect_operation":
+        target_tool = p.get("tool") or p.get("tool_name") or "timeline"
+        target_action = p.get("target_action") or p.get("action") or p.get("op") or "delete_clips"
+        target_params = p.get("target_params") or p.get("params") or {}
+        return _execution_lifecycle.inspect_operation(target_tool, target_action, target_params)
+    if action == "list_lifecycle_hooks":
+        hooks = _execution_lifecycle.list_lifecycle_hooks()
+        return {"success": True, "hooks": hooks, "count": len(hooks)}
 
     # Control-panel actions don't require Resolve to be running.
     if action == "open_control_panel":
@@ -16182,7 +16847,7 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         if err:
             return _err(err)
         return {"success": bool(r.ExportUserPreferencesPreset(clean["name"], clean["path"]))}
-    return _unknown(action, ["launch","runtime_mode","get_version","api_truth","check_version_support","verification_stats","job_status","list_jobs","mcp_update_status","set_mcp_update_policy","ignore_mcp_update","snooze_mcp_update","clear_mcp_update_preferences","get_page","open_page","get_keyframe_mode","set_keyframe_mode","quit","get_fairlight_presets","set_high_priority","disable_background_tasks_for_current_session","list_user_preferences_presets","save_user_preferences_preset","load_user_preferences_preset","delete_user_preferences_preset","import_user_preferences_preset","export_user_preferences_preset","open_control_panel","control_panel_status","close_control_panel","save_state","restore_state"])
+    return _unknown(action, ["launch","runtime_mode","get_version","api_truth","check_version_support","verification_stats","job_status","list_jobs","get_execution_trace","get_execution","list_recent_executions","begin_execution","end_execution","export_execution_report","clear_executions","inspect_operation","list_lifecycle_hooks","mcp_update_status","set_mcp_update_policy","ignore_mcp_update","snooze_mcp_update","clear_mcp_update_preferences","get_page","open_page","get_keyframe_mode","set_keyframe_mode","quit","get_fairlight_presets","set_high_priority","disable_background_tasks_for_current_session","list_user_preferences_presets","save_user_preferences_preset","load_user_preferences_preset","delete_user_preferences_preset","import_user_preferences_preset","export_user_preferences_preset","open_control_panel","control_panel_status","close_control_panel","save_state","restore_state"])
 
 
 # ─── V2 C4: Per-field corrections with provenance + changelog ────────────────
@@ -18915,7 +19580,7 @@ def _render_preset_pin(proj, preset_name: str):
     return {"preset": preset_name, "loaded": True}, None
 
 
-def _render_settings_warnings(settings: Dict[str, Any]):
+def _render_settings_warnings(settings: Dict[str, Any], version_major: Optional[int] = None):
     """Inter-key combinations Resolve accepts and then silently ignores.
 
     SetRenderSettings returns True for these, so nothing downstream would ever
@@ -18929,6 +19594,17 @@ def _render_settings_warnings(settings: Dict[str, Any]):
         warnings.append(
             "AddFrameHandles is ignored while UseFullExtents is true: Resolve renders the "
             "clip's full extents and the handle count silently does nothing. Drop one of the two."
+        )
+    if ("ExportSubtitle" in settings or "SubtitleFormat" in settings) and (
+        version_major is not None and version_major < 21
+    ):
+        warnings.append(
+            "ExportSubtitle/SubtitleFormat are INERT on this Resolve generation: measured on "
+            "Studio 19.1.3.7, SetRenderSettings returns True for all three SubtitleFormat modes "
+            "and the render carries no burn-in, no sidecar file, and no embedded caption track "
+            "(cues readback-verified, subtitle track enabled). The keys are documented in the "
+            "Resolve 21 API reference. Verify the output (frame extract / sidecar check) before "
+            "claiming caption delivery; on 19.x burn-in requires the UI render page."
         )
     return warnings
 
@@ -19468,6 +20144,12 @@ def render(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
         "Same as project", or "None"). AddFrameHandles is ignored while
         UseFullExtents is true — the call still succeeds, so that pairing
         comes back in warnings rather than silently doing nothing.
+        ExportSubtitle (bool) + SubtitleFormat ("BurnIn" | "SeparateFile" |
+        "EmbeddedCaptions") are documented for Resolve 21 but measured INERT
+        on 19.x — SetRenderSettings returns True and the render carries no
+        burn-in, sidecar, or caption track — so setting them on a pre-21
+        host comes back in warnings; verify the output before claiming
+        caption delivery.
       list_presets() -> {presets}
       load_preset(name) -> {success}
       save_preset(name) -> {success}
@@ -19762,8 +20444,12 @@ def render(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
         if ignored_settings:
             result["ignored_settings"] = ignored_settings
         # Accepted-then-ignored key combinations (21.0.4 AddFrameHandles under
-        # UseFullExtents) read as a clean success without this.
-        warnings = _render_settings_warnings(settings)
+        # UseFullExtents; 19.x ExportSubtitle) read as a clean success without this.
+        try:
+            _ver_major = int((get_resolve().GetVersion() or [0])[0])
+        except Exception:
+            _ver_major = None
+        warnings = _render_settings_warnings(settings, version_major=_ver_major)
         if warnings:
             result["warnings"] = warnings
         return result
@@ -19973,7 +20659,7 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
       capture_media_template(media_path) -> {cache_path, media_ref}
         Captures the file's NATIVE Resolve media descriptors into
         ~/.config/davinci-resolve-mcp/media-templates/ via a disposable
-        project (switches projects during capture and switches back).
+        project (saves the current project, switches to a scratch project during capture and switches back — an unsaved current project would otherwise be lost).
         Offline drt.assemble then transplants them — the only measured way
         authored media actually RENDERS; synthesized descriptors import and
         read back fine but render black or 'Full resolution media not found'.
@@ -22137,7 +22823,7 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
         # get a runner. Reached either by the analyze_* divert (which sets
         # _async_mode) or by calling start_batch_job with background=true.
         job_id = str((created.get("job") or {}).get("job_id") or "")
-        project_root = str((created.get("plan") or {}).get("output_root") or "")
+        project_root = _media_analysis_plan_project_root(created)
         wants_runner = p.get("_async_mode") == MEDIA_ANALYSIS_ASYNC_RUNNING or (
             _media_analysis_bool(p.get("background"), False)
             or _media_analysis_bool(p.get("async_job"), False)
@@ -23752,24 +24438,11 @@ def edit_engine(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
                     structural_diff if include_details
                     else _compact_structural_diff(structural_diff)
                 ),
-                "audio_accounting": {
-                    "planned_audio_ranges": audio_keep_ranges,
-                    "planned_video_ranges": video_keep_ranges,
-                    # variant_* count placed items; variant["audio"] counts requested ranges.
-                    "variant_audio_items": sum(
-                        1 for it in (variant.get("items") or [])
-                        if (it.get("range") or {}).get("media_type") == 2
-                    ),
-                    "variant_video_items": sum(
-                        1 for it in (variant.get("items") or [])
-                        if (it.get("range") or {}).get("media_type") == 1
-                    ),
-                    "note": (
-                        "Variant carries audio mirrored from the video cuts."
-                        if audio_keep_ranges
-                        else "Variant is VIDEO-ONLY (silent) — re-plan with include_audio=True for sound."
-                    ),
-                },
+                # variant_* count PLACED items, re-read from the variant;
+                # variant["audio"] counts requested ranges.
+                "audio_accounting": _variant_audio_accounting(
+                    variant, planned_video=video_keep_ranges, planned_audio=audio_keep_ranges,
+                ),
             },
             "plan_id": plan.get("plan_id"),
         }
@@ -23888,23 +24561,9 @@ def edit_engine(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
                     structural_diff if include_details
                     else _compact_structural_diff(structural_diff)
                 ),
-                "audio_accounting": {
-                    "planned_audio_ranges": audio_keep_ranges,
-                    "planned_video_ranges": video_keep_ranges,
-                    "variant_audio_items": sum(
-                        1 for it in (variant.get("items") or [])
-                        if (it.get("range") or {}).get("media_type") == 2
-                    ),
-                    "variant_video_items": sum(
-                        1 for it in (variant.get("items") or [])
-                        if (it.get("range") or {}).get("media_type") == 1
-                    ),
-                    "note": (
-                        "Variant carries audio mirrored from the video cuts."
-                        if audio_keep_ranges
-                        else "Variant is VIDEO-ONLY (silent) — re-plan with include_audio=True for sound."
-                    ),
-                },
+                "audio_accounting": _variant_audio_accounting(
+                    variant, planned_video=video_keep_ranges, planned_audio=audio_keep_ranges,
+                ),
             },
             "plan_id": plan.get("plan_id"),
         }
@@ -24335,6 +24994,11 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         `sanitize.flagged` for human review, never silently applied. verify_threshold
         (default 0.90) sets the structural-match bar.
       import_from_drp(drpPath, timelineNames?|timelineIndexes?, import_source_clips?, dry_run?) -> {success, selected, imported, available, results, partial?}
+        timelineNames are the POOL's names (a SeqContainer's own first <Name>
+        is a clip's — measured E129); `available` rows carry kind
+        (timeline|compound). Omitted selection = every TIMELINE: a compound's
+        inner container is not a timeline of its own, it travels with the
+        timeline that places it (kept recursively in the extracted .drt, E130).
         CAVEAT (measured 19.1.3.7): Resolve refuses extracted containers even
         repacked with the source's project.xml — the sufficient import set
         beyond Resolve's own .drt exports is unmapped, so expect failures on
@@ -24542,7 +25206,7 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         if err:
             return _err(err)
         items = tl.GetItemListInTrack(track_type, track_index)
-        return {"items": [{"name": it.GetName(), "id": it.GetUniqueId(), "start": it.GetStart(), "end": it.GetEnd(), "duration": it.GetDuration()} for it in (items or [])]}
+        return {"items": _describe_track_items(items, track_type)}
     elif action == "delete_clips":
         # Find timeline items by unique IDs
         ids_set = set(p["clip_ids"])
@@ -26330,9 +26994,9 @@ _ACTION_HELP: Dict[str, Dict[str, Dict[str, Any]]] = {
     },
     "timeline": {
         "get_items": {
-            "summary": "List items on one track as a summary (name/id/start/end/duration).",
+            "summary": "List items on one track as a summary (name/id/start/end/duration/kind). Transitions ARE items — a video Cross Dissolve by name, an AUDIO cross-fade with an EMPTY name — and generators/subtitles look identical to them by media-pool item and properties (all None), so `kind` (clip | transition | generator | subtitle) is decided by geometry: a transition straddles a cut; `generator` also covers Fusion titles (Text+), which enumerate the same way.",
             "params": "track_type (video|audio|subtitle), index|track_index (1-based)",
-            "returns": "{items: [{name, id, start, end, duration}]}",
+            "returns": "{items: [{name, id, start, end, duration, kind}]}",
             "example": 'timeline(action="get_items", params={"track_type": "video", "index": 1})',
         },
         "get_items_in_track": {
@@ -31301,6 +31965,9 @@ def _install_threaded_tool_dispatch(fastmcp) -> int:
 
 
 if __name__ == "__main__":
+    # Before any tool can answer: a saved result_envelope default has to be in
+    # force on the first call, not the second.
+    logger.info(f"Result envelope mode: {_apply_persisted_envelope_mode()}")
     start_background_update_check(VERSION, project_dir, logger, env=_setup_update_env())
     _install_threaded_tool_dispatch(mcp)
 

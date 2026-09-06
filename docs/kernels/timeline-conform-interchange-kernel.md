@@ -135,14 +135,17 @@ files and the project DB.
   source). Also: reverse/retimed subclip DB repair (reversed `source_start` =
   `masterFrames − 1 − endoffset`, live-validated), sequence lineage store + diff +
   rollback (hashed snapshots), and per-cut frame QC (oracle-frame vs
-  reference-render, scale-corrected, red/yellow/cyan verdicts).
+  reference-render, scale-corrected, red/yellow/cyan verdicts; each cut is
+  compared clear of its transition windows, and Resolve's own FCP7 export
+  ingests with its `-1` edges resolved and its missing ticks tolerated).
 - **`color_trace`** — cross-project clip matching → a trace plan for carrying
   grades across a re-conform (pairs with the color kernel's `drx grade_transfer`).
 - **`offline_ref`** — offline-reference clips have **no scripting API** but live
   inside `.drp`/`.drt` as `<OfflineClip>` entries; patch them here.
 - **`editorial`** — `parse_interchange` (EDL/OTIO/XMEML natively; **AAF via pyaaf2**,
   multi-layer Avid turnovers included — honest refuse only when pyaaf2 is absent),
-  `turnover_changelist` (moved/retimed/replaced/new/gone with timing guards),
+  `turnover_changelist` (moved/retimed/trimmed/replaced/new/gone plus transitions
+  added/dropped/changed with fade in/out, with timing guards),
   `conform_manifest`, `marker_roundtrip`.
 - **`drt` / `project_db`** — timeline file authoring and DB patching.
 
