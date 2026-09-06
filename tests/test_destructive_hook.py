@@ -12,6 +12,7 @@ import unittest
 from unittest import mock
 
 from src.utils import destructive_hook
+from src.utils.execution_lifecycle import classify_operation_risk
 
 
 class ActionFiltering(unittest.TestCase):
@@ -145,6 +146,62 @@ class SecurityPolicy(unittest.TestCase):
             "high",
         )
 
+    def test_risk_level_comes_from_the_lifecycle_classifier(self) -> None:
+        """One classifier, not two.
+
+        A second risk table inside destructive_hook would let the safe-mode gate
+        and `inspect_operation` report different levels for the same call — the
+        gate refusing what pre-flight inspection had just called reversible.
+        """
+        for tool, action, params in (
+            ("timeline_markers", "add", {}),
+            ("timeline", "delete_track", {}),
+            ("media_pool", "delete_clips", {}),
+            ("timeline", "delete_clips", {"ripple": True}),
+            ("timeline_item", "set_name", {}),
+        ):
+            with self.subTest(action=f"{tool}.{action}"):
+                self.assertEqual(
+                    destructive_hook.risk_level_for_action(tool, action, params),
+                    classify_operation_risk(tool, action, params).level.value,
+                )
+
+    def test_unclassified_destructive_actions_report_risk_as_unestablished(self) -> None:
+        """`medium` from the name heuristic is a default, not a finding.
+
+        Safe mode deliberately does not block these — 80 of 108 registered
+        destructive actions are unclassified, so gating them would block most
+        ordinary edits. The flag is how a caller tells the two apart.
+        """
+        self._prefs(safe_mode=True)
+        destructive_hook.register_project_root_provider(lambda: None)
+        destructive_hook.register_pending_confirm_check(lambda *_args: False)
+
+        @destructive_hook.destructive_op("timeline")
+        def fake_timeline(action: str, params=None):
+            return {"success": True}
+
+        result = fake_timeline("add_track", {"trackType": "video"})
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["security"]["risk_level"], "medium")
+        self.assertFalse(result["security"]["risk_established"])
+        [event] = self._audit_events()
+        self.assertEqual(event["status"], "allowed")
+        self.assertFalse(event["risk_established"])
+
+    def test_classified_actions_report_risk_as_established(self) -> None:
+        self._prefs(safe_mode=False)
+        destructive_hook.register_project_root_provider(lambda: None)
+        destructive_hook.register_pending_confirm_check(lambda *_args: False)
+
+        @destructive_hook.destructive_op("timeline_markers")
+        def fake_markers(action: str, params=None):
+            return {"success": True}
+
+        result = fake_markers("add", {"frame": 3})
+        self.assertTrue(result["security"]["risk_established"])
+
     def test_safe_mode_blocks_high_risk_before_handler_runs(self) -> None:
         self._prefs(safe_mode=True)
         destructive_hook.register_project_root_provider(lambda: None)
@@ -200,7 +257,7 @@ class SecurityPolicy(unittest.TestCase):
 
         self.assertTrue(result["success"])
         self.assertEqual(calls, ["delete_clips"])
-        self.assertEqual(result["security"]["risk_level"], "high")
+        self.assertEqual(result["security"]["risk_level"], "critical")
         [event] = self._audit_events()
         self.assertEqual(event["status"], "allowed")
 

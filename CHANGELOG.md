@@ -8,14 +8,22 @@ Release history for the DaVinci Resolve MCP Server. The latest release is summar
 
 - **Destructive operations now carry explicit security metadata** — wrapped
   destructive tool calls receive an `operation_id` plus a `security` block with
-  a `risk_level` (`low`, `medium`, `high`, or `dangerous`). The existing
-  version-on-mutate and confirm-token gates stay intact, but callers now have a
-  stable policy surface to inspect and display before or after a Resolve
-  mutation.
-- **Safe mode blocks high-risk destructive calls by default when enabled** —
+  a `risk_level` (`low`, `medium`, `high`, or `critical`) and a
+  `risk_established` flag. The existing version-on-mutate and confirm-token
+  gates stay intact, but callers now have a stable policy surface to inspect
+  and display before or after a Resolve mutation.
+
+  Levels come from the same classifier that backs pre-flight
+  `inspect_operation`, so the gate and the inspection surface cannot disagree
+  about a call. `risk_established` is false when the classifier matched no rule
+  and the level is a name-based default rather than a finding — true today for
+  80 of the 108 registered destructive actions, which is a gap to close by
+  classifying them, not by gating them.
+- **Safe mode blocks high-risk destructive calls when enabled** —
   `setup(action="set_defaults", params={"destructive": {"safe_mode": true}})`
-  blocks high/dangerous actions before the underlying Resolve handler runs.
-  Reviewed one-off calls can proceed with `allow_risky_operation=true`.
+  blocks `high` and `critical` actions before the underlying Resolve handler
+  runs. Reviewed one-off calls can proceed with `allow_risky_operation=true`.
+  Unclassified actions are reported, not blocked.
 - **Security audit JSONL for destructive calls** — allowed, blocked, and
   pending-confirmation destructive calls write audit events to
   `logs/security-audit.jsonl` by default. Confirmation tokens are redacted in
@@ -23,6 +31,12 @@ Release history for the DaVinci Resolve MCP Server. The latest release is summar
 
 ### Changed
 
+- **Risk classification is now one table, not two** — the marker and
+  clip-colour actions classify as `low` instead of falling through the name
+  heuristic as unrecognised `medium`, and `timeline.lift_range`,
+  `timeline.overwrite_range`, `timeline.apply_cuts`, `timeline.delete_track`,
+  `media_pool.delete_folders` and `graph.reset_all_grades` are now classified
+  `high` wherever risk is reported, including pre-flight inspection.
 - **`setup` exposes destructive defaults** — `destructive.require_confirm_token`,
   `destructive.safe_mode`, `destructive.audit_log`, and
   `destructive.audit_log_path` are now visible through `schema`, persisted by
