@@ -2,6 +2,47 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.208.1 — #188: variant item counts come from the timeline
+
+### Fixed
+
+- **A silence ripple under-reported what it built, by exactly half.**
+  `execute_silence_ripple` returned `variant_video_items: 250` and
+  `variant_audio_items: 250` for a variant that really held 432 of each. The
+  bridge's `ResolveOperations._encode` truncated every proxied container to
+  `max_items` (500) with no signal anywhere, and `plan_silence_ripple`
+  interleaves video and audio — so a 432-range plan became 864 clipInfos in one
+  `AppendToTimeline`, Resolve placed and returned all 864, and the first 500
+  encoded are precisely 250 video plus 250 audio. The same response's
+  `readback.after.clip_count` said 864 and was right the whole time, because it
+  re-reads per track: two numbers from two sources in one payload, one of them
+  silently short. "Planned 432, got 250" reads exactly like 182 ranges failing
+  to land, which on a silence ripple is the operator's central fear, and
+  establishing that it was benign cost a full review cycle of hand-auditing
+  both tracks. Reported and fixed in #188 by @mart0vip.
+- **Dropped elements are now reported, never silent.** `op_call` and
+  `op_get_attribute` carry a `truncated` block naming the count, limit and
+  containers; the client records it on `transport.truncations` and logs the
+  method. It warns rather than raises deliberately — the native call has
+  already run by the time the reply is encoded, so raising would turn a
+  completed 864-item assembly into an error and orphan the timeline. A short
+  list that looks complete was the failure mode; the bound itself is
+  legitimate.
+- **The item ceiling no longer exceeds the handle table.** `max_items` was
+  clamped to 5000 against a 4096-entry `MAX_HANDLES`, so a long enough list
+  evicted its own earliest handles while it was still being minted and handed
+  the client ids that were already `stale_handle`. It now clamps to
+  `MAX_HANDLES`, with the default raised 500 → 2000.
+- **Counts come from the timeline, not the append reply.**
+  `create_variant_from_ranges` reports `placed_item_counts` from the
+  post-assembly per-track re-read it was already taking for gap detection — no
+  extra Resolve calls — and `execute_silence_ripple` and `execute_tighten` now
+  share one accounting helper, tighten having carried the identical bug. A
+  planned-vs-placed disagreement is stated outright instead of left to a hand
+  audit.
+- Beyond reporting: under the old ceiling a `cdl` applied to a large variant
+  only reached the first 250 video items.
+
 ## What's New in v2.208.0 — agent execution lifecycle & pre-flight risk inspection
 
 Adapted from the design contributed in PR #187.
