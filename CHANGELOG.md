@@ -2,6 +2,36 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.210.1 — frame capture and verify_output no longer read JobStatus in English
+
+### Fixed
+
+- **Single-frame capture failed with `RENDER_FAILED` on every non-English Resolve (issue #191).**
+  `GetRenderJobStatus()["JobStatus"]` is a localized display string — `"Concluso"`
+  on an Italian install — and the capture gate compared it to the English word,
+  so a finished render with the file already on disk reported "Render did not
+  complete". Completion is now decided by `_render_job_completed()` on
+  `CompletionPercentage` and `Error`, which are locale-independent, with the
+  file-written check as the real proof. `render.verify_output` carried the same
+  comparison in its "not Complete" warning and its missing-file warning; both
+  use the same rule now, so a localized finished job verifies and a localized
+  failed job still does not. Reported with an exact API readback by
+  @gabrieleleonardi-sya.
+
+### Documentation
+
+- New API truth entry for the localized `JobStatus` field, submitted to the
+  Blackmagic-facing report as a missing locale-independent status code, and a
+  regenerated `docs/reference/api-limitations.md`.
+
+### Validation
+
+- Unit tests cover the reporter's readback (`Concluso` at 100%), a localized
+  failed job carrying `Error`, and a localized incomplete job without one; the
+  English fast path is unchanged. No localized Resolve is available on the
+  release machine, so the live evidence is the reporter's session on Studio
+  21.0.2.4.
+
 ## What's New in v2.210.0 — every destructive action now carries a real risk rating
 
 ### Changed

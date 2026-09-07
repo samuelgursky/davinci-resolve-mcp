@@ -12,7 +12,7 @@ that none exists).
 
 **Verified on:** DaVinci Resolve Studio 21.0.2
 
-**Totals:** 41 missing capabilities, 50 bugs / unreliable behaviors.
+**Totals:** 42 missing capabilities, 50 bugs / unreliable behaviors.
 
 The authoritative source is the runtime-queryable `api_truth` ledger
 (`resolve_control api_truth "<query>"`); this document is generated from
@@ -227,6 +227,15 @@ equivalent, blocking full automation.
 - **Behavior:** Two conform-ingest measurements (2026-08-30, rich Resolve 19 AAF export + its sources). (1) A source with embedded timecode is referenced by the timeline clip's <MediaStartTime> in SECONDS (01:00:00:00 -> 3600); a transplant clone keeping the template donor's 0 imports and reads back fine but the render fails with 'Full resolution media not found at 01:00:00:00'. (2) The AAF export carries one event per audio CHANNEL: every A-track event of a dual-mono clip arrives twice with identical ranges.
 - **Workaround / current handling:** capture_media_template harvests mediaStartTime and the native clip elements; drt.assemble clones the source's own captured clip per cut (render-verified: the TC-bearing source plays picture and audio, and the full AAF route renders frame-accurately). Re-capture templates for TC-bearing media. The assemble bridge merges identical audio channel legs (report.audioChannelLegsMerged) instead of refusing them as a same-track overlap.
 - **Tags:** timecode, aaf, audio, drt, silent-failure
+
+### Project.GetRenderJobStatus JobStatus (localized display string)
+
+- **Object:** `Project`
+- **Signature:** `(jobId) -> {JobStatus, CompletionPercentage, TimeTakenToRenderInMs, Error?}`
+- **Behavior:** JobStatus is a display string that follows the application language, not an enum. An English install reports "Complete"; an Italian install reports "Concluso" for the same finished job — read back as {JobStatus: "Concluso", CompletionPercentage: 100, TimeTakenToRenderInMs: 1225} on Studio 21.0.2.4 / macOS 15 with the output file complete on disk (issue #191, reporter's session). Any code that compares the field to the English word fails every non-English Resolve with an error that says the opposite of what happened; this server's single-frame capture did exactly that until v2.210.1. CompletionPercentage is numeric and locale-independent, and Error is populated on a failed job in every language.
+- **Workaround / current handling:** Never gate on the JobStatus string. Treat a job as finished when CompletionPercentage reaches 100 and Error is empty, then confirm the output file exists — the file is the real proof either way (see the recordFrame entry above for a Complete job that wrote a stub). Report JobStatus verbatim for humans only. This server's _render_job_completed() applies the rule to frame capture and render.verify_output.
+- **Reference:** [issue #191](https://github.com/samuelgursky/davinci-resolve-mcp/issues/191)
+- **Tags:** render, localization, silent-failure
 
 ### MediaPool.ImportMedia (current-folder destination only)
 

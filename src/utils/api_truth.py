@@ -2183,6 +2183,37 @@ API_TRUTH: List[Dict[str, Any]] = [
         "issue": 164,
     },
     {
+        "symbol": "Project.GetRenderJobStatus JobStatus (localized display string)",
+        "object": "Project",
+        "signature": "(jobId) -> {JobStatus, CompletionPercentage, "
+                     "TimeTakenToRenderInMs, Error?}",
+        "reality": "JobStatus is a display string that follows the application "
+                   "language, not an enum. An English install reports "
+                   "\"Complete\"; an Italian install reports \"Concluso\" for "
+                   "the same finished job — read back as {JobStatus: "
+                   "\"Concluso\", CompletionPercentage: 100, "
+                   "TimeTakenToRenderInMs: 1225} on Studio 21.0.2.4 / macOS 15 "
+                   "with the output file complete on disk (issue #191, "
+                   "reporter's session). Any code that compares the field to "
+                   "the English word fails every non-English Resolve with an "
+                   "error that says the opposite of what happened; this "
+                   "server's single-frame capture did exactly that until "
+                   "v2.210.1. CompletionPercentage is numeric and "
+                   "locale-independent, and Error is populated on a failed "
+                   "job in every language.",
+        "recommended": "Never gate on the JobStatus string. Treat a job as "
+                       "finished when CompletionPercentage reaches 100 and "
+                       "Error is empty, then confirm the output file exists — "
+                       "the file is the real proof either way (see the "
+                       "recordFrame entry above for a Complete job that wrote "
+                       "a stub). Report JobStatus verbatim for humans only. "
+                       "This server's _render_job_completed() applies the rule "
+                       "to frame capture and render.verify_output.",
+        "tags": ["render", "localization", "silent-failure"],
+        "submit": "missing",
+        "issue": 191,
+    },
+    {
         "symbol": "Timeline.DeleteClips (requires the Edit page; flaky first attempt)",
         "object": "Timeline",
         "signature": "([TimelineItem], ripple) -> bool",

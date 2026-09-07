@@ -7,6 +7,7 @@ capture is a *read*: page, playhead, current timeline, gallery, and the temp
 directory all come back the way the caller left them.
 """
 import base64
+import json
 import os
 import unittest
 from unittest import mock
@@ -253,7 +254,9 @@ class CaptureRenderTest(unittest.TestCase):
         proj.SetRenderSettings.return_value = True
         proj.AddRenderJob.return_value = job
         proj.StartRendering.return_value = True
-        proj.GetRenderJobStatus.return_value = {"JobStatus": status}
+        proj.GetRenderJobStatus.return_value = (
+            status if isinstance(status, dict) else {"JobStatus": status}
+        )
 
         calls = []
         target = {}
@@ -324,6 +327,29 @@ class CaptureRenderTest(unittest.TestCase):
 
     def test_failed_render_is_reported(self):
         out, _, _ = self._capture({}, status="Failed")
+        self.assertEqual(out["error"]["code"], "RENDER_FAILED")
+
+    def test_localized_complete_status_is_not_a_failure(self):
+        # Issue #191: JobStatus follows the UI language ("Concluso" on an
+        # Italian install), so the English literal must not decide success —
+        # the job's numeric completion and the written file do.
+        out, _, _ = self._capture({}, status={
+            "JobStatus": "Concluso", "CompletionPercentage": 100,
+            "TimeTakenToRenderInMs": 1225,
+        })
+        self.assertFalse(isinstance(out, dict) and out.get("error"), out)
+
+    def test_localized_failed_status_is_still_a_failure(self):
+        out, _, _ = self._capture({}, status={
+            "JobStatus": "Fallito", "CompletionPercentage": 37,
+            "Error": "Media a piena risoluzione non trovato",
+        })
+        self.assertEqual(out["error"]["code"], "RENDER_FAILED")
+        self.assertIn("Media a piena risoluzione", json.dumps(out, default=str))
+
+    def test_localized_status_short_of_100_percent_is_a_failure(self):
+        # No Error field and no recognisable word: the percentage decides.
+        out, _, _ = self._capture({}, status={"JobStatus": "Annullato", "CompletionPercentage": 62})
         self.assertEqual(out["error"]["code"], "RENDER_FAILED")
 
     def test_success_without_a_file_is_reported(self):

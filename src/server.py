@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 353-tool granular server instead
 """
 
-VERSION = "2.210.0"
+VERSION = "2.210.1"
 
 import base64
 import os
@@ -14823,6 +14823,28 @@ def _playhead_frame_preview(tl, p: Dict[str, Any]):
             _restore_playhead(tl, original_tc, what="the thumbnail capture")
 
 
+def _render_job_completed(status: Optional[Dict[str, Any]]) -> bool:
+    """Whether GetRenderJobStatus says the job finished — without reading English.
+
+    JobStatus is a localized display string that follows the application
+    language: "Complete" on an English install, "Concluso" on an Italian one
+    (issue #191). Comparing it to the English literal fails every non-English
+    Resolve with an error that says the opposite of what happened. The
+    locale-independent signals are CompletionPercentage (numeric) and Error
+    (populated on a failed job), so those decide; the English literal is kept
+    only as a fast path for the common case.
+    """
+    status = status or {}
+    if str(status.get("JobStatus") or "") == "Complete":
+        return True
+    if status.get("Error"):
+        return False
+    try:
+        return float(status.get("CompletionPercentage")) >= 100
+    except (TypeError, ValueError):
+        return False
+
+
 def _playhead_frame_render(proj, tl, p: Dict[str, Any]):
     """Render exactly one frame — the only frame-accurate capture route.
 
@@ -14944,9 +14966,14 @@ def _playhead_frame_render(proj, tl, p: Dict[str, Any]):
             time.sleep(0.25)
             waited += 0.25
         status = _ser(proj.GetRenderJobStatus(job)) or {}
-        if status.get("JobStatus") != "Complete":
+        # Localized JobStatus ("Concluso" on an Italian install, issue #191)
+        # cannot be compared to the English word; the file check below is the
+        # real proof anyway.
+        if not _render_job_completed(status):
             return _err(
-                f"Render did not complete: {status.get('JobStatus')}",
+                f"Render did not complete: JobStatus {status.get('JobStatus')!r} "
+                f"at {status.get('CompletionPercentage')}%"
+                + (f" — {status.get('Error')}" if status.get("Error") else ""),
                 code="RENDER_FAILED", category="api_error",
                 state={"status": status, "frame": frame},
             )
@@ -20350,16 +20377,19 @@ def render(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
                                 "issue #164)."
                             )
             else:
-                if status.get("JobStatus") == "Complete":
+                if _render_job_completed(status):
                     warnings.append(
-                        "JobStatus is Complete but the output file does not exist."
+                        f"JobStatus is {job_status!r} (complete) but the output "
+                        "file does not exist."
                     )
-        if job_status and job_status != "Complete":
+        if job_status and not _render_job_completed(status):
             # Spotted live: a Failed job that wrote a stub file otherwise
             # produced verified:true — a duration ratio means nothing when
-            # Resolve itself says the job did not complete.
+            # Resolve itself says the job did not complete. Decided on the
+            # locale-independent fields, not the JobStatus word (issue #191).
             warnings.append(
-                f"JobStatus is {job_status!r}, not Complete"
+                f"JobStatus is {job_status!r} at "
+                f"{status.get('CompletionPercentage')}%, not complete"
                 + (f": {status.get('Error')}" if status.get("Error") else "")
             )
         result["warnings"] = warnings

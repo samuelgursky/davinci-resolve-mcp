@@ -310,3 +310,35 @@ class VerifyOutputJobStatusTest(unittest.TestCase):
         self.assertFalse(result["verified"], result)
         self.assertTrue(any("Failed" in w for w in result["warnings"]))
         self.assertTrue(any("Full resolution media" in w for w in result["warnings"]))
+
+
+class VerifyOutputLocalizedStatusTest(unittest.TestCase):
+    """Issue #191: JobStatus is a localized display string ("Concluso" on an
+    Italian install), so the English word can decide neither success nor
+    failure. CompletionPercentage and Error are locale-independent."""
+
+    def _run(self, status):
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "out.mov"), "wb") as fh:
+                fh.write(b"x" * 1024)
+            proj = _proj([_job(target_dir=tmp, MarkIn=86400, MarkOut=86400)], status)
+            with mock.patch.object(server, "_check", return_value=(mock.Mock(), proj, None)):
+                return server.render("verify_output", {"job_id": "job-1", "expected_frames": 1})
+
+    def test_localized_complete_job_verifies(self):
+        result = self._run({"JobStatus": "Concluso", "CompletionPercentage": 100,
+                            "TimeTakenToRenderInMs": 1225})
+        self.assertTrue(result["verified"], result)
+        self.assertEqual(result["warnings"], [])
+
+    def test_localized_failed_job_does_not_verify(self):
+        result = self._run({"JobStatus": "Fallito", "CompletionPercentage": 37,
+                            "Error": "Media a piena risoluzione non trovato"})
+        self.assertFalse(result["verified"], result)
+        self.assertTrue(any("Fallito" in w for w in result["warnings"]), result)
+        self.assertTrue(any("piena risoluzione" in w for w in result["warnings"]), result)
+
+    def test_localized_incomplete_job_without_error_does_not_verify(self):
+        result = self._run({"JobStatus": "Annullato", "CompletionPercentage": 62})
+        self.assertFalse(result["verified"], result)
+        self.assertTrue(any("62" in w for w in result["warnings"]), result)
