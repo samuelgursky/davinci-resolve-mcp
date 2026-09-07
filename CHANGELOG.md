@@ -2,6 +2,40 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.212.0 — graph risk follows the graph the call targets
+
+### Changed
+
+- **Every `graph` mutation now reports the blast radius of its `source`.**
+  The graph tool resolves `source` as `"timeline"` (the DEFAULT, the
+  timeline-level node graph), `"item"` (one clip), or
+  `"color_group_pre"`/`"color_group_post"` (a group's shared graph), and every
+  mutation lands on whichever graph that names. The classifier reported all
+  five graph actions as item-scoped regardless, so `reset_all_grades` on a
+  color-group graph — which wipes the grade of every clip in the group — read
+  as one item. The radius is now derived from the call: timeline, item, or
+  project for a color group, and the reasons name the target graph.
+
+- **`graph.set_lut` and `graph.apply_arri_cdl_lut` are HIGH on the timeline or a color-group graph, MEDIUM on one item.**
+  A plain `set_lut` call with no `source` restyles every clip on the timeline;
+  rating that MEDIUM under-stated it, while rating the item-scoped call HIGH
+  would over-block a one-clip LUT. Safe mode now blocks the broad cases
+  unless `allow_risky_operation=true`; the item case passes as before.
+  `reset_all_grades` and `apply_grade_from_drx` stay HIGH, `set_node_enabled`
+  stays LOW — only their reported scope changed.
+
+### Added
+
+- Tests: safe mode blocks broad LUT writes before the handler and allows
+  item-scoped ones; the classifier's LUT split; the radius of every graph
+  action across all five source values; and a medium-band matrix pinning
+  every remaining MEDIUM destructive action as recognised, destructive, not
+  confirmation-gated, and carrying its reviewed radius.
+
+- Adapted from PR #192 by @Rohitkanithi, which introduced the scope split
+  and its tests for the two LUT actions; landed with the radius generalised
+  to every graph action, since the same `source` governs them all.
+
 ## What's New in v2.211.0 — dry_run on an action that cannot honour it now refuses instead of executing
 
 ### Changed

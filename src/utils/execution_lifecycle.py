@@ -287,12 +287,41 @@ class RiskClassificationHook(LifecycleHook):
         ("timeline_item_color", "smart_reframe"),
         ("timeline_item_color", "create_magic_mask"),
         ("timeline_item_color", "regenerate_magic_mask"),
-        ("graph", "set_lut"),
-        ("graph", "apply_arri_cdl_lut"),
         # Importing or switching the active comp changes what renders.
         ("timeline_item_fusion", "import_comp"),
         ("timeline_item_fusion", "load_comp"),
     }
+
+    #: Raw graph LUT writes. Their level follows the graph they target (see
+    #: `_graph_scope`): MEDIUM on one item, HIGH on the timeline graph (the
+    #: tool's DEFAULT) or a color-group graph, where one call restyles every
+    #: clip on the timeline or in the group. Adapted from PR #192.
+    _GRAPH_LUT_ACTIONS: Set[Tuple[str, str]] = {
+        ("graph", "set_lut"),
+        ("graph", "apply_arri_cdl_lut"),
+    }
+
+    @staticmethod
+    def _graph_scope(params: Dict[str, Any]) -> Tuple["BlastRadius", str]:
+        """Blast radius of a `graph` tool call, from its `source` param.
+
+        The graph tool resolves `source` as "timeline" (default) ->
+        Timeline.GetNodeGraph(), "item" -> TimelineItem.GetNodeGraph(), and
+        "color_group_pre"/"color_group_post" -> the group's pre/post clip
+        graph. Every graph mutation — LUT, DRX apply, reset, node toggle —
+        lands on whichever graph that names, so the scope is a property of
+        the call, not of the action, and a rating that says "item" for a
+        reset of a color-group graph is wrong by the size of the group.
+        """
+        source = str(params.get("source") or "timeline")
+        if source == "item":
+            return BlastRadius.ITEM, "one timeline item's graph"
+        if source in {"color_group_pre", "color_group_post"}:
+            return (
+                BlastRadius.PROJECT,
+                f"a color group's {source} graph (every clip in the group)",
+            )
+        return BlastRadius.TIMELINE, "the timeline node graph (every clip on the timeline)"
 
     _READ_ONLY_PREFIXES = ("get_", "list_", "query_", "probe_", "inspect_", "export_", "check_")
 
@@ -319,14 +348,31 @@ class RiskClassificationHook(LifecycleHook):
             if params.get("ripple", False):
                 radius = BlastRadius.TIMELINE
                 reasons.append("Ripple mode alters downstream timeline synchronization")
+            elif tool_name == "graph":
+                radius, scope = cls._graph_scope(params)
+                reasons.append(f"Graph target: {scope}")
             else:
                 radius = BlastRadius.ITEM
             conf_required = True
             reasons.append(f"Destructive timeline edit: {action}")
+        elif pair in cls._GRAPH_LUT_ACTIONS:
+            destructive = True
+            radius, scope = cls._graph_scope(params)
+            if radius is BlastRadius.ITEM:
+                level = RiskLevel.MEDIUM
+                reasons.append(f"Raw graph LUT write '{action}' is scoped to {scope}")
+            else:
+                level = RiskLevel.HIGH
+                conf_required = True
+                reasons.append(f"Raw graph LUT write '{action}' targets {scope}")
         elif pair in cls._LOW_RISK_ACTIONS:
             level = RiskLevel.LOW
             destructive = True
-            radius = BlastRadius.ITEM
+            if tool_name == "graph":
+                radius, scope = cls._graph_scope(params)
+                reasons.append(f"Graph target: {scope}")
+            else:
+                radius = BlastRadius.ITEM
             reasons.append(f"Bounded reversible edit: {action}")
         elif pair in cls._MEDIUM_RISK_ACTIONS:
             level = RiskLevel.MEDIUM

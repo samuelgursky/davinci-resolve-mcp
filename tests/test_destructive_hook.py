@@ -369,6 +369,51 @@ class SecurityPolicy(unittest.TestCase):
         [event] = self._audit_events()
         self.assertEqual(event["status"], "allowed")
 
+    def test_safe_mode_blocks_broad_raw_graph_lut_mutations(self) -> None:
+        self._prefs(safe_mode=True)
+        destructive_hook.register_project_root_provider(lambda: None)
+
+        for action, params in (
+            ("set_lut", {"node_index": 1, "lut_path": "look.cube"}),
+            ("apply_arri_cdl_lut", {}),
+            ("set_lut", {"node_index": 1, "lut_path": "look.cube", "source": "color_group_pre"}),
+            ("apply_arri_cdl_lut", {"source": "color_group_post"}),
+        ):
+            calls: list[str] = []
+
+            @destructive_hook.destructive_op("graph")
+            def fake_graph(action: str, params=None):
+                calls.append(action)
+                return {"success": True}
+
+            with self.subTest(action=action):
+                result = fake_graph(action, params)
+                self.assertFalse(result["success"])
+                self.assertEqual(result["error"]["code"], "SAFE_MODE_BLOCKED")
+                self.assertEqual(result["security"]["risk_level"], "high")
+                self.assertEqual(calls, [])
+
+    def test_safe_mode_allows_item_scoped_raw_graph_lut_mutations(self) -> None:
+        self._prefs(safe_mode=True)
+        destructive_hook.register_project_root_provider(lambda: None)
+
+        for action, params in (
+            ("set_lut", {"node_index": 1, "lut_path": "look.cube", "source": "item"}),
+            ("apply_arri_cdl_lut", {"source": "item"}),
+        ):
+            calls: list[str] = []
+
+            @destructive_hook.destructive_op("graph")
+            def fake_graph(action: str, params=None):
+                calls.append(action)
+                return {"success": True}
+
+            with self.subTest(action=action):
+                result = fake_graph(action, params)
+                self.assertTrue(result["success"])
+                self.assertEqual(result["security"]["risk_level"], "medium")
+                self.assertEqual(calls, [action])
+
     # ── dry_run on actions without a native dry-run path ──────────────────
     #
     # Before v2.211.0 `timeline_markers.add` with dry_run=true added a real
