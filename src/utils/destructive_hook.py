@@ -252,6 +252,83 @@ DRY_RUN_DEFAULT_TRUE_ACTIONS: frozenset = frozenset({
 })
 
 
+UNSUPPORTED_DRY_RUN_ACTIONS: frozenset = frozenset({
+    ("timeline_markers", "add"),
+    ("timeline_markers", "delete_at_frame"),
+    ("timeline_markers", "delete_by_color"),
+    ("timeline_markers", "delete_by_custom_data"),
+    ("timeline_markers", "update_custom_data"),
+    ("timeline_item_markers", "add"),
+    ("timeline_item_markers", "add_flag"),
+    ("timeline_item_markers", "clear_clip_color"),
+    ("timeline_item_markers", "clear_flags"),
+    ("timeline_item_markers", "delete_at_frame"),
+    ("timeline_item_markers", "delete_by_color"),
+    ("timeline_item_markers", "delete_by_custom_data"),
+    ("timeline_item_markers", "set_clip_color"),
+    ("timeline_item_markers", "update_custom_data"),
+})
+
+
+def _explicit_dry_run_requested(params: Optional[Dict[str, Any]]) -> bool:
+    if not isinstance(params, dict):
+        return False
+    if "dry_run" in params:
+        return bool(params["dry_run"])
+    if "dryRun" in params:
+        return bool(params["dryRun"])
+    return False
+
+
+def lacks_native_dry_run(
+    tool_name: str, action: str, params: Optional[Dict[str, Any]] = None,
+) -> bool:
+    """True when this explicit dry-run request has no verified handler support."""
+    return (
+        _explicit_dry_run_requested(params)
+        and (tool_name, action) in UNSUPPORTED_DRY_RUN_ACTIONS
+    )
+
+
+def _dry_run_unavailable_response(
+    *,
+    operation_id: str,
+    tool_name: str,
+    action: str,
+    assessment: RiskAssessment,
+) -> Dict[str, Any]:
+    return {
+        "success": False,
+        "status": "dry_run_unavailable",
+        "dry_run": True,
+        "simulated": False,
+        "executed": False,
+        "operation_id": operation_id,
+        "security": {
+            "risk_level": assessment.level.value,
+            "risk_established": assessment.recognised,
+            "safe_mode": _safe_mode_enabled(),
+            "blocked": True,
+            "policy": "destructive.dry_run_support",
+        },
+        "risk": assessment.to_dict(),
+        "error": {
+            "message": (
+                f"'{tool_name}.{action}' does not have a verified dry-run path. "
+                "Nothing was simulated and nothing was executed."
+            ),
+            "code": "DRY_RUN_UNAVAILABLE",
+            "category": "dry_run_unavailable",
+            "retryable": False,
+            "remediation": (
+                "Use inspect_operation for static risk details, use a supported "
+                "safe/probe action when available, or call again without dry_run "
+                "after reviewing the operation."
+            ),
+        },
+    }
+
+
 def _payload_is_plan_only(
     tool_name: str, action: str, params: Optional[Dict[str, Any]],
 ) -> bool:
@@ -634,6 +711,23 @@ def destructive_op(tool_name: str) -> Callable[[Callable[..., Any]], Callable[..
             assessment = assess_action_risk(tool_name, action, params)
             risk_level = assessment.level.value
             risk_recognised = assessment.recognised
+            if lacks_native_dry_run(tool_name, action, params):
+                _audit_security_event(
+                    operation_id=operation_id,
+                    tool_name=tool_name,
+                    action=action,
+                    risk_level=risk_level,
+                    status="blocked",
+                    params=params,
+                    reason="dry_run_unavailable",
+                    recognised=risk_recognised,
+                )
+                return _dry_run_unavailable_response(
+                    operation_id=operation_id,
+                    tool_name=tool_name,
+                    action=action,
+                    assessment=assessment,
+                )
             if not _safe_mode_allows(risk_level, params, risk_recognised):
                 _audit_security_event(
                     operation_id=operation_id,

@@ -278,6 +278,71 @@ class SecurityPolicy(unittest.TestCase):
         [event] = self._audit_events()
         self.assertEqual(event["status"], "allowed")
 
+    def test_known_unsupported_dry_run_refuses_without_calling_handler(self) -> None:
+        self._prefs(safe_mode=False)
+
+        def failing_provider():
+            raise AssertionError("dry-run refusal should not resolve project state")
+        destructive_hook.register_project_root_provider(failing_provider)
+
+        calls: list[str] = []
+
+        @destructive_hook.destructive_op("timeline_markers")
+        def fake_markers(action: str, params=None):
+            calls.append(action)
+            return {"success": True}
+
+        result = fake_markers("add", {"frame": 12, "dry_run": True})
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["status"], "dry_run_unavailable")
+        self.assertEqual(result["error"]["code"], "DRY_RUN_UNAVAILABLE")
+        self.assertFalse(result["simulated"])
+        self.assertFalse(result["executed"])
+        self.assertEqual(result["security"]["risk_level"], "low")
+        self.assertEqual(calls, [])
+        [event] = self._audit_events()
+        self.assertEqual(event["status"], "blocked")
+        self.assertEqual(event["reason"], "dry_run_unavailable")
+
+    def test_supported_dry_run_still_reaches_handler(self) -> None:
+        self._prefs(safe_mode=False)
+        destructive_hook.register_project_root_provider(lambda: None)
+        calls: list[str] = []
+
+        @destructive_hook.destructive_op("timeline")
+        def fake_timeline(action: str, params=None):
+            calls.append(action)
+            return {"success": True, "dry_run": True, "plan": []}
+
+        result = fake_timeline("apply_cuts", {"cuts": [], "dry_run": True})
+
+        self.assertTrue(result["success"])
+        self.assertTrue(result["dry_run"])
+        self.assertNotIn("simulated", result)
+        self.assertEqual(calls, ["apply_cuts"])
+
+    def test_unknown_dry_run_is_not_refused_by_default(self) -> None:
+        self._prefs(safe_mode=False)
+        destructive_hook.register_project_root_provider(lambda: None)
+        calls: list[str] = []
+
+        @destructive_hook.destructive_op("timeline")
+        def fake_timeline(action: str, params=None):
+            calls.append(action)
+            return {"success": True, "called_through": True}
+
+        with mock.patch.object(
+            destructive_hook, "is_destructive", lambda *_a, **_k: True
+        ):
+            result = fake_timeline(
+                "zz_synthetic_unrated_action",
+                {"dry_run": True},
+            )
+
+        self.assertTrue(result["called_through"])
+        self.assertEqual(calls, ["zz_synthetic_unrated_action"])
+
 
 class WrapperWithProvider(unittest.TestCase):
     """End-to-end: install a synthetic provider and verify the wrapper paths."""
@@ -482,6 +547,19 @@ class EveryDestructiveActionIsClassified(unittest.TestCase):
             "gate them — add each to _CRITICAL_ACTIONS, _HIGH_RISK_ACTIONS, "
             "_MEDIUM_RISK_ACTIONS or _LOW_RISK_ACTIONS in execution_lifecycle "
             "after reading its handler:\n  " + "\n  ".join(unrated),
+        )
+
+    def test_unsupported_dry_run_actions_are_registered_destructive_actions(self) -> None:
+        stale = sorted(
+            f"{tool}.{action}"
+            for tool, action in destructive_hook.UNSUPPORTED_DRY_RUN_ACTIONS
+            if action not in destructive_hook.DESTRUCTIVE_ACTIONS_BY_TOOL.get(tool, frozenset())
+        )
+        self.assertEqual(
+            stale,
+            [],
+            "unsupported dry-run refusals only make sense for registered "
+            "destructive operations:\n  " + "\n  ".join(stale),
         )
 
     def test_a_rated_action_reports_the_same_level_to_both_surfaces(self) -> None:

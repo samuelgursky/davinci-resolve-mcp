@@ -2,6 +2,32 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.211.0 — unsupported destructive dry-runs now refuse honestly
+
+### Added
+
+- **Known destructive marker operations without native dry-run support now refuse instead of pretending to simulate.**
+  When a caller passes `dry_run=true` to registered marker actions that go
+  straight to Resolve mutators, the security wrapper returns
+  `status: dry_run_unavailable`, `simulated: false`, and `executed: false`.
+  The response includes the same static risk assessment used by
+  `inspect_operation`, plus a structured `DRY_RUN_UNAVAILABLE` error explaining
+  that nothing was simulated and nothing was executed.
+
+- **The refusal list is explicit and registry-checked.**
+  Only known destructive actions listed as lacking native dry-run support are
+  refused. Actions with real dry-run paths still reach their handlers, and
+  unknown future actions pass through rather than being blocked by a guessed
+  policy. A test pins that every unsupported dry-run entry is also a registered
+  destructive action, so stale refusal entries cannot accumulate silently.
+
+### Changed
+
+- **Unsupported dry-run refusals are handled inside the destructive-operation security wrapper.**
+  This keeps the lifecycle pipeline observational by default while still
+  refusing unsafe dry-run requests at the existing policy boundary, before
+  Resolve state lookup, archive creation, or handler execution.
+
 ## What's New in v2.210.0 — every destructive action now carries a real risk rating
 
 ### Changed
