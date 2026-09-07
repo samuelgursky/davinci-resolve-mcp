@@ -2,6 +2,42 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.211.0 — dry_run on an action that cannot honour it now refuses instead of executing
+
+### Changed
+
+- **An explicit `dry_run=true` on a destructive action with no native dry-run path is refused, not executed.**
+  102 of the 108 registered destructive actions never read the flag, so
+  `timeline_markers.add` with `dry_run=true` added a real marker and
+  `timeline.delete_track` with `dry_run=true` deleted the track — and the
+  agent guidance says to prefer `dry_run` where it exists, which cannot be
+  told from outside. The destructive-operation wrapper now returns
+  `DRY_RUN_UNAVAILABLE` (`status: dry_run_unavailable`, `dry_run: true`,
+  `simulated: false`, `executed: false`, the same static risk block as
+  `inspect_operation`, and a remediation) before any archive, state lookup,
+  or handler execution. The security audit log records it as
+  `blocked` / `dry_run_unavailable`. This is a refusal, not a synthesised
+  preview — the lifecycle pipeline's original interceptor answered
+  `success: true` for calls it never ran and was removed for it.
+
+- **The six actions that do honour `dry_run` are an allowlist, `NATIVE_DRY_RUN_ACTIONS`.**
+  `media_pool.set_clip_marks`, `media_pool.clear_clip_marks`,
+  `media_pool.setup_multicam_timeline`, `timeline.apply_cuts`,
+  `timeline.ripple_insert`, `timeline_ai.create_subtitles`. A static drift
+  test pins the list to the handlers by following the params object into
+  helper calls; that is what excluded `edit_engine.execute_tighten` and
+  `execute_silence_ripple`, which call a dry_run-aware helper but hand it a
+  fresh dict without the flag. Add a native dry-run branch and the test says
+  to list it; list an action without one and the test refuses.
+
+- **The refusal is keyed on registry membership, not on `is_destructive()`**, so
+  the no-archive filters (a Notes edit) cannot let a dry-run request through to
+  a handler that would execute it.
+
+- Adapted from PR #190 by @Rohitkanithi, which introduced the refusal shape
+  as a denylist of the fourteen marker actions; landed as an allowlist so the
+  other 88 actions that ignore the flag are covered too.
+
 ## What's New in v2.210.1 — frame capture and verify_output no longer read JobStatus in English
 
 ### Fixed

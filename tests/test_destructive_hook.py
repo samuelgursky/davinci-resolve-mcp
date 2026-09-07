@@ -14,6 +14,97 @@ from unittest import mock
 from src.utils import destructive_hook
 from src.utils.execution_lifecycle import classify_operation_risk, inspect_operation
 
+_SERVER_PY = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src", "server.py")
+_PARAM_NAMES = frozenset({"p", "params"})
+_DRY_RUN_KEYS = ("dry_run", "dryRun")
+
+
+def _scan_native_dry_run_actions() -> set:
+    """Registered destructive actions whose handler branch reaches a dry_run
+    read with the caller's params flowing into it (see the drift test)."""
+    import ast
+
+    with open(_SERVER_PY, encoding="utf-8") as handle:
+        src = handle.read()
+    tree = ast.parse(src)
+    funcs = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+
+    def reads_dry_run(nodes) -> bool:
+        return any(
+            isinstance(c, ast.Constant) and c.value in _DRY_RUN_KEYS
+            for n in nodes for c in ast.walk(n)
+        )
+
+    def passes_params(call: ast.Call) -> bool:
+        for a in list(call.args) + [k.value for k in call.keywords]:
+            if isinstance(a, ast.Name) and a.id in _PARAM_NAMES:
+                return True
+            if isinstance(a, ast.Dict):
+                for k, v in zip(a.keys, a.values):
+                    if k is None and isinstance(v, ast.Name) and v.id in _PARAM_NAMES:
+                        return True  # {**p, ...}
+                    if isinstance(k, ast.Constant) and k.value in _DRY_RUN_KEYS:
+                        return True
+            if (isinstance(a, ast.Call) and getattr(a.func, "id", "") == "dict"
+                    and any(isinstance(x, ast.Name) and x.id in _PARAM_NAMES for x in a.args)):
+                return True
+        return False
+
+    def reaches(nodes, depth=0, seen=None) -> bool:
+        seen = set() if seen is None else seen
+        if reads_dry_run(nodes):
+            return True
+        if depth >= 4:
+            return False
+        for n in nodes:
+            for c in ast.walk(n):
+                if isinstance(c, ast.Call):
+                    name = getattr(c.func, "id", None)
+                    if name in funcs and name not in seen and passes_params(c):
+                        seen.add(name)
+                        if reaches([funcs[name]], depth + 1, seen):
+                            return True
+        return False
+
+    def action_branches(fn: ast.FunctionDef) -> dict:
+        out: dict = {}
+
+        def walk(stmts):
+            for s in stmts:
+                if isinstance(s, ast.If):
+                    names = []
+                    for cmp in ast.walk(s.test):
+                        if (isinstance(cmp, ast.Compare) and isinstance(cmp.left, ast.Name)
+                                and cmp.left.id == "action"):
+                            for c in cmp.comparators:
+                                if isinstance(c, ast.Constant):
+                                    names.append(c.value)
+                                elif isinstance(c, (ast.Tuple, ast.Set, ast.List)):
+                                    names += [e.value for e in c.elts if isinstance(e, ast.Constant)]
+                    for n in names:
+                        out.setdefault(n, []).extend(s.body)
+                    walk(s.body)
+                    walk(s.orelse)
+                elif hasattr(s, "body") and not isinstance(s, ast.FunctionDef):
+                    walk(s.body)
+
+        walk(fn.body)
+        return out
+
+    handlers = {}
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef):
+            for d in node.decorator_list:
+                if isinstance(d, ast.Call) and getattr(d.func, "id", "") == "_destructive_op":
+                    handlers[d.args[0].value] = node
+    found = set()
+    for tool, actions in destructive_hook.DESTRUCTIVE_ACTIONS_BY_TOOL.items():
+        branches = action_branches(handlers[tool]) if tool in handlers else {}
+        for action in actions:
+            if reaches(branches.get(action, [])):
+                found.add((tool, action))
+    return found
+
 
 class ActionFiltering(unittest.TestCase):
     """is_destructive() consults both the registry AND the no-archive filter."""
@@ -278,6 +369,122 @@ class SecurityPolicy(unittest.TestCase):
         [event] = self._audit_events()
         self.assertEqual(event["status"], "allowed")
 
+    # ── dry_run on actions without a native dry-run path ──────────────────
+    #
+    # Before v2.211.0 `timeline_markers.add` with dry_run=true added a real
+    # marker: the handler never read the flag. The wrapper now refuses an
+    # explicit dry-run request on every registered destructive action outside
+    # NATIVE_DRY_RUN_ACTIONS — before archive, before state lookup, before the
+    # handler — and says that nothing was simulated or executed.
+
+    def test_dry_run_on_action_without_native_support_refuses_before_handler(self) -> None:
+        self._prefs(safe_mode=False)
+
+        def failing_provider():
+            raise AssertionError("dry-run refusal must not resolve project state")
+        destructive_hook.register_project_root_provider(failing_provider)
+
+        calls: list[str] = []
+
+        @destructive_hook.destructive_op("timeline_markers")
+        def fake_markers(action: str, params=None):
+            calls.append(action)
+            return {"success": True}
+
+        result = fake_markers("add", {"frame": 12, "dry_run": True})
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["status"], "dry_run_unavailable")
+        self.assertEqual(result["error"]["code"], "DRY_RUN_UNAVAILABLE")
+        self.assertTrue(result["dry_run"])
+        self.assertFalse(result["simulated"])
+        self.assertFalse(result["executed"])
+        self.assertEqual(result["security"]["policy"], "destructive.dry_run_support")
+        self.assertEqual(result["security"]["risk_level"], "low")
+        self.assertEqual(calls, [])
+        [event] = self._audit_events()
+        self.assertEqual(event["status"], "blocked")
+        self.assertEqual(event["reason"], "dry_run_unavailable")
+
+    def test_every_registered_destructive_action_without_native_dry_run_refuses(self) -> None:
+        """The allowlist is the ONLY way through: no denylist to fall behind."""
+        self._prefs(safe_mode=False)
+        destructive_hook.register_project_root_provider(lambda: None)
+        executed: list[tuple[str, str]] = []
+        for tool, actions in sorted(destructive_hook.DESTRUCTIVE_ACTIONS_BY_TOOL.items()):
+            @destructive_hook.destructive_op(tool)
+            def fake(action: str, params=None, _tool=tool):
+                executed.append((_tool, action))
+                return {"success": True}
+            for action in sorted(actions):
+                if (tool, action) in destructive_hook.NATIVE_DRY_RUN_ACTIONS:
+                    continue
+                result = fake(action, {"dry_run": True})
+                self.assertEqual(
+                    result.get("error", {}).get("code"), "DRY_RUN_UNAVAILABLE",
+                    f"{tool}.{action} with dry_run=true reached its handler: {result}",
+                )
+        self.assertEqual(executed, [])
+
+    def test_native_dry_run_still_reaches_handler(self) -> None:
+        self._prefs(safe_mode=False)
+        destructive_hook.register_project_root_provider(lambda: None)
+        calls: list[str] = []
+
+        @destructive_hook.destructive_op("timeline")
+        def fake_timeline(action: str, params=None):
+            calls.append(action)
+            return {"success": True, "dry_run": True, "plan": []}
+
+        result = fake_timeline("apply_cuts", {"cuts": [], "dry_run": True})
+
+        self.assertTrue(result["success"])
+        self.assertTrue(result["dry_run"])
+        self.assertNotIn("simulated", result)
+        self.assertEqual(calls, ["apply_cuts"])
+
+    def test_dry_run_false_is_not_a_dry_run_request(self) -> None:
+        self._prefs(safe_mode=False)
+        destructive_hook.register_project_root_provider(lambda: None)
+        calls: list[str] = []
+
+        @destructive_hook.destructive_op("timeline_markers")
+        def fake_markers(action: str, params=None):
+            calls.append(action)
+            return {"success": True}
+
+        result = fake_markers("add", {"frame": 12, "dry_run": False})
+        self.assertTrue(result["success"])
+        self.assertEqual(calls, ["add"])
+
+    def test_dry_run_on_a_non_destructive_action_is_untouched(self) -> None:
+        self._prefs(safe_mode=False)
+        calls: list[str] = []
+
+        @destructive_hook.destructive_op("timeline")
+        def fake_timeline(action: str, params=None):
+            calls.append(action)
+            return {"success": True, "items": []}
+
+        result = fake_timeline("get_current", {"dry_run": True})
+        self.assertTrue(result["success"])
+        self.assertEqual(calls, ["get_current"])
+
+    def test_no_archive_filtered_payload_still_refuses_dry_run(self) -> None:
+        """A Notes edit is filtered out of archiving, not out of the registry —
+        with dry_run=true it must refuse rather than execute for real."""
+        self._prefs(safe_mode=False)
+        calls: list[str] = []
+
+        @destructive_hook.destructive_op("timeline_item")
+        def fake_item(action: str, params=None):
+            calls.append(action)
+            return {"success": True}
+
+        result = fake_item("set_property", {"key": "Notes", "value": "x", "dry_run": True})
+        self.assertEqual(result["error"]["code"], "DRY_RUN_UNAVAILABLE")
+        self.assertEqual(calls, [])
+
 
 class WrapperWithProvider(unittest.TestCase):
     """End-to-end: install a synthetic provider and verify the wrapper paths."""
@@ -482,6 +689,39 @@ class EveryDestructiveActionIsClassified(unittest.TestCase):
             "gate them — add each to _CRITICAL_ACTIONS, _HIGH_RISK_ACTIONS, "
             "_MEDIUM_RISK_ACTIONS or _LOW_RISK_ACTIONS in execution_lifecycle "
             "after reading its handler:\n  " + "\n  ".join(unrated),
+        )
+
+    def test_native_dry_run_actions_are_registered_destructive_actions(self) -> None:
+        stray = sorted(
+            f"{tool}.{action}"
+            for tool, action in destructive_hook.NATIVE_DRY_RUN_ACTIONS
+            if action not in destructive_hook.DESTRUCTIVE_ACTIONS_BY_TOOL.get(tool, frozenset())
+        )
+        self.assertEqual(stray, [], "NATIVE_DRY_RUN_ACTIONS entries that are not "
+                         "registered destructive actions:\n  " + "\n  ".join(stray))
+
+    def test_native_dry_run_allowlist_matches_the_handlers(self) -> None:
+        """Static drift guard: the allowlist equals the set of registered
+        destructive actions whose dispatch branch reaches a `dry_run` read with
+        the caller's params object actually flowing into it.
+
+        Following calls only when they pass `p`/`params` (or a dict carrying a
+        dry_run key) matters: `edit_engine.execute_tighten` calls a helper that
+        reads dry_run, but hands it a fresh dict without the flag, so the
+        caller's dry_run is ignored — a naive reachability scan lists it and a
+        dry-run request would execute for real.
+        """
+        found = _scan_native_dry_run_actions()
+        listed = set(destructive_hook.NATIVE_DRY_RUN_ACTIONS)
+        missing = sorted(f"{t}.{a}" for t, a in found - listed)
+        stale = sorted(f"{t}.{a}" for t, a in listed - found)
+        self.assertEqual(
+            (missing, stale), ([], []),
+            "NATIVE_DRY_RUN_ACTIONS drifted from src/server.py.\n"
+            "  handlers with a native dry_run path not listed (add them): "
+            + (", ".join(missing) or "none") + "\n"
+            "  listed actions whose handler ignores dry_run (remove them): "
+            + (", ".join(stale) or "none"),
         )
 
     def test_a_rated_action_reports_the_same_level_to_both_surfaces(self) -> None:

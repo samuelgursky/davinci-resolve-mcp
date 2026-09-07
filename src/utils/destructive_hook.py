@@ -252,6 +252,104 @@ DRY_RUN_DEFAULT_TRUE_ACTIONS: frozenset = frozenset({
 })
 
 
+# ── Native dry-run allowlist ────────────────────────────────────────────────
+#
+# Registered destructive actions whose handler genuinely reads `dry_run` and
+# returns a plan instead of mutating. Every OTHER registered destructive action
+# ignores the flag: `timeline_markers.add` with `dry_run=true` added a real
+# marker, `timeline.delete_track` with `dry_run=true` deleted the track. An
+# agent following the guidance "prefer dry_run where it exists" cannot tell
+# the two apart from the outside, so an explicit `dry_run=true` on a registered
+# destructive action outside this set is REFUSED (DRY_RUN_UNAVAILABLE) before
+# archive, state lookup, or handler execution — nothing simulated, nothing
+# executed, and the response says so.
+#
+# This is deliberately a refusal and not a synthesised preview: the lifecycle
+# pipeline's original dry-run interceptor answered `success: true` for calls
+# it never ran and was removed for it (see
+# execution_lifecycle.LifecyclePipeline._register_default_hooks). A dry run
+# that always succeeds is worse than none, because it is trusted.
+#
+# The set is pinned by tests.test_destructive_hook against a static scan of
+# src/server.py that follows the params object into helpers: add a native
+# dry-run branch to a handler and the test tells you to list it here; list an
+# action here without one and the test refuses.
+
+NATIVE_DRY_RUN_ACTIONS: frozenset = frozenset({
+    ("media_pool", "clear_clip_marks"),
+    ("media_pool", "set_clip_marks"),
+    ("media_pool", "setup_multicam_timeline"),
+    ("timeline", "apply_cuts"),
+    ("timeline", "ripple_insert"),
+    ("timeline_ai", "create_subtitles"),
+})
+
+
+def _explicit_dry_run_requested(params: Optional[Dict[str, Any]]) -> bool:
+    if not isinstance(params, dict):
+        return False
+    if "dry_run" in params:
+        return bool(params["dry_run"])
+    if "dryRun" in params:
+        return bool(params["dryRun"])
+    return False
+
+
+def lacks_native_dry_run(
+    tool_name: str, action: str, params: Optional[Dict[str, Any]] = None,
+) -> bool:
+    """True when the caller asked for a dry run this destructive action cannot honour.
+
+    Keyed on the destructive registry rather than `is_destructive()` so the
+    no-archive filters (a Notes edit, say) cannot let a dry-run request slip
+    through to a handler that would execute it for real.
+    """
+    return (
+        _explicit_dry_run_requested(params)
+        and action in DESTRUCTIVE_ACTIONS_BY_TOOL.get(tool_name, frozenset())
+        and (tool_name, action) not in NATIVE_DRY_RUN_ACTIONS
+    )
+
+
+def _dry_run_unavailable_response(
+    *,
+    operation_id: str,
+    tool_name: str,
+    action: str,
+    assessment: RiskAssessment,
+) -> Dict[str, Any]:
+    return {
+        "success": False,
+        "status": "dry_run_unavailable",
+        "dry_run": True,
+        "simulated": False,
+        "executed": False,
+        "operation_id": operation_id,
+        "security": {
+            "risk_level": assessment.level.value,
+            "risk_established": assessment.recognised,
+            "safe_mode": _safe_mode_enabled(),
+            "blocked": True,
+            "policy": "destructive.dry_run_support",
+        },
+        "risk": assessment.to_dict(),
+        "error": {
+            "message": (
+                f"'{tool_name}.{action}' has no native dry-run path, so dry_run=true "
+                "cannot be honoured. Nothing was simulated and nothing was executed."
+            ),
+            "code": "DRY_RUN_UNAVAILABLE",
+            "category": "dry_run_unavailable",
+            "retryable": False,
+            "remediation": (
+                "Use inspect_operation for the static risk assessment, use a "
+                "probe_*/safe_* action where one exists, or call again without "
+                "dry_run once the operation has been reviewed."
+            ),
+        },
+    }
+
+
 def _payload_is_plan_only(
     tool_name: str, action: str, params: Optional[Dict[str, Any]],
 ) -> bool:
@@ -627,6 +725,29 @@ def destructive_op(tool_name: str) -> Callable[[Callable[..., Any]], Callable[..
     def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
         @functools.wraps(fn)
         def wrapper(action: str, params: Optional[Dict[str, Any]] = None, *args, **kwargs) -> Any:
+            if lacks_native_dry_run(tool_name, action, params):
+                # An explicit dry-run request this handler would silently
+                # execute for real. Refuse before archive, state lookup, or the
+                # handler itself; see NATIVE_DRY_RUN_ACTIONS.
+                operation_id = f"op_{uuid.uuid4().hex[:12]}"
+                assessment = assess_action_risk(tool_name, action, params)
+                _audit_security_event(
+                    operation_id=operation_id,
+                    tool_name=tool_name,
+                    action=action,
+                    risk_level=assessment.level.value,
+                    status="blocked",
+                    params=params,
+                    reason="dry_run_unavailable",
+                    recognised=assessment.recognised,
+                )
+                return _dry_run_unavailable_response(
+                    operation_id=operation_id,
+                    tool_name=tool_name,
+                    action=action,
+                    assessment=assessment,
+                )
+
             if not is_destructive(tool_name, action, params):
                 return fn(action, params, *args, **kwargs)
 
