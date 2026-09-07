@@ -2,6 +2,68 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.210.0 — every destructive action now carries a real risk rating
+
+### Changed
+
+- **All 108 registered destructive actions are classified; 80 of them were not.**
+  Safe mode blocks established HIGH and CRITICAL, and the classifier's `else`
+  branch returns MEDIUM with `risk_established: false` — an honest "no rule
+  matched", but not something a gate can act on. So `timeline.move_clips`,
+  `timeline.ripple_insert`, `timeline.create_compound_clip`,
+  `timeline.import_into_timeline`, `graph.apply_grade_from_drx`,
+  `timeline_item_color.copy_grades`, `timeline_item_takes.finalize` and the
+  three `edit_engine` plan executors all passed a gate that was meant to stop
+  them. Safe mode now gates 35 actions where it previously gated 20.
+
+  Every rating was taken from the action's handler rather than its name, since
+  the name heuristic is the thing being replaced. Two results worth calling out:
+
+  - `timeline.move_clips` passes `delete_sources=True` to the duplicate helper,
+    so it removes the originals — it is a deletion wearing a move's name.
+  - `timeline_item.update_sidecar` is the only registered action that writes
+    **outside the project**: it rewrites the `.braw` sidecar or R3D `.RMD` file
+    next to the camera original. No Resolve undo reaches it, and it changes how
+    that media reads in every other application. Rated HIGH.
+
+  New distribution across the 108: 2 critical, 33 high, 35 medium, 38 low.
+
+- **`MEDIUM` now means something.** It was overwhelmingly the fallthrough, so an
+  assessed MEDIUM and an unrated action were indistinguishable by level alone. A
+  `_MEDIUM_RISK_ACTIONS` table makes it a finding, and `risk_established`
+  separates the two everywhere risk is reported.
+
+### Fixed
+
+- **The operator's saved `setup` defaults decided what the test suite did.**
+  `logs/media-analysis-preferences.json` holds real defaults including
+  `destructive.safe_mode`. Tests that call `setup` already overrode the path,
+  but the other three thousand read it — so with safe mode left enabled on a
+  machine, seventeen tests across `test_cut_executor`, `test_keyed_param_guards`,
+  `test_media_pool_changes`, `test_media_pool_delete_governance` and
+  `test_delete_clips_readback_retry` failed with "Safe mode blocked
+  critical-risk action". A red suite produced by a setting rather than by the
+  code, and it would have looked exactly like a regression in this release.
+
+  `tests/offline_guard` now redirects the preferences path for the whole run,
+  alongside the audit-log redirect added in v2.209.1. Pinned by a test asserting
+  the active path is never the operator's file, and by one asserting the guard
+  names the same environment variable the server reads — a mismatch there would
+  fail open and silently.
+
+### Added
+
+- **A guard test asserting no registered destructive action is unrated**, so a
+  newly registered action cannot silently rejoin the ungated set — which is how
+  the 80 accumulated. Registering an action and rating it are now one commit.
+- **A test pinning that `inspect_operation` and the safe-mode gate report the
+  same level** for all 108 actions. They read one classifier; the failure mode
+  if they ever diverge is silent.
+
+Live-validated against DaVinci Resolve Studio 19.1.3.7: the four newly-HIGH
+actions probed are refused with the timeline unchanged, the newly LOW/MEDIUM
+ones still pass, and every audit row carries `risk_established: true`.
+
 ## What's New in v2.209.1 — the test suite no longer writes to the security audit log
 
 ### Fixed

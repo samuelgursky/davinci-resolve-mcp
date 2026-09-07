@@ -12,7 +12,7 @@ import unittest
 from unittest import mock
 
 from src.utils import destructive_hook
-from src.utils.execution_lifecycle import classify_operation_risk
+from src.utils.execution_lifecycle import classify_operation_risk, inspect_operation
 
 
 class ActionFiltering(unittest.TestCase):
@@ -134,12 +134,16 @@ class SecurityPolicy(unittest.TestCase):
             "low",
         )
         self.assertEqual(
-            destructive_hook.risk_level_for_action("timeline_item", "set_name", {}),
+            destructive_hook.risk_level_for_action("timeline_item", "set_property", {}),
             "medium",
         )
         self.assertEqual(
             destructive_hook.risk_level_for_action("timeline", "delete_track", {}),
             "high",
+        )
+        self.assertEqual(
+            destructive_hook.risk_level_for_action("media_pool", "delete_clips", {}),
+            "critical",
         )
         self.assertEqual(
             destructive_hook.risk_level_for_action("timeline", "delete_clips", {"ripple": True}),
@@ -158,7 +162,8 @@ class SecurityPolicy(unittest.TestCase):
             ("timeline", "delete_track", {}),
             ("media_pool", "delete_clips", {}),
             ("timeline", "delete_clips", {"ripple": True}),
-            ("timeline_item", "set_name", {}),
+            ("timeline_item", "set_property", {}),
+            ("timeline_item", "update_sidecar", {}),
         ):
             with self.subTest(action=f"{tool}.{action}"):
                 self.assertEqual(
@@ -169,19 +174,31 @@ class SecurityPolicy(unittest.TestCase):
     def test_unclassified_destructive_actions_report_risk_as_unestablished(self) -> None:
         """`medium` from the name heuristic is a default, not a finding.
 
-        Safe mode deliberately does not block these — 80 of 108 registered
-        destructive actions are unclassified, so gating them would block most
-        ordinary edits. The flag is how a caller tells the two apart.
+        Every registered action is rated now, so this uses a deliberately
+        unrated one: the reporting path still has to work for the next action
+        somebody registers before rating it, and safe mode still must not block
+        on a default it did not actually assess. Using a real action here would
+        make the test fail the day that action gets classified, which is how the
+        earlier version of it broke.
         """
         self._prefs(safe_mode=True)
         destructive_hook.register_project_root_provider(lambda: None)
         destructive_hook.register_pending_confirm_check(lambda *_args: False)
 
+        unrated = "zz_synthetic_unrated_action"
+        self.assertFalse(
+            classify_operation_risk("timeline", unrated, {}).recognised,
+            "fixture action must be unrated for this test to mean anything",
+        )
+
         @destructive_hook.destructive_op("timeline")
         def fake_timeline(action: str, params=None):
             return {"success": True}
 
-        result = fake_timeline("add_track", {"trackType": "video"})
+        with mock.patch.object(
+            destructive_hook, "is_destructive", lambda *_a, **_k: True
+        ):
+            result = fake_timeline(unrated, {"trackType": "video"})
 
         self.assertTrue(result["success"])
         self.assertEqual(result["security"]["risk_level"], "medium")
@@ -436,6 +453,81 @@ class SecurityAuditLogIsolation(unittest.TestCase):
         self.assertFalse(
             path.startswith(os.path.abspath(repo_logs)),
             f"suite would write audit records into the real trail at {path}",
+        )
+
+
+class EveryDestructiveActionIsClassified(unittest.TestCase):
+    """No registered destructive action may fall through to the name heuristic.
+
+    The heuristic's `else` branch returns MEDIUM with `recognised=False`, which
+    is honest but useless to a gate: safe mode blocks established HIGH and
+    CRITICAL, so an unrated action is simply not gated. That is how 80 of 108
+    actions came to be ungated in v2.209.0 — each was registered as destructive
+    without anyone rating it, and nothing failed.
+
+    Registering a destructive action and rating it are now the same commit.
+    """
+
+    def test_no_registered_destructive_action_is_unrated(self) -> None:
+        unrated = sorted(
+            f"{tool}.{action}"
+            for tool, actions in destructive_hook.DESTRUCTIVE_ACTIONS_BY_TOOL.items()
+            for action in actions
+            if not classify_operation_risk(tool, action, {}).recognised
+        )
+        self.assertEqual(
+            unrated,
+            [],
+            "these destructive actions have no risk rule, so safe mode cannot "
+            "gate them — add each to _CRITICAL_ACTIONS, _HIGH_RISK_ACTIONS, "
+            "_MEDIUM_RISK_ACTIONS or _LOW_RISK_ACTIONS in execution_lifecycle "
+            "after reading its handler:\n  " + "\n  ".join(unrated),
+        )
+
+    def test_a_rated_action_reports_the_same_level_to_both_surfaces(self) -> None:
+        """`inspect_operation` and the safe-mode gate must not diverge.
+
+        They read the same classifier now; this pins that they keep doing so,
+        since the failure mode is silent — the gate refusing a call that
+        pre-flight inspection had just described as reversible.
+        """
+        for tool, actions in destructive_hook.DESTRUCTIVE_ACTIONS_BY_TOOL.items():
+            for action in sorted(actions):
+                with self.subTest(action=f"{tool}.{action}"):
+                    self.assertEqual(
+                        destructive_hook.risk_level_for_action(tool, action, {}),
+                        inspect_operation(tool, action, {})["risk"]["level"],
+                    )
+
+
+class PreferenceIsolation(unittest.TestCase):
+    """The operator's saved `setup` defaults must not decide what the suite does.
+
+    `logs/media-analysis-preferences.json` holds real defaults including
+    `destructive.safe_mode`. With it left true on this machine, seventeen tests
+    failed with "Safe mode blocked critical-risk action" — a red suite produced
+    by a setting rather than by the code. `tests/offline_guard` redirects the
+    path; these pin that it is redirected and that it names the variable the
+    server actually reads.
+    """
+
+    def test_guard_env_name_matches_the_server(self) -> None:
+        import src.server as server
+
+        from tests import offline_guard
+
+        self.assertEqual(offline_guard._PREFS_ENV, server._MEDIA_ANALYSIS_PREFS_ENV)
+
+    def test_preferences_path_is_not_the_operators_file(self) -> None:
+        import src.server as server
+
+        repo_logs = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs"
+        )
+        path = os.path.abspath(server._media_analysis_preferences_path())
+        self.assertFalse(
+            path.startswith(os.path.abspath(repo_logs)),
+            f"suite would read/write the operator's real preferences at {path}",
         )
 
 

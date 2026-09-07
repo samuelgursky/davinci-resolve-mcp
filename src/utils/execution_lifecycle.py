@@ -145,12 +145,48 @@ class RiskClassificationHook(LifecycleHook):
         ("timeline", "overwrite_range"),
         ("timeline", "apply_cuts"),
         ("graph", "reset_all_grades"),
+        # Plan execution: each rebuilds the timeline from the plan's lifts and
+        # keep_ranges. Same shape as execute_selects and ripple_trim above.
+        ("edit_engine", "execute_tighten"),
+        ("edit_engine", "execute_swap"),
+        ("edit_engine", "execute_silence_ripple"),
+        # Restructuring. move_clips passes delete_sources=True, so the originals
+        # are removed; ripple_insert shifts everything downstream of the insert;
+        # compound/fusion clips replace the selected items with a container and
+        # rewire what the timeline points at.
+        ("timeline", "move_clips"),
+        ("timeline", "ripple_insert"),
+        ("timeline", "create_compound_clip"),
+        ("timeline", "create_fusion_clip"),
+        # ImportIntoTimeline lays an external edit over the timeline;
+        # ConvertTimelineToStereo rewrites the audio track layout and has no
+        # inverse; DetectSceneCuts cuts every clip it decides to cut.
+        ("timeline", "import_into_timeline"),
+        ("timeline", "convert_to_stereo"),
+        ("timeline_ai", "detect_scene_cuts"),
+        # Grades that are replaced wholesale. apply_grade_from_drx documents
+        # itself as replacing the entire node graph with no append mode;
+        # CopyGrades overwrites each target's grade.
+        ("graph", "apply_grade_from_drx"),
+        ("timeline_item_color", "copy_grades"),
+        # Takes. delete removes one; finalize collapses the item to the selected
+        # take and discards the rest.
+        ("timeline_item_takes", "delete"),
+        ("timeline_item_takes", "finalize"),
+        # The only action here that writes OUTSIDE the project: UpdateSidecar
+        # rewrites the .braw sidecar or R3D .RMD file next to the camera
+        # original. No Resolve undo reaches it, and it changes how that media
+        # is interpreted by every other application that reads it.
+        ("timeline_item", "update_sidecar"),
     }
 
-    #: Mutating, but bounded and trivially reversible — a marker or a clip
-    #: colour. Without this table the name heuristic files them under MEDIUM
-    #: and flags them unrecognised, i.e. it warns that the risk is unestablished
-    #: for the actions whose risk is the best established of any we dispatch.
+    #: Mutating, but bounded and trivially reversible — a marker, a clip colour,
+    #: a toggle, or a newly created empty container. Nothing that already exists
+    #: is altered or removed, and the inverse is a single action.
+    #:
+    #: Without this table the name heuristic files them under MEDIUM and flags
+    #: them unrecognised, i.e. it warns that the risk is unestablished for the
+    #: actions whose risk is the best established of any we dispatch.
     _LOW_RISK_ACTIONS: Set[Tuple[str, str]] = {
         ("timeline_markers", "add"),
         ("timeline_markers", "update_custom_data"),
@@ -159,6 +195,103 @@ class RiskClassificationHook(LifecycleHook):
         ("timeline_item_markers", "clear_flags"),
         ("timeline_item_markers", "set_clip_color"),
         ("timeline_item_markers", "clear_clip_color"),
+        ("timeline_item_markers", "update_custom_data"),
+        # Marks and flags: metadata on a clip, no frames touched.
+        ("timeline", "set_mark_in_out"),
+        ("timeline", "clear_mark_in_out"),
+        ("media_pool", "set_clip_marks"),
+        ("media_pool", "clear_clip_marks"),
+        # Track-level toggles and labels. SetTrackEnable/SetTrackLock/SetTrackName
+        # change no content; add_track creates an empty container.
+        ("timeline", "add_track"),
+        ("timeline", "set_track_enable"),
+        ("timeline", "set_track_lock"),
+        ("timeline", "set_track_name"),
+        ("timeline", "set_clips_linked"),
+        ("timeline", "set_title_text"),
+        # DuplicateTimeline writes a new timeline; the original is untouched.
+        ("timeline", "duplicate"),
+        # CreateEmptyTimeline / CreateStereoClip only add. `create_timeline`'s
+        # if_exists policy is version/reuse/fail — it has no overwrite path, so
+        # it cannot replace an existing timeline.
+        ("media_pool", "create_timeline"),
+        ("media_pool", "create_timeline_from_clips"),
+        ("media_pool", "create_stereo_clip"),
+        # Per-item display properties: set them back and the item is as it was.
+        ("timeline_item", "set_clip_enabled"),
+        ("timeline_item", "set_name"),
+        ("timeline_item", "set_crop"),
+        ("timeline_item", "set_transform"),
+        ("timeline_item", "set_composite"),
+        ("timeline_item", "set_audio"),
+        # Cache toggles and node *labels* — not grades.
+        ("timeline_item_color", "set_color_cache"),
+        ("timeline_item_color", "set_fusion_cache"),
+        ("timeline_item_color", "reset_all_node_colors"),
+        ("timeline_item_color", "rename_version"),
+        ("timeline_item_fusion", "add_comp"),
+        ("timeline_item_fusion", "rename_comp"),
+        ("timeline_item_takes", "add"),
+        ("timeline_item_takes", "select"),
+        ("graph", "set_node_enabled"),
+    }
+
+    #: A real assessment landing between LOW and HIGH: existing content or
+    #: settings are altered, recovery is possible but is not one trivial
+    #: inverse. This table exists so that MEDIUM can mean something — before it,
+    #: MEDIUM was overwhelmingly the `else` fallthrough, which made an assessed
+    #: MEDIUM and an unrated action indistinguishable by level alone.
+    _MEDIUM_RISK_ACTIONS: Set[Tuple[str, str]] = {
+        # Additive edits that place content into an existing timeline. Nothing
+        # is deleted (`overwrite_range`, which does delete, is HIGH), but the
+        # timeline is no longer what it was.
+        ("timeline", "copy_clips"),
+        ("timeline", "duplicate_clips"),
+        ("timeline", "copy_range"),
+        ("timeline", "duplicate_range"),
+        ("timeline", "insert_generator"),
+        ("timeline", "insert_title"),
+        ("timeline", "insert_fusion_generator"),
+        ("timeline", "insert_fusion_title"),
+        ("timeline", "insert_fusion_composition"),
+        ("timeline", "insert_ofx_generator"),
+        ("media_pool", "append_to_timeline"),
+        # Timeline-wide settings. No content lost, but a wrong start timecode
+        # silently invalidates every conform and reference built against it.
+        ("timeline", "set_setting"),
+        ("timeline", "set_start_timecode"),
+        ("timeline", "set_voice_isolation_state"),
+        ("timeline_item", "set_voice_isolation_state"),
+        # `set_property` takes an arbitrary key/value, so its blast radius is
+        # whatever the caller passed; `set_retime` changes duration and sync.
+        ("timeline_item", "set_property"),
+        ("timeline_item", "set_retime"),
+        # Pool reorganisation: clips and bins move, nothing is destroyed, but
+        # paths other work depends on change underneath it.
+        ("media_pool", "move_clips"),
+        ("media_pool", "move_folders"),
+        ("media_pool", "auto_sync_audio"),
+        ("media_pool", "setup_multicam_timeline"),
+        # Analysis passes that write their results back onto the timeline.
+        ("timeline_ai", "create_subtitles"),
+        ("timeline_ai", "analyze_dolby_vision"),
+        # Grade state that is replaced rather than removed. AddVersion also
+        # switches the active version, so a later graph write lands on the new
+        # one — the reason a "pre-change" backup version can end up holding the
+        # post-change grade.
+        ("timeline_item_color", "add_version"),
+        ("timeline_item_color", "load_version"),
+        ("timeline_item_color", "set_cdl"),
+        ("timeline_item_color", "assign_color_group"),
+        ("timeline_item_color", "stabilize"),
+        ("timeline_item_color", "smart_reframe"),
+        ("timeline_item_color", "create_magic_mask"),
+        ("timeline_item_color", "regenerate_magic_mask"),
+        ("graph", "set_lut"),
+        ("graph", "apply_arri_cdl_lut"),
+        # Importing or switching the active comp changes what renders.
+        ("timeline_item_fusion", "import_comp"),
+        ("timeline_item_fusion", "load_comp"),
     }
 
     _READ_ONLY_PREFIXES = ("get_", "list_", "query_", "probe_", "inspect_", "export_", "check_")
@@ -195,6 +328,17 @@ class RiskClassificationHook(LifecycleHook):
             destructive = True
             radius = BlastRadius.ITEM
             reasons.append(f"Bounded reversible edit: {action}")
+        elif pair in cls._MEDIUM_RISK_ACTIONS:
+            level = RiskLevel.MEDIUM
+            destructive = True
+            # Scope follows the tool: the timeline and pool tools act on the
+            # timeline or the pool as a whole, the per-item tools on one item.
+            radius = (
+                BlastRadius.TIMELINE
+                if tool_name in {"timeline", "timeline_ai", "edit_engine", "media_pool"}
+                else BlastRadius.ITEM
+            )
+            reasons.append(f"Recoverable edit to existing state: {action}")
         elif any(action.startswith(p) for p in cls._READ_ONLY_PREFIXES) or action in {"read", "status", "info"}:
             level = RiskLevel.LOW
             destructive = False

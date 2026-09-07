@@ -33,6 +33,10 @@ LAUNCH_ATTEMPTS: list = []
 #: rather than a stub-wrapping-a-stub.
 _INSTALLED_FLAG = "_offline_guard_installed"
 
+#: Mirrors `src.server._MEDIA_ANALYSIS_PREFS_ENV`. Named here rather than
+#: imported so installing the guard cannot depend on importing the server.
+_PREFS_ENV = "DAVINCI_RESOLVE_MCP_MEDIA_ANALYSIS_PREFS"
+
 #: The originals, kept for `uninstall`.
 _originals: dict = {}
 
@@ -126,6 +130,7 @@ def install() -> bool:
     server.resolve_is_running = offline_resolve_is_running
 
     _redirect_security_audit_log()
+    _redirect_media_analysis_preferences()
 
     setattr(server, _INSTALLED_FLAG, True)
     return True
@@ -172,6 +177,45 @@ def _redirect_security_audit_log() -> None:
     destructive_hook._audit_log_path = audit_log_path_offline
 
 
+def _redirect_media_analysis_preferences() -> None:
+    """Point setup's persisted defaults at a temp file for the duration.
+
+    `logs/media-analysis-preferences.json` holds the operator's real `setup`
+    defaults, including `destructive.safe_mode`. Tests that call `setup` already
+    override the path, but the other three thousand read it, so a preference
+    saved on disk decided what the suite did: with `safe_mode` true, seventeen
+    tests across `test_cut_executor`, `test_keyed_param_guards` and
+    `test_media_pool_delete_governance` failed with
+    "Safe mode blocked critical-risk action" — a red suite caused by a setting,
+    not by the code under test.
+
+    A suite whose verdict depends on the developer's saved preferences is not
+    reporting on the code. Redirected here so it holds for every entry point.
+    """
+    env = os.environ.get(_PREFS_ENV)
+    if env:
+        return  # An outer harness already chose a path; don't fight it.
+    handle = tempfile.NamedTemporaryFile(
+        prefix="media-analysis-preferences-test-", suffix=".json", delete=False
+    )
+    handle.write(b"{}")
+    handle.close()
+    _originals["_prefs_env_tempfile"] = handle.name
+    os.environ[_PREFS_ENV] = handle.name
+
+
+def _restore_media_analysis_preferences() -> None:
+    path = _originals.pop("_prefs_env_tempfile", None)
+    if not path:
+        return
+    os.environ.pop(_PREFS_ENV, None)
+    if os.path.exists(path):
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
 def _restore_security_audit_log() -> None:
     if "_audit_log_path" not in _originals:
         return
@@ -201,6 +245,7 @@ def uninstall() -> None:
     server.get_resolve = _originals["get_resolve"]
     server.resolve_is_running = _originals["resolve_is_running"]
     _restore_security_audit_log()
+    _restore_media_analysis_preferences()
     setattr(server, _INSTALLED_FLAG, False)
 
 
