@@ -216,6 +216,85 @@ class TestExecutionLifecycle(unittest.TestCase):
         self.assertEqual(assessment.blast_radius, BlastRadius.TIMELINE)
         self.assertTrue(any("Ripple" in r for r in assessment.reasons))
 
+    def test_raw_graph_lut_mutations_are_high_risk_for_timeline_or_group(self):
+        cases = (
+            ("set_lut", {"node_index": 1, "lut_path": "look.cube"}, BlastRadius.TIMELINE),
+            ("apply_arri_cdl_lut", {}, BlastRadius.TIMELINE),
+            (
+                "set_lut",
+                {"node_index": 1, "lut_path": "look.cube", "source": "color_group_pre"},
+                BlastRadius.PROJECT,
+            ),
+            ("apply_arri_cdl_lut", {"source": "color_group_post"}, BlastRadius.PROJECT),
+        )
+        for action, params, radius in cases:
+            with self.subTest(action=action, source=params.get("source", "timeline")):
+                assessment = classify_operation_risk("graph", action, params)
+                self.assertEqual(assessment.level, RiskLevel.HIGH)
+                self.assertTrue(assessment.destructive)
+                self.assertTrue(assessment.confirmation_required)
+                self.assertEqual(assessment.blast_radius, radius)
+
+    def test_raw_graph_lut_mutations_stay_medium_for_item_source(self):
+        for action, params in (
+            ("set_lut", {"node_index": 1, "lut_path": "look.cube", "source": "item"}),
+            ("apply_arri_cdl_lut", {"source": "item"}),
+        ):
+            with self.subTest(action=action):
+                assessment = classify_operation_risk("graph", action, params)
+                self.assertEqual(assessment.level, RiskLevel.MEDIUM)
+                self.assertTrue(assessment.destructive)
+                self.assertFalse(assessment.confirmation_required)
+                self.assertEqual(assessment.blast_radius, BlastRadius.ITEM)
+
+    def test_reviewed_medium_band_actions_remain_established_medium(self):
+        """Medium is a reviewed rating, not the classifier's fallthrough."""
+        cases = (
+            ("media_pool", "append_to_timeline", {}, BlastRadius.TIMELINE),
+            ("media_pool", "auto_sync_audio", {}, BlastRadius.TIMELINE),
+            ("media_pool", "move_clips", {}, BlastRadius.TIMELINE),
+            ("media_pool", "move_folders", {}, BlastRadius.TIMELINE),
+            ("media_pool", "setup_multicam_timeline", {}, BlastRadius.TIMELINE),
+            ("timeline", "copy_clips", {}, BlastRadius.TIMELINE),
+            ("timeline", "copy_range", {}, BlastRadius.TIMELINE),
+            ("timeline", "duplicate_clips", {}, BlastRadius.TIMELINE),
+            ("timeline", "duplicate_range", {}, BlastRadius.TIMELINE),
+            ("timeline", "insert_fusion_composition", {}, BlastRadius.TIMELINE),
+            ("timeline", "insert_fusion_generator", {}, BlastRadius.TIMELINE),
+            ("timeline", "insert_fusion_title", {}, BlastRadius.TIMELINE),
+            ("timeline", "insert_generator", {}, BlastRadius.TIMELINE),
+            ("timeline", "insert_ofx_generator", {}, BlastRadius.TIMELINE),
+            ("timeline", "insert_title", {}, BlastRadius.TIMELINE),
+            ("timeline", "set_setting", {}, BlastRadius.TIMELINE),
+            ("timeline", "set_start_timecode", {}, BlastRadius.TIMELINE),
+            ("timeline", "set_voice_isolation_state", {}, BlastRadius.TIMELINE),
+            ("timeline_ai", "analyze_dolby_vision", {}, BlastRadius.TIMELINE),
+            ("timeline_ai", "create_subtitles", {}, BlastRadius.TIMELINE),
+            ("timeline_item", "set_property", {}, BlastRadius.ITEM),
+            ("timeline_item", "set_retime", {}, BlastRadius.ITEM),
+            ("timeline_item", "set_voice_isolation_state", {}, BlastRadius.ITEM),
+            ("timeline_item_color", "add_version", {}, BlastRadius.ITEM),
+            ("timeline_item_color", "assign_color_group", {}, BlastRadius.ITEM),
+            ("timeline_item_color", "create_magic_mask", {}, BlastRadius.ITEM),
+            ("timeline_item_color", "load_version", {}, BlastRadius.ITEM),
+            ("timeline_item_color", "regenerate_magic_mask", {}, BlastRadius.ITEM),
+            ("timeline_item_color", "set_cdl", {}, BlastRadius.ITEM),
+            ("timeline_item_color", "smart_reframe", {}, BlastRadius.ITEM),
+            ("timeline_item_color", "stabilize", {}, BlastRadius.ITEM),
+            ("timeline_item_fusion", "import_comp", {}, BlastRadius.ITEM),
+            ("timeline_item_fusion", "load_comp", {}, BlastRadius.ITEM),
+            ("graph", "set_lut", {"source": "item"}, BlastRadius.ITEM),
+            ("graph", "apply_arri_cdl_lut", {"source": "item"}, BlastRadius.ITEM),
+        )
+        for tool, action, params, radius in cases:
+            with self.subTest(action=f"{tool}.{action}", params=params):
+                assessment = classify_operation_risk(tool, action, params)
+                self.assertEqual(assessment.level, RiskLevel.MEDIUM)
+                self.assertTrue(assessment.destructive)
+                self.assertTrue(assessment.recognised)
+                self.assertFalse(assessment.confirmation_required)
+                self.assertEqual(assessment.blast_radius, radius)
+
     def test_readback_verification_hook_handles_contradiction(self):
         hook = ReadbackVerificationHook()
         ctx = ToolCallContext("timeline", "delete_clips", {})

@@ -287,11 +287,14 @@ class RiskClassificationHook(LifecycleHook):
         ("timeline_item_color", "smart_reframe"),
         ("timeline_item_color", "create_magic_mask"),
         ("timeline_item_color", "regenerate_magic_mask"),
-        ("graph", "set_lut"),
-        ("graph", "apply_arri_cdl_lut"),
         # Importing or switching the active comp changes what renders.
         ("timeline_item_fusion", "import_comp"),
         ("timeline_item_fusion", "load_comp"),
+    }
+
+    _GRAPH_LUT_ACTIONS: Set[Tuple[str, str]] = {
+        ("graph", "set_lut"),
+        ("graph", "apply_arri_cdl_lut"),
     }
 
     _READ_ONLY_PREFIXES = ("get_", "list_", "query_", "probe_", "inspect_", "export_", "check_")
@@ -313,6 +316,29 @@ class RiskClassificationHook(LifecycleHook):
             radius = BlastRadius.PROJECT if "project" in tool_name else BlastRadius.TIMELINE
             conf_required = True
             reasons.append(f"Action '{action}' is permanently destructive across {radius.value}")
+        elif pair in cls._GRAPH_LUT_ACTIONS:
+            source = str(params.get("source") or "timeline")
+            destructive = True
+            if source in {"color_group_pre", "color_group_post"}:
+                level = RiskLevel.HIGH
+                radius = BlastRadius.PROJECT
+                conf_required = True
+                reasons.append(
+                    f"Raw graph LUT write '{action}' targets a color-group graph and can affect every clip in that group"
+                )
+            elif source == "item":
+                level = RiskLevel.MEDIUM
+                radius = BlastRadius.ITEM
+                reasons.append(
+                    f"Raw graph LUT write '{action}' is scoped to one timeline item"
+                )
+            else:
+                level = RiskLevel.HIGH
+                radius = BlastRadius.TIMELINE
+                conf_required = True
+                reasons.append(
+                    f"Raw graph LUT write '{action}' targets the timeline graph by default"
+                )
         elif pair in cls._HIGH_RISK_ACTIONS or action.startswith("delete_") or action.startswith("remove_"):
             level = RiskLevel.HIGH
             destructive = True
@@ -662,4 +688,3 @@ def classify_operation_risk(
     tool_name: str, action: str, params: Optional[Dict[str, Any]] = None
 ) -> RiskAssessment:
     return RiskClassificationHook.classify(tool_name, action, params or {})
-

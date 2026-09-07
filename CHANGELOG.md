@@ -2,6 +2,35 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.212.0 — graph LUT risk follows the target scope
+
+### Changed
+
+- **`graph.set_lut` and `graph.apply_arri_cdl_lut` now classify by graph scope.**
+  The raw graph tool defaults to the timeline node graph and can also target
+  color-group pre/post graphs, so those calls can change the rendered look of a
+  whole timeline or every clip in a group and now classify as HIGH risk. When
+  the caller explicitly scopes the same actions to `source="item"`, they remain
+  MEDIUM because the mutation is limited to one timeline item. Safe mode now
+  blocks the broad timeline/group cases unless the caller explicitly allows the
+  risky operation.
+
+### Added
+
+- **Focused regression tests for the medium-band correction.**
+  The tests assert that `inspect_operation` reports both raw graph LUT
+  mutations as HIGH risk for timeline/group targets, MEDIUM for item targets,
+  and that the safe-mode gate follows the same distinction before handler
+  execution. The existing all-actions drift guard still verifies that
+  `inspect_operation` and the gate agree for every registered destructive
+  action.
+
+- **A medium-band review matrix pins the actions left at MEDIUM.**
+  The table covers every remaining MEDIUM-rated destructive action and asserts
+  that each one is recognised, destructive, not confirmation-gated, and carries
+  the reviewed blast radius. That makes MEDIUM an explicit rating rather than a
+  quiet resting place for anything that was not promoted.
+
 ## What's New in v2.211.0 — dry_run on an action that cannot honour it now refuses instead of executing
 
 ### Changed
