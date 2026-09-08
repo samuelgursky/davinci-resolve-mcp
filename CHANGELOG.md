@@ -2,6 +2,40 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.215.0 — mutating operations write a structured operation log
+
+### Added
+
+- **Recognised mutating operations now write compact JSONL operation records.**
+  Each record captures the operation id, tool, action, `tool.action` name,
+  risk level, whether the risk was established by the classifier, blast
+  radius, dry-run flag, timestamp, final status, duration when available, and
+  a short human-readable summary. When a result already reports semantic
+  changes through the operation envelope, those changes are copied into the log
+  instead of guessed.
+
+- **The operation log is separate from both execution traces and the security audit log.**
+  Execution traces explain multi-step work, and the security audit records
+  destructive gate decisions. The new log is the simpler chronological trail
+  for mutating tool calls: what was attempted, whether it ran, and what the
+  result said. Read-only operations are deliberately skipped so the file stays
+  focused on project-changing activity. If a mutating handler raises an
+  unhandled exception before it can return a normal result, the lifecycle error
+  path still writes a failed record with the exception type and message.
+
+- **Setup defaults can enable, disable, and relocate the operation log.**
+  `destructive.operation_log` defaults to `true`, and
+  `destructive.operation_log_path` defaults to `logs/operation-log.jsonl`.
+  The path also honors `RESOLVE_MCP_OPERATION_LOG_FILE` for deployments that
+  need to route records outside the repository. Test isolation redirects the
+  default path so synthetic suite activity never pollutes a real operator log.
+
+### Validation
+
+- Added coverage for record shape, lifecycle writes for mutating operations,
+  read-only suppression, blocked destructive attempts, exception failures,
+  setup set/clear support, and test-suite log redirection.
+
 ## What's New in v2.214.1 — grade calls fail silently off the Color page; apply_trace_plan switches for you
 
 ### Fixed
