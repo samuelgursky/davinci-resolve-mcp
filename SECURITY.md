@@ -39,7 +39,11 @@ Their posture:
 - **Secrets on disk are private.** The panel's pidfile (token + pid + URL) and
   the transport's state file (token + URL) live under
   `~/.davinci-resolve-mcp/` (0700) and are written 0600 — never in a shared
-  temp directory or `~/Documents`.
+  temp directory or `~/Documents`. Those are the only on-disk copies: neither
+  token is ever written to `logs/server.log`, which the server appends to with
+  the default file mode and never clears. The transport logs the state file's
+  path, not the token, and echoes a generated token only to an interactive
+  stderr.
 
 If you find a route that can be reached without the token, or a way to satisfy
 the Host/Origin checks from a non-loopback page, that is a security bug — please

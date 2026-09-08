@@ -2,6 +2,45 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.212.1 — the networked transport's generated bearer token no longer lands in server.log
+
+### Fixed
+
+- **A generated transport token was written to `logs/server.log` in cleartext (CWE-532).**
+  Starting `--transport sse` or `--transport streamable-http` without pinning
+  `$DAVINCI_MCP_TOKEN` logged the fresh token verbatim. The transport logger
+  has no handler of its own, so the record propagated to the root logger,
+  which `src/server.py` points at `logs/server.log` — opened with the default
+  file mode (0644 under the usual umask), appended to forever, and never
+  cleared. That copy was strictly less protected and strictly more durable
+  than the one the code deliberately locks down: the 0600 state file under
+  the per-user private directory, deleted in `run_networked`'s `finally`. The
+  token is the transport's only access control, and the control panel's
+  sibling token was already kept out of argv and logs against exactly this
+  local-user threat. The log line now names the state file's path instead of
+  the value, and a generated token is echoed only to an interactive stderr
+  (a redirected stderr is another file). The state file remains the
+  hand-back channel the control panel already reads. Reported privately by an
+  external security researcher, with a reproduction against the real
+  `run_networked` and the server's real root-logger configuration.
+
+### Documentation
+
+- `SECURITY.md` now states the rule outright: the pidfile and the transport
+  state file are the only on-disk copies of either token, and neither is
+  written to `logs/server.log`. The `mcp_transport` module docstring no longer
+  says the token is "logged at startup".
+
+### Validation
+
+- A regression test runs the real `run_networked` (uvicorn stubbed) with a
+  root `FileHandler` configured the way `src/server.py` configures it, and
+  asserts the token is absent from the file, the state-file path is present,
+  a redirected stderr never carries it, an interactive stderr carries it
+  exactly once, and a pinned token is echoed nowhere. Against the previous
+  code the test fails with the token found in the log — the reporter's
+  finding, reproduced.
+
 ## What's New in v2.212.0 — graph risk follows the graph the call targets
 
 ### Changed

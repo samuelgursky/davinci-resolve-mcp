@@ -3,9 +3,13 @@
 stdio remains the default. The `sse` and `streamable-http` modes bind to
 loopback (127.0.0.1) by default and REQUIRE a bearer token on every request, so
 turning networking on never silently exposes Resolve. The token comes from
-``$DAVINCI_MCP_TOKEN`` or is generated and logged at startup. A small state file
-(0600, under the per-user private state dir — never a shared tempdir) lets the
-control panel show the live connection URL + token.
+``$DAVINCI_MCP_TOKEN`` or is generated at startup. A small state file (0600,
+under the per-user private state dir — never a shared tempdir) lets the control
+panel show the live connection URL + token; that file is the only place a
+generated token is written. It is never logged: the server's root logger
+appends to ``logs/server.log`` with the default file mode and never truncates
+it, so a logged token would outlive the session in a file the state file's
+0600 was chosen to avoid. An interactive operator sees it once on stderr.
 
 Security posture:
 - Default host is loopback; a non-loopback bind logs a loud warning.
@@ -17,6 +21,7 @@ import json
 import logging
 import os
 import secrets
+import sys
 import time
 
 from src.utils.private_state import private_state_dir, write_private_json
@@ -102,6 +107,14 @@ def read_transport_state():
     return state
 
 
+def _stderr_is_interactive() -> bool:
+    """True only when stderr is a terminal a person is looking at."""
+    try:
+        return bool(sys.stderr and sys.stderr.isatty())
+    except (AttributeError, ValueError):
+        return False
+
+
 def run_networked(mcp, transport):
     """Serve `mcp` over an authenticated HTTP transport ('sse'|'streamable-http')."""
     import uvicorn
@@ -124,7 +137,20 @@ def run_networked(mcp, transport):
     logger.info("MCP %s transport: http://%s:%s (bearer token required)",
                 transport, host, port)
     if generated:
-        logger.info("Generated bearer token (set $DAVINCI_MCP_TOKEN to pin it): %s", token)
+        # The token is the transport's only access control. Log WHERE it is,
+        # never WHAT it is: this record propagates to the root logger, which
+        # src/server.py points at logs/server.log — default file mode, appended
+        # forever, no cleanup in our finally: — whereas the state file is 0600
+        # and cleared at shutdown. The console gets the value only when a person
+        # is watching it (a TTY); a redirected stderr is just another file.
+        logger.info(
+            "Generated a bearer token; it is recorded in %s (0600). "
+            "Set $DAVINCI_MCP_TOKEN to pin your own.",
+            TRANSPORT_STATE_PATH,
+        )
+        if _stderr_is_interactive():
+            print(f"davinci-resolve-mcp: bearer token for this session: {token}",
+                  file=sys.stderr, flush=True)
 
     write_transport_state(transport, host, port, token)
     try:
