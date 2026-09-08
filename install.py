@@ -1385,7 +1385,7 @@ def install_dependencies(venv_path, project_dir):
     # downgrade it, and the fix does not depend on install ordering. Lift both
     # together when server.py is ported to the 2.x layout.
     subprocess.run(
-        [str(pip), "install", "-q", "mcp[cli]>=1.29,<2"],
+        [str(pip), "install", "-q", "mcp[cli]>=1.30,<2"],
         check=True, capture_output=True
     )
 
