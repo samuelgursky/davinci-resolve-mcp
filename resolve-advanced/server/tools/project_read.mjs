@@ -35,16 +35,28 @@ const timelineClipsSchema = z.object({ ...dbTarget, timeline: z.string().describ
 // column: file-relative source frames, calibrated frame-EXACT against a real
 // turnover's AAF ground truth (A005C004 run: 36069/8863/8919/12804, through-
 // edit continuity intact). Emitted as sourceIn.
+// Identity columns for color_trace (2026-09-08): MediaRef → Sm2MpMedia gives the
+// pool item's UniqueMediaPoolItemId (poolId); the version table's pActive names
+// the ACTIVE grade version, so an item carrying several corrected versions
+// reads back ONE row — the active one (or the first corrected one when the
+// active version has no correction). Measured on a 21k-item show DB: no item
+// held two corrected versions, but the dedupe below is what keeps that from
+// becoming a duplicate-clip bug the day one does.
 const TIMELINE_CLIPS_SQL = `
- SELECT i.Name AS name, t.Type AS trackType, i.Start AS start, i.Duration AS duration,
+ SELECT i.Sm2TiItem_id AS itemId, i.Name AS name, t.Type AS trackType, i.Start AS start, i.Duration AS duration,
  i.MediaReelNumber AS reel, i.MediaStartTime AS mediaStart, i."In" AS sourceIn,
  i.MediaFilePath AS mediaPath,
+ m.UniqueMediaPoolItemId AS poolId,
  i.Sm2TiTrack_id AS trackId,
+ v.Name AS gradeVersion,
+ CASE WHEN vt.pActive IS NOT NULL AND v."ListMgt::LmVersion_id" = vt.pActive THEN 1 ELSE 0 END AS gradeIsActive,
  lower(hex(v.Body)) AS gradeBody
  FROM Sm2TiItem i
  JOIN Sm2TiTrack t ON i.Sm2TiTrack_id = t.Sm2TiTrack_id
  JOIN Sm2Sequence s ON t.Sequence = s.Sm2Sequence_id
  JOIN Sm2Timeline tl ON s.Sm2Timeline_id = tl.Sm2Timeline_id
+ LEFT JOIN Sm2MpMedia m ON m.Sm2MpMedia_id = i.MediaRef
+ LEFT JOIN "ListMgt::LmVersionTable" vt ON vt."ListMgt::LmVersionTable_id" = i.pLmVerTable
  LEFT JOIN "ListMgt::LmVersion" v ON v."ListMgt::LmVersionTable_id" = i.pLmVerTable AND v.HasCorrection = '1'
  WHERE tl.Name = ?`;
 const tablesSchema = z.object({ ...dbTarget, withRowCounts: z.boolean().optional() });
@@ -107,18 +119,33 @@ export function readTimelineClips(dbPath, timeline, trackType = 'all', includeGr
   const db = openGuarded(dbPath, { writable: false });
   try {
     let rows = db.prepare(TIMELINE_CLIPS_SQL).all(timeline);
+    rows = dedupeVersionRows(rows);
     if (trackType === 'video') rows = rows.filter((r) => r.trackType === 0);
     else if (trackType === 'audio') rows = rows.filter((r) => r.trackType !== 0);
     rows.sort((a, b) => a.trackType - b.trackType || Number(a.start) - Number(b.start));
     // grade Body is large + only needed for ColorTrace — strip it by default to avoid bloat.
     for (const r of rows) {
+      r.hasGrade = !!r.gradeBody;
       if (!includeGrade) delete r.gradeBody;
+      delete r.gradeIsActive;
       r.sourceIn = decodeItemIn(r.sourceIn);
     }
     return rows;
   } finally {
     db.close();
   }
+}
+
+/** One row per timeline item: an item with several corrected grade versions
+ * joins to several rows — keep the ACTIVE version's row, else the first. */
+export function dedupeVersionRows(rows) {
+  const byItem = new Map();
+  for (const r of rows) {
+    const key = r.itemId || `${r.trackId}|${r.start}|${r.name}`;
+    const prev = byItem.get(key);
+    if (!prev || (!prev.gradeIsActive && r.gradeIsActive)) byItem.set(key, r);
+  }
+  return [...byItem.values()];
 }
 
 export const projectReadTool = {

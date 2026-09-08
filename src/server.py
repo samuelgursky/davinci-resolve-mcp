@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 353-tool granular server instead
 """
 
-VERSION = "2.212.4"
+VERSION = "2.213.0"
 
 import base64
 import os
@@ -1281,6 +1281,8 @@ _TOKEN_GATED_DESTRUCTIVE_ACTIONS = frozenset({
     ("edit_engine", "execute_swap"),
     ("graph", "apply_grade_from_drx"),
     ("graph", "reset_all_grades"),
+    # Batch grade carry-over from a color_trace plan: plan → confirm → apply.
+    ("timeline_item_color", "apply_trace_plan"),
     # 21.0 AI ops that render/generate NEW media files (additive, but expensive
     # and irreversible without manual cleanup) — gated so they never run by
     # surprise. They never modify source media.
@@ -26386,6 +26388,7 @@ _COLOR_GRADE_KERNEL_ACTIONS = [
     "safe_set_cdl",
     "safe_copy_grade",
     "safe_apply_drx",
+    "apply_trace_plan",
     "safe_export_lut",
     "grade_version_snapshot",
     "grade_version_restore",
@@ -26861,6 +26864,232 @@ def _safe_apply_drx(proj, item, p: Dict[str, Any]):
     return {"success": success, "path": path, "source": source}
 
 
+# ── color_trace apply driver ─────────────────────────────────────────────────
+#
+# The advanced (Node) server's `color_trace plan` matches a graded SOURCE
+# timeline against a TARGET timeline from the project DB (no Resolve needed),
+# writes one lossless .drx per graded match and a plan.json naming each target
+# clip by (name, record start, duration). This driver is the live half: it
+# resolves every plan entry to a clip on the CURRENT timeline, reports what it
+# would touch, and — behind a confirm_token, with the timeline archived first —
+# runs ApplyGradeFromDRX on each resolved clip. Every clip the plan could not
+# place on the live timeline is reported, never guessed.
+
+_TRACE_SKIP_REASONS = (
+    "unmatched", "no-source-grade", "below-threshold", "below_min_confidence",
+    "drx_missing", "drx_path_not_temp", "live_item_not_found", "ambiguous_live_item",
+)
+
+
+def _load_trace_plan(p: Dict[str, Any]):
+    plan = p.get("plan")
+    plan_path = p.get("plan_path")
+    if plan is None:
+        if not plan_path:
+            return None, _err(
+                "plan_path (or an inline plan) is required",
+                code="MISSING_PLAN", category="invalid_input",
+                remediation="Run the advanced server's color_trace plan with emitDir set "
+                            "(a temp-dir path) and pass its planPath here.",
+            )
+        if not os.path.isfile(plan_path):
+            return None, _err(f"plan not found: {plan_path}", code="PLAN_NOT_FOUND", category="invalid_input")
+        try:
+            with open(plan_path, encoding="utf-8") as fh:
+                plan = json.load(fh)
+        except Exception as exc:
+            return None, _err(f"plan is not valid JSON: {exc}", code="PLAN_INVALID", category="invalid_input")
+    if not isinstance(plan, dict) or not isinstance(plan.get("matches"), list):
+        return None, _err("plan has no matches list (expected color_trace.plan output)",
+                          code="PLAN_INVALID", category="invalid_input")
+    return plan, None
+
+
+def _live_video_items(tl) -> List[Dict[str, Any]]:
+    """Every video-track item on the timeline with the fields the plan keys on."""
+    out: List[Dict[str, Any]] = []
+    try:
+        track_count = int(tl.GetTrackCount("video") or 0)
+    except Exception as exc:
+        logger.warning("apply_trace_plan: GetTrackCount(video) failed: %s", exc)
+        track_count = 0
+    for track_index in range(1, track_count + 1):
+        for item_index, it in enumerate(tl.GetItemListInTrack("video", track_index) or []):
+            try:
+                out.append({
+                    "item": it,
+                    "track_index": track_index,
+                    "item_index": item_index,
+                    "id": it.GetUniqueId(),
+                    "name": it.GetName(),
+                    "start": int(it.GetStart()),
+                    "duration": int(it.GetDuration()),
+                })
+            except Exception as exc:
+                logger.warning("apply_trace_plan: skipping unreadable item on V%s: %s", track_index, exc)
+    return out
+
+
+def _resolve_trace_plan(tl, plan: Dict[str, Any], p: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Map each plan match onto a live clip. status: apply | skip (+reason)."""
+    min_conf = float(p.get("min_confidence", 0.8))
+    tol = int(p.get("start_tolerance", 0))
+    require_temp = p.get("require_temp_path", True)
+    live = _live_video_items(tl)
+    rows: List[Dict[str, Any]] = []
+    for m in plan["matches"]:
+        tgt = m.get("target") or {}
+        src = m.get("source") or {}
+        ga = m.get("gradeApply") or {}
+        drx = ga.get("drxPath")
+        row: Dict[str, Any] = {
+            "index": m.get("index"),
+            "target": {"name": tgt.get("name"), "start": tgt.get("start"), "duration": tgt.get("duration")},
+            "source": src.get("name"),
+            "method": m.get("method"),
+            "confidence": m.get("confidence"),
+            "ambiguous": bool(m.get("ambiguous")),
+            "drx_path": drx,
+            "status": "skip",
+            "reason": None,
+            "live": None,
+        }
+        conf = row["confidence"] if isinstance(row["confidence"], (int, float)) else 0.0
+        if not src:
+            row["reason"] = "unmatched"
+        elif ga.get("status") != "ready":
+            row["reason"] = ga.get("status") or "no-source-grade"
+        elif conf < min_conf:
+            row["reason"] = "below_min_confidence"
+        elif not drx or not os.path.isfile(drx):
+            row["reason"] = "drx_missing"
+        elif require_temp and not _grade_temp_path_ok(drx):
+            row["reason"] = "drx_path_not_temp"
+        else:
+            name = tgt.get("name")
+            start = tgt.get("start")
+            cands = [
+                x for x in live
+                if x["name"] == name and isinstance(start, (int, float)) and abs(x["start"] - int(start)) <= tol
+            ]
+            if len(cands) > 1:
+                same_dur = [x for x in cands if x["duration"] == tgt.get("duration")]
+                if len(same_dur) == 1:
+                    cands = same_dur
+            if not cands:
+                row["reason"] = "live_item_not_found"
+            elif len(cands) > 1:
+                row["reason"] = "ambiguous_live_item"
+                row["live_candidates"] = [
+                    {"track_index": x["track_index"], "item_index": x["item_index"], "id": x["id"], "duration": x["duration"]}
+                    for x in cands
+                ]
+            else:
+                hit = cands[0]
+                row["status"] = "apply"
+                row["live"] = {k: hit[k] for k in ("track_index", "item_index", "id", "start", "duration")}
+                row["_item"] = hit["item"]
+        rows.append(row)
+    return rows
+
+
+def _apply_trace_plan(p: Dict[str, Any]) -> Dict[str, Any]:
+    plan, err = _load_trace_plan(p)
+    if err:
+        return err
+    _, tl, err = _get_tl()
+    if err:
+        return err
+    live_name = tl.GetName()
+    plan_tl = (plan.get("target") or {}).get("timeline")
+    if plan_tl and plan_tl != live_name and not p.get("allow_timeline_mismatch"):
+        return _err(
+            f"plan targets timeline {plan_tl!r} but the current timeline is {live_name!r}",
+            code="TIMELINE_MISMATCH", category="invalid_input",
+            remediation=f"timeline(action='set_current', params={{'name': {plan_tl!r}}}) first, "
+                        "or pass allow_timeline_mismatch=True if the plan was built for this cut under another name.",
+        )
+    rows = _resolve_trace_plan(tl, plan, p)
+    to_apply = [r for r in rows if r["status"] == "apply"]
+    skipped_by_reason: Dict[str, int] = {}
+    for r in rows:
+        if r["status"] != "apply":
+            skipped_by_reason[r["reason"] or "unknown"] = skipped_by_reason.get(r["reason"] or "unknown", 0) + 1
+    summary = {
+        "plan_matches": len(rows),
+        "would_apply": len(to_apply),
+        "skipped": len(rows) - len(to_apply),
+        "skipped_by_reason": skipped_by_reason,
+        "ambiguous_in_plan": sum(1 for r in rows if r["ambiguous"]),
+        "min_confidence": float(p.get("min_confidence", 0.8)),
+    }
+    public = [{k: v for k, v in r.items() if not k.startswith("_")} for r in rows]
+    grade_mode = p.get("grade_mode", 0)
+    version_name = p.get("version_name")
+
+    if p.get("dry_run"):
+        return _ok(dry_run=True, timeline=live_name, plan_source=plan.get("source"),
+                   summary=summary, resolution=public, grade_mode=grade_mode, version_name=version_name)
+    if not to_apply:
+        return _ok(timeline=live_name, applied=[], failed=[], summary=summary, resolution=public,
+                   note="nothing to apply — every plan entry was skipped (see skipped_by_reason)")
+    if "confirm_token" not in p and "confirmToken" not in p and _confirm_token_required():
+        preview = {
+            "operation": "apply_trace_plan",
+            "warning": "REPLACES the node graph of every listed target clip (ApplyGradeFromDRX has "
+                       "no append mode). The current timeline is archived to the Archive bin first.",
+            "timeline": live_name,
+            "will_apply": len(to_apply),
+            "summary": summary,
+            "targets": [
+                {"name": r["target"]["name"], "start": r["target"]["start"], "source": r["source"],
+                 "method": r["method"], "confidence": r["confidence"], "ambiguous": r["ambiguous"]}
+                for r in to_apply[:50]
+            ],
+            "grade_mode": grade_mode,
+            "version_name": version_name,
+        }
+        return _issue_confirm_token(action="apply_trace_plan", params=p, preview=preview)
+    blocked = _consume_confirm_token(action="apply_trace_plan", params=p)
+    if blocked:
+        return blocked
+
+    applied: List[Dict[str, Any]] = []
+    failed: List[Dict[str, Any]] = []
+    for r in to_apply:
+        item = r["_item"]
+        rec = {k: v for k, v in r.items() if not k.startswith("_")}
+        ok = False
+        try:
+            if version_name:
+                # AddVersion switches the item to the NEW version, so the apply
+                # lands there and the previous version stays intact.
+                rec["version_added"] = bool(item.AddVersion(version_name, 0))
+            graph = item.GetNodeGraph()
+            if not _has_method(graph, "ApplyGradeFromDRX"):
+                rec["error"] = "item graph does not expose ApplyGradeFromDRX"
+            else:
+                ok = bool(graph.ApplyGradeFromDRX(r["drx_path"], grade_mode))
+                if not ok:
+                    rec["error"] = "ApplyGradeFromDRX returned False"
+        except Exception as exc:
+            rec["error"] = str(exc)
+        rec["status"] = "applied" if ok else "failed"
+        (applied if ok else failed).append(rec)
+    summary.update({"applied": len(applied), "failed": len(failed)})
+    return {
+        "success": not failed,
+        "timeline": live_name,
+        "plan_source": plan.get("source"),
+        "applied": applied,
+        "failed": failed,
+        "skipped": [r for r in public if r["status"] != "apply"],
+        "summary": summary,
+        "grade_mode": grade_mode,
+        "version_name": version_name,
+    }
+
+
 def _grade_version_restore(item, p: Dict[str, Any]):
     name = p.get("name")
     if not name:
@@ -26976,6 +27205,25 @@ _ACTION_HELP: Dict[str, Dict[str, Dict[str, Any]]] = {
                 '  "path": "/tmp/show_look_v3.drx",\n'
                 '  "grade_mode": 0,\n'
                 '  "require_temp_path": True\n'
+                '})  # first call returns {status: "confirmation_required", confirm_token}\n'
+                '   # re-call with confirm_token to apply'
+            ),
+        },
+        "apply_trace_plan": {
+            "summary": "Apply a color_trace plan (advanced server) to the CURRENT timeline: one ApplyGradeFromDRX per resolved clip. REPLACES those graphs; gated by confirm_token; timeline archived first.",
+            "params": "plan_path: str (planPath from color_trace plan with emitDir) | plan: dict, dry_run?, min_confidence? (default 0.8), start_tolerance? (frames, default 0), grade_mode? (0=no keyframes, 1=source TC aligned, 2=start aligned), version_name? (AddVersion per clip before applying), require_temp_path? (default True), allow_timeline_mismatch?, confirm_token?",
+            "returns": "{success, timeline, applied: [...], failed: [...], skipped: [...], summary: {plan_matches, would_apply, applied, failed, skipped_by_reason, ambiguous_in_plan}}; dry_run → {resolution: [{target, source, method, confidence, status, reason, live}]}",
+            "example": (
+                '# 1. advanced server (no Resolve needed):\n'
+                '#    color_trace(action="plan", {sourceProjectName: "SHOW_v07", sourceTimeline: "REEL_01 v07",\n'
+                '#                                targetProjectName: "SHOW_v08", targetTimeline: "REEL_01 v08",\n'
+                '#                                emitDir: "/tmp/trace-reel01"})  → planPath\n'
+                '# 2. open the TARGET project + timeline in Resolve, then:\n'
+                'timeline_item_color(action="apply_trace_plan", params={\n'
+                '  "plan_path": "/tmp/trace-reel01/plan.json", "dry_run": True\n'
+                '})  # read resolution: every entry is apply | skip(reason)\n'
+                'timeline_item_color(action="apply_trace_plan", params={\n'
+                '  "plan_path": "/tmp/trace-reel01/plan.json", "version_name": "traced v07"\n'
                 '})  # first call returns {status: "confirmation_required", confirm_token}\n'
                 '   # re-call with confirm_token to apply'
             ),
@@ -27757,6 +28005,7 @@ def timeline_item_color(action: str, params: Optional[Dict[str, Any]] = None) ->
     safe_set_cdl        -> {success, validation, normalized, node_preflight, diagnosis?}
     safe_copy_grade     -> {success, targets, missing}
     safe_apply_drx      -> {success, path, source}  # first call may return confirm_token
+    apply_trace_plan    -> {success, timeline, applied, failed, skipped, summary}  # dry_run → {resolution}; first live call returns confirm_token
     grade_capabilities  -> {item_methods, graph_sources, lut_export_types, guards}
     grade_boundary_report -> {capabilities, item, color_groups, gallery}
     All actions may return {"error": {code, category, retryable, message, remediation, reason?}}.
@@ -27798,6 +28047,14 @@ def timeline_item_color(action: str, params: Optional[Dict[str, Any]] = None) ->
       safe_apply_drx(path, source?, grade_mode?, require_temp_path?) -> {success}
         REPLACES the target graph. Captures a version snapshot first; require_temp_path defaults True.
         # example: action_help(name='<action_name>')
+      apply_trace_plan(plan_path|plan, dry_run?, min_confidence?=0.8, start_tolerance?=0, grade_mode?=0, version_name?, require_temp_path?=True, allow_timeline_mismatch?, confirm_token?) -> {success, applied, failed, skipped, summary}
+        The live half of the advanced server's color_trace (a ColorTrace that matches on media
+        identity, cross-project, from the project DB). Resolves each plan entry to a clip on the
+        CURRENT timeline by (name, record start, duration), then ApplyGradeFromDRX per clip —
+        one confirm_token for the batch, timeline archived first. dry_run returns the resolution
+        table without a token. version_name adds a new local version per clip before applying so
+        the previous grade stays intact. Never guesses: unresolved entries are reported, not applied.
+        # example: action_help(name='<action_name>')
       safe_export_lut(type?, path, require_temp_path?) -> {success, path, size}
         Sandboxed LUT export.
       grade_version_restore(name, type?, dry_run?, ...) -> {success}
@@ -27837,6 +28094,9 @@ def timeline_item_color(action: str, params: Optional[Dict[str, Any]] = None) ->
     p = _params(params)
     if action == "action_help":
         return _action_help("timeline_item_color", p)
+    if action == "apply_trace_plan":
+        # Timeline-scoped (walks every video track); does not need an item.
+        return _apply_trace_plan(p)
     _, item, err = _get_item(p)
     if err:
         return err

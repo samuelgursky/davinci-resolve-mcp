@@ -2,6 +2,59 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.213.0 — a ColorTrace that matches on media, then applies
+
+### Added
+
+- **`color_trace` matches on media identity, names last.** Native ColorTrace
+  keys on timecode, clip name and order inside one project, so a renamed clip,
+  a reordered cut, or a stringout cut into graded sections defeats it. The
+  advanced server's `color_trace plan` now reads both timelines from their
+  `Project.db` (any two projects, read-only, no Resolve) and matches in tiers:
+  same media (pool item id or file path) with the same in-point and duration;
+  same media with overlapping source range (the best overlap wins, so each
+  section of a stringout finds its own grade); same reel plus overlap; same
+  file name plus overlap (relocated media); then, only as a fallback, exact and
+  normalised clip names. Every match reports its `method`, `confidence`,
+  `sourceOverlap` and an `ambiguous` flag when two candidates tie.
+- **`plan.json` + a lossless `.drx` per graded match.** With `emitDir` set the
+  plan writes one `.drx` per match by copying the source clip's grade body
+  byte for byte (no decode/re-encode, so OFX/ResolveFX nodes survive) and a
+  `plan.json` that names each target clip by (name, record start, duration).
+- **`timeline_item_color.apply_trace_plan` — the live half.** Resolves every
+  plan entry to a clip on the CURRENT timeline, returns a dry-run resolution
+  table (`apply` or `skip` with a reason: `live_item_not_found`,
+  `ambiguous_live_item`, `below_min_confidence`, `drx_missing`,
+  `drx_path_not_temp`, `no-source-grade`, `unmatched`), then behind one
+  `confirm_token` for the whole batch runs `ApplyGradeFromDRX` per clip.
+  Registered as a destructive action (timeline archived to the Archive bin
+  first, rated with the other whole-grade replacements, native dry-run).
+  `version_name` adds a local version per clip before applying so the previous
+  grade stays intact; `min_confidence` (default 0.8) gates the name-only tiers
+  out unless you lower it. Unresolved entries are reported, never guessed.
+
+### Changed
+
+- **`project_read.timeline_clips` reads the ACTIVE grade version.** The clip
+  join now follows the version table's `pActive` and dedupes to one row per
+  item, so a clip carrying several corrected versions no longer reads back as
+  several clips. Rows also carry the pool item id (`poolId`) and `hasGrade`.
+- **Name normalisation only strips `v`-prefixed version tokens.** Stripping any
+  trailing number folded `SHOT_010` and `SHOT_020` onto one key, so a
+  name-tier match could cross shots.
+
+### What was checked
+
+- Offline: 11 new match-engine tests (stringout sections by overlap, straddling
+  ranges, ties → ambiguous, pool-id vs path, reel and basename tiers,
+  unreadable in-point degrading to `media-only`, name fallbacks, active-version
+  dedupe) and 9 driver tests (resolution reasons, stacked clips disambiguated
+  by duration, ambiguous live items skipped, token → apply with `version_name`,
+  partial failure reported, dispatch without an item). Both full suites green.
+- **Not yet live-validated:** the end-to-end trace onto a real target timeline
+  with a render check afterwards. The plan step was live-verified against a
+  scratch DB in v2.136; the apply step is unit-tested against stubs only.
+
 ## What's New in v2.212.4 — both dependency manifests move together again
 
 ### Changed

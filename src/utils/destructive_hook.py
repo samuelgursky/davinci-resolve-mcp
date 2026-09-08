@@ -169,6 +169,7 @@ DESTRUCTIVE_ACTIONS_BY_TOOL: Dict[str, FrozenSet[str]] = {
     "timeline_item_color": frozenset({
         "set_cdl",
         "copy_grades",
+        "apply_trace_plan",
         "reset_all_node_colors",
         "assign_color_group",
         "remove_from_color_group",
@@ -277,6 +278,7 @@ DRY_RUN_DEFAULT_TRUE_ACTIONS: frozenset = frozenset({
 
 NATIVE_DRY_RUN_ACTIONS: frozenset = frozenset({
     ("media_pool", "clear_clip_marks"),
+    ("timeline_item_color", "apply_trace_plan"),
     ("media_pool", "set_clip_marks"),
     ("media_pool", "setup_multicam_timeline"),
     ("timeline", "apply_cuts"),
