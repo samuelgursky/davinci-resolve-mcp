@@ -27,6 +27,20 @@ class _FakeResponse:
 
 
 class UpdateCheckTests(unittest.TestCase):
+    def setUp(self):
+        # The module keeps the last result in a process-wide cache, and several
+        # tests below seed or populate it. Reset around every test so a cached
+        # "update_available" from one test cannot leak into another module's
+        # get_cached_update_status call later in the same run.
+        self._reset_cached_status()
+        self.addCleanup(self._reset_cached_status)
+
+    @staticmethod
+    def _reset_cached_status():
+        with update_check._cached_lock:
+            update_check._cached_status.clear()
+            update_check._cached_status.update({"status": "unknown"})
+
     def test_compare_versions_handles_release_tags(self):
         self.assertEqual(update_check.compare_versions("2.20.0", "v2.21.0"), -1)
         self.assertEqual(update_check.compare_versions("2.20", "2.20.0"), 0)

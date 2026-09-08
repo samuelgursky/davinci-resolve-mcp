@@ -2,6 +2,43 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.212.3 — a cached update prompt is re-judged against the version actually running
+
+### Fixed
+
+- **A persisted "update available" outlived the upgrade it recommended.** The
+  update checker caches its last verdict (in memory and in
+  `logs/update-check.json`) and serves it without network for the throttle
+  interval. That verdict was stored as a *status*, not as a comparison, so
+  after upgrading from the version it was computed for — 2.135.0 → 2.210.0,
+  say — a server now running 2.212.1 kept prompting to update to 2.210.0.
+  Every cached path (in-memory, persisted, and the throttled branch of
+  `check_for_updates`) now re-compares the cached `latest_version` against
+  the running version and reclassifies to `update_available` /
+  `up_to_date` / `current_ahead`; `error` and `disabled` results are left
+  as they were. Contributed in #194 by @diesdaas.
+
+### Documentation
+
+- **The READMEs said there was no beat detection; there has been for some
+  time.** Both the English and Simplified Chinese "not supported" tables
+  claimed "no beat or downbeat detection yet" — twenty lines below an
+  optional-extras table listing `pip install librosa` for exactly that. The
+  row now describes what actually exists: optional `librosa` beat detection
+  and beat / bar / phrase cut-point plans, downbeats inferred from the first
+  beat with `beat_offset` for pickups, and cut *points* rather than a finished
+  music edit. Speech-silence tools remain the wrong instrument for music.
+
+### Validation
+
+- Four regression tests from the PR cover the persisted, in-memory and
+  throttled cache paths plus the preserved error/disabled states. On landing,
+  the update-check tests gained a `setUp` that resets the module-wide cache
+  around every test, so a seeded verdict cannot leak into another module's
+  cached-status read later in the run. Full offline suite, drift guards and
+  the advanced Node suite are green. No Resolve behavior changed; live test
+  not required.
+
 ## What's New in v2.212.2 — failed verification evidence survives the operation envelope
 
 ### Fixed
