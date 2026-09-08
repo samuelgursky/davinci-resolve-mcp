@@ -2,6 +2,29 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.213.3 — the capture docstring says what is restored and what is only reset
+
+### Documentation
+
+- **`_playhead_frame_render`'s docstring still said the mark range was not
+  readable.** Since v2.213.2 it is: `Timeline.GetMarkInOut` is read before the
+  capture and put back afterwards, offset into `SetRenderSettings`' absolute
+  frame space. The docstring now lists the three things that actually happen
+  on the way out — format and codec genuinely restored, the mark range
+  restored when one was set (whole timeline as the fallback), and TargetDir
+  and CustomName reset because nothing can read them back — and notes that
+  `GetRenderSettings` is still absent as of 21.1. It is the first thing a
+  caller reads to decide whether `quality="frame"` is safe against their
+  render setup. Contributed in #201 by @billcarroll.
+- **#196 confirmed on Windows.** The reporter pulled v2.213.1 and confirms the
+  keyframe fix renders on Windows, which closes the one platform question the
+  v2.213.1 notes left open.
+
+### Validation
+
+- Docstring only; no behavior changed and no Resolve run required. Full
+  offline suite, drift guards and the advanced Node suite green.
+
 ## What's New in v2.213.2 — the full transcript on 21.1, and a frame capture that puts the user's mark range back in the right frame space
 
 Both contributed by @billcarroll (#199, #200).
