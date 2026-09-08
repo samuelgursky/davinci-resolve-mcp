@@ -14866,12 +14866,18 @@ def _playhead_frame_render(proj, tl, p: Dict[str, Any]):
     A single-frame render honours the grade, Fusion and titles, is frame-exact,
     runs in well under a second, and needs no GUI panel or foreground window.
 
-    The cost is that render settings are project-level state. Format and codec
-    are readable and are restored; the rest (TargetDir, CustomName, mark range)
-    is NOT readable on builds without GetRenderSettings, so this resets those to
-    sane values rather than truly restoring them. Callers who need a strictly
-    side-effect-free read should use quality="thumbnail" and accept per-clip
-    granularity.
+    The cost is that render settings are project-level state, and there is still
+    no GetRenderSettings to read them back from (absent as of 21.1). Three
+    different things happen on the way out:
+      - Format and codec are readable via GetCurrentRenderFormatAndCodec and are
+        genuinely restored.
+      - The mark range is readable via Timeline.GetMarkInOut, so a range the
+        caller had set is put back (offset into SetRenderSettings' absolute
+        frame space); with no range set it falls back to the whole timeline.
+      - TargetDir and CustomName are readable from nowhere, so they are reset to
+        sane values rather than restored.
+    Callers who need a strictly side-effect-free read should use
+    quality="thumbnail" and accept per-clip granularity.
     """
     fmt = str(p.get("format", "jpg")).lower().lstrip(".")
     if fmt == "jpeg":
