@@ -2,6 +2,45 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.212.4 — both dependency manifests move together again
+
+### Changed
+
+- **The root `package.json` had lagged `resolve-advanced/package.json` since
+  July.** The advanced manifest was brought to zero advisories on 2026-08-30;
+  the root one still carried the SDK at 1.27, adm-zip 0.5, sharp 0.33, zod 3
+  and uuid 9, so `npm audit` on the root read nine advisories (five high)
+  while the advanced package read one. Both manifests now agree:
+  `@modelcontextprotocol/sdk` 1.30, `fast-xml-parser` 5.11, `adm-zip` 0.6,
+  `sharp` 0.35, `zod` 4, `js-yaml` 4.3, `pg` 8.23, `better-sqlite3` held on
+  the 11.x line. Contributed in #193 by @federicosada-pixel.
+- **`uuid` is gone from the root manifest.** Nothing under `bin/`, `src/` or
+  `scripts/` imports it — the code uses `crypto.randomUUID` — so rather than
+  carry the bump to 14.x it was removed on landing.
+- **Python floor for the MCP SDK is now `mcp[cli]>=1.30,<2`** in
+  `requirements.txt` and the installer; the `<2` pin stays because the 2.x
+  SDK dropped `mcp.server.fastmcp`. `pyaaf2` floor moves to 1.7.1.
+
+### What was checked
+
+- **zod 3 → 4 is a major bump the advanced server takes directly.** Its two
+  single-argument `z.record()` sites (a documented zod 4 removal) were probed
+  on zod 4.5.4 for both parsing and JSON-schema conversion, and a real stdio
+  `tools/list` returns the same 18 tools before and after.
+- **The five remaining root advisories are all transitive under the MCP
+  SDK** — hono, @hono/node-server, ajv → fast-uri, express-rate-limit →
+  ip-address, express → qs — and `npm audit fix --dry-run` reports the same
+  five, so they clear only when the SDK bumps its own dependencies.
+- The Python suite was also run with the 1.30.0 SDK wheel shadowing the venv
+  before the venv itself was upgraded.
+
+### Validation
+
+- Full offline Python suite, the drift guards (including the lockfile-sync
+  guard), `npm ci` from both lockfiles, the advanced Node suite, the CLI
+  smoke and pack checks, and pip-audit on the upgraded venv. No Resolve
+  behavior changed; live test not required.
+
 ## What's New in v2.212.3 — a cached update prompt is re-judged against the version actually running
 
 ### Fixed

@@ -1,6 +1,6 @@
 {
   "name": "davinci-resolve-mcp",
-  "version": "2.212.3",
+  "version": "2.212.4",
   "description": "NPM bootstrapper for the DaVinci Resolve MCP Server.",
   "license": "MIT",
   "author": "Samuel Gursky <samgursky@gmail.com>",
@@ -23,7 +23,6 @@
     "fast-xml-parser": "^5.11.1",
     "fzstd": "^0.1.1",
     "jszip": "^3.10.1",
-    "uuid": "^14.0.2",
     "zod": "^4.5.4",
     "zstd-codec": "^0.1.5"
   },
