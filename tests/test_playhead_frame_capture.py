@@ -240,12 +240,13 @@ class CaptureRenderTest(unittest.TestCase):
     """quality='frame' — the default, and the only frame-accurate route."""
 
     def _capture(self, params, rendering=False, job="job-1", status="Complete",
-                 write=True, ffmpeg="/usr/bin/ffmpeg"):
+                 write=True, ffmpeg="/usr/bin/ffmpeg", marks=None):
         """Returns (result, project mock, list of SetRenderSettings payloads)."""
         resolve = _FakeResolve(page="color")
         tl = _fake_timeline(resolve)
         tl.GetStartFrame.return_value = 86400
         tl.GetEndFrame.return_value = 86544
+        tl.GetMarkInOut.return_value = marks if marks is not None else {}
         proj = mock.Mock()
         proj.IsRenderingInProgress.side_effect = [rendering, False]
         proj.GetCurrentRenderFormatAndCodec.return_value = {"format": "mov", "codec": "H.264"}
@@ -312,14 +313,36 @@ class CaptureRenderTest(unittest.TestCase):
             ("mov", "H.264"),
         )
 
-    def test_mark_range_is_reset_to_the_whole_timeline(self):
-        # It cannot be truly restored (no GetRenderSettings), but it must not be
+    def test_mark_range_falls_back_to_the_whole_timeline(self):
+        # No marks were set, so there is nothing to restore. It must still not be
         # left pinned to the captured frame.
         out, _, calls = self._capture({"frame": 86424})
         self.assertIsInstance(out, Image)
         self.assertTrue(calls[-1]["SelectAllFrames"])
         self.assertEqual(calls[-1]["MarkIn"], 86400)
         self.assertEqual(calls[-1]["MarkOut"], 86544)
+
+    def test_an_existing_mark_range_is_restored(self):
+        out, _, calls = self._capture(
+            {"frame": 86424}, marks={"video": {"in": 86410, "out": 86500},
+                                     "audio": {"in": 86410, "out": 86500}})
+        self.assertIsInstance(out, Image)
+        self.assertFalse(calls[-1]["SelectAllFrames"])
+        self.assertEqual(calls[-1]["MarkIn"], 86410)
+        self.assertEqual(calls[-1]["MarkOut"], 86500)
+
+    def test_a_half_set_mark_range_is_not_treated_as_a_range(self):
+        # Only an in point: restoring it as a range would invent an out point.
+        out, _, calls = self._capture({"frame": 86424},
+                                      marks={"video": {"in": 86410}})
+        self.assertIsInstance(out, Image)
+        self.assertTrue(calls[-1]["SelectAllFrames"])
+        self.assertEqual(calls[-1]["MarkIn"], 86400)
+
+    def test_an_unreadable_mark_range_does_not_break_the_capture(self):
+        out, _, calls = self._capture({"frame": 86424}, marks="not a dict")
+        self.assertIsInstance(out, Image)
+        self.assertTrue(calls[-1]["SelectAllFrames"])
 
     def test_refuses_while_another_render_runs(self):
         out, _, _ = self._capture({}, rendering=True)
