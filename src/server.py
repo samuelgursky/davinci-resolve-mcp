@@ -21305,11 +21305,15 @@ def media_pool_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
       get_unique_id(clip_id) -> {id}
       transcribe_audio(clip_id, use_speaker_detection?, background?) -> {success | job_id}  — use_speaker_detection is Resolve 21+; background=true returns a job_id (poll resolve_control job_status)
       clear_transcription(clip_id) -> {success}
-      get_transcription(clip_id) -> {text, truncated, status, has_transcription}
-        Read a clip's transcription. `truncated` flags when Resolve's preview
-        property cut the text off (the full transcript is longer). Clip-level and
-        separate from the timeline subtitle transcript (timeline.get_transcript)
-        that propose_cuts uses.
+      get_transcription(clip_id, include_words?, use_nested_clip_transcription?) -> {text, segments, language, source, truncated, status, has_transcription}
+        Read a clip's transcription. On Resolve 21.1+ this uses
+        MediaPoolItem.GetTranscription, which does not truncate: `segments`
+        carries {start, end, text, speaker} in SOURCE timecode and `truncated`
+        is False. Pass include_words=true to keep each segment's per-word
+        timings. On 21.0.x it falls back to the `Transcription` clip property,
+        `segments` is null, and `truncated` flags a cut-off preview; `source`
+        says which route ran. Clip-level and separate from the timeline subtitle
+        transcript (timeline.get_transcript) that propose_cuts uses.
       extract_frames(clip_id, timestamps, output_dir?) -> {frame_paths, output_dir, count, errors}
         Extract still JPEGs from the clip's source at the given timestamps (seconds)
         via ffmpeg. Source-safe: reads source, writes only to a scratch dir.
@@ -21562,13 +21566,45 @@ def media_pool_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
             status = clip.GetClipProperty("Transcription Status")
         except Exception:
             status = None
-        return {
+        out = {
             "clip_id": p.get("clip_id"),
             "text": text,
             "truncated": _is_truncated(text),
             "status": status or None,
             "has_transcription": bool(text.strip()),
+            "segments": None,
+            "language": None,
+            "source": "clip_property",
         }
+        # The `Transcription` clip property is a preview and stops at an
+        # ellipsis. Resolve 21.1 added a real accessor that does not truncate,
+        # so prefer it and keep the property as the 21.0.x fallback. Verified on
+        # Studio 21.1.0.14: 1550 segments with per-word start/end timecodes.
+        # Segment timecodes are SOURCE timecodes, not timeline positions.
+        if _has_method(clip, "GetTranscription"):
+            try:
+                full = clip.GetTranscription(bool(p.get("use_nested_clip_transcription", False)))
+            except Exception:
+                full = None
+            segs = full.get("segments") if isinstance(full, dict) else None
+            if segs:
+                if not p.get("include_words"):
+                    # `words` is several times the bulk of the segment text and
+                    # most callers want segment-level timing. Opt in for it.
+                    segs = [{k: v for k, v in seg.items() if k != "words"}
+                            if isinstance(seg, dict) else seg for seg in segs]
+                joined = " ".join(seg.get("text", "") for seg in segs
+                                  if isinstance(seg, dict)).strip()
+                out.update({
+                    "segments": segs,
+                    "language": full.get("language"),
+                    "source": "get_transcription",
+                    "truncated": False,
+                })
+                if joined:
+                    out["text"] = joined
+                    out["has_transcription"] = True
+        return out
     elif action == "extract_frames":
         return _extract_clip_frames(clip, p)
     elif action == "perform_audio_classification":

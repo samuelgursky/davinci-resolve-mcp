@@ -909,8 +909,12 @@ Key actions: `get_name`, `get_metadata(key?)`, `set_metadata(key, value)`,
 `set_name(name)`, `link_full_resolution_media(path)`,
 `replace_clip_preserve_sub_clip(path)`, `monitor_growing_file`,
 `transcribe_audio(use_speaker_detection?)`, `clear_transcription`,
-`get_transcription` (read back `{text, truncated, status, has_transcription}`;
-`truncated` flags when Resolve's preview cut the text off),
+`get_transcription(include_words?, use_nested_clip_transcription?)` (read back
+`{text, segments, language, source, truncated, status, has_transcription}`; on
+Resolve 21.1+ it uses `MediaPoolItem.GetTranscription`, so `segments` carries
+`{start, end, text, speaker}` in SOURCE timecode and nothing is truncated, and
+on 21.0.x it falls back to the `Transcription` clip property, where `truncated`
+flags a cut-off preview — `source` says which route ran),
 `perform_audio_classification`,
 `analyze_for_intellisearch(identify_faces?, is_better_mode?)`, `analyze_for_slate(marker_color?)`,
 `remove_motion_blur(deblur_option?)` (Resolve 21+; AI Extras / confirm-token gated as noted above),
