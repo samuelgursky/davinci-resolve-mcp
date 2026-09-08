@@ -14927,6 +14927,19 @@ def _playhead_frame_render(proj, tl, p: Dict[str, Any]):
         original_tc = tl.GetCurrentTimecode()
     except Exception:
         pass
+    # The capture pins the render range to the captured frame, and there is no
+    # GetRenderSettings to read the surrounding settings back from (still absent
+    # in 21.1). The mark range is the exception: Timeline.GetMarkInOut reports it
+    # in the same record-frame space SetRenderSettings takes, so a range the user
+    # set can be captured here and put back below instead of being flattened to
+    # the whole timeline.
+    original_marks = None
+    try:
+        marks = (tl.GetMarkInOut() or {}).get("video") or {}
+        if "in" in marks and "out" in marks:
+            original_marks = marks
+    except Exception:
+        pass
 
     job = None
     try:
@@ -15020,16 +15033,26 @@ def _playhead_frame_render(proj, tl, p: Dict[str, Any]):
                     original_fc.get("format"), original_fc.get("codec"),
                     restore_exc or "SetCurrentRenderFormatAndCodec returned False",
                 )
-        # Best-effort, not a restore: without GetRenderSettings there is nothing
-        # to restore FROM, so put the mark range back to the whole timeline
-        # rather than leaving it pinned to the captured frame.
+        # Still not a full restore — GetRenderSettings does not exist, so the
+        # other settings cannot be read back. The mark range can: put the user's
+        # own range back when they had one, and fall back to the whole timeline
+        # when they did not, so the range is never left pinned to the captured
+        # frame for the next render job to inherit.
         try:
-            proj.SetRenderSettings({
-                "SelectAllFrames": True,
-                "MarkIn": tl.GetStartFrame(),
-                "MarkOut": tl.GetEndFrame(),
-                "CustomName": "",
-            })
+            if original_marks:
+                restored_marks = {
+                    "SelectAllFrames": False,
+                    "MarkIn": original_marks["in"],
+                    "MarkOut": original_marks["out"],
+                }
+            else:
+                restored_marks = {
+                    "SelectAllFrames": True,
+                    "MarkIn": tl.GetStartFrame(),
+                    "MarkOut": tl.GetEndFrame(),
+                }
+            restored_marks["CustomName"] = ""
+            proj.SetRenderSettings(restored_marks)
         except Exception:
             pass
         try:
