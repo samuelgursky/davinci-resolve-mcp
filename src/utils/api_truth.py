@@ -689,9 +689,21 @@ API_TRUTH: List[Dict[str, Any]] = [
         "object": "MediaPoolItem",
         "reality": "Returns a PREVIEW of the transcription that ends in an "
                    "ellipsis when the full transcript is longer than the property "
-                   "exposes.",
-        "recommended": "Treat a trailing ellipsis as truncation (see "
-                       "media_pool_item get_transcription's `truncated` flag).",
+                   "exposes. Still true on Studio 21.1.0.14 — the property is not "
+                   "the fix. 21.1 adds a SEPARATE method that is not truncated: "
+                   "MediaPoolItem.GetTranscription(useNestedClipTranscription=False) "
+                   "-> {language, segments[{start, end, text, speaker, words[{start, "
+                   "end, text}]}]}, with timecode strings rather than frame numbers. "
+                   "Measured on a live 21.1.0.14 against an already-transcribed "
+                   "interview clip: 1550 segments, per-word start/end timecodes, a "
+                   "populated `speaker` field, and '(...)' as Resolve's own silence "
+                   "marker. Note the transcript is of the SOURCE clip, so timeline "
+                   "positions must be mapped through GetStart()/GetSourceStartFrame() "
+                   "on the timeline item.",
+        "recommended": "On 21.1+, call MediaPoolItem.GetTranscription() instead of "
+                       "reading the property. On 21.0.x and earlier, treat a "
+                       "trailing ellipsis as truncation (see media_pool_item "
+                       "get_transcription's `truncated` flag).",
         "tags": ["transcription", "truncation"],
         "submit": "bug",
     },
@@ -855,18 +867,48 @@ API_TRUTH: List[Dict[str, Any]] = [
     {
         "symbol": "Native multicam clip creation",
         "object": "MediaPool",
-        "reality": "There is no method to create a native multicam clip from a set "
-                   "of angles. Angles can be stacked onto tracks programmatically, "
-                   "but the multicam-clip conversion is a UI-only step.",
-        "recommended": "Prepare a stacked timeline (media_pool setup_multicam_timeline) "
-                       "and finish the multicam-clip conversion in the Resolve UI.",
-        "tags": ["missing-method", "media-pool", "multicam"],
-        "submit": "missing",
+        "reality": "WITHDRAWN on Studio 21.1.0.14 (2026-09-08): Resolve 21.1 adds "
+                   "MediaPool.CreateMulticamClip(clips, multicamOptions) -> "
+                   "list[MediaPoolItem], plus TimelineItem.FlattenMulticam, "
+                   "TimelineItem.PerformMulticamSmartSwitch and "
+                   "Timeline.AutoAlignClips. Measured by attribute probe on a live "
+                   "21.1.0.14: each of those four resolves to a "
+                   "<BlackmagicFusion.PyFunctionCall object>, not None — the same "
+                   "discriminator that distinguishes a real method from an absent "
+                   "one elsewhere in this registry. THE ENTRY IS NOT PROOF THE "
+                   "METHODS WORK: none of them was invoked, because doing so mutates "
+                   "the user's project. HISTORICAL, still true of 21.0.x and "
+                   "earlier: there was no method to create a native multicam clip "
+                   "from a set of angles; angles could be stacked onto tracks "
+                   "programmatically but the multicam-clip conversion was a UI-only "
+                   "step. Falsified further (either direction) by a session that "
+                   "actually calls CreateMulticamClip on a scratch project.",
+        "recommended": "On 21.1+, call MediaPool.CreateMulticamClip. On 21.0.x and "
+                       "earlier, prepare a stacked timeline (media_pool "
+                       "setup_multicam_timeline) and finish the multicam-clip "
+                       "conversion in the Resolve UI.",
+        "tags": ["media-pool", "multicam", "fixed-in-21.1"],
     },
     {
         "symbol": "Transition create / copy / clone",
         "object": "Timeline / TimelineItem",
-        "reality": "There is no method to ADD or CLONE an edit transition — no "
+        "reality": "CREATION IS FIXED IN 21.1, READBACK IS NOT. Measured by "
+                   "attribute probe on Studio 21.1.0.14 (2026-09-08): "
+                   "TimelineItem.AddTransition resolves to a "
+                   "<BlackmagicFusion.PyFunctionCall object>, not None. Its stub "
+                   "signature is AddTransition(transitionOptions) -> TimelineItem | "
+                   "None, where transitionOptions carries type (e.g. 'Cross "
+                   "Dissolve'), category ('simple'|'fusion'|'ofx'|'audio'), position "
+                   "('start'|'end'), alignment ('left'|'center'|'right') and an "
+                   "optional duration in frames. It was NOT invoked (a call mutates "
+                   "the user's timeline), so this entry claims existence and "
+                   "signature only. WHAT REMAINS MISSING ON 21.1: reading a "
+                   "transition back. There is still no accessor for an existing "
+                   "transition's type, alignment or duration beyond its name string "
+                   "and frame range, and no clone verb — alignment and duration are "
+                   "write-only arguments to AddTransition. The pre-21.1 statement, "
+                   "kept as the historical record: there was no method to ADD or "
+                   "CLONE an edit transition — no "
                    "AddTransition/CreateTransition/AddVideoTransition on Timeline "
                    "or TimelineItem (dir(), 21.0.4.5). CORRECTION, measured on "
                    "Studio 21.0.4.5 (2026-08-12): this entry previously said "
@@ -886,7 +928,8 @@ API_TRUTH: List[Dict[str, Any]] = [
                    "a transition item and a clip item is GetProperty(): a "
                    "transition returns an EMPTY dict where a video clip returns 26 "
                    "transform keys; it also has no MediaPoolItem and no Fusion "
-                   "comp. WHAT IS GENUINELY MISSING: creation, cloning, and any "
+                   "comp. WHAT IS GENUINELY MISSING (pre-21.1: creation too; on "
+                   "21.1+ read the paragraph above): cloning, and any "
                    "type/alignment/parameter detail — the transition's kind is "
                    "knowable ONLY from its name string, and there is no way to "
                    "read its alignment (centered/start/end) or edit its duration. "
@@ -913,7 +956,9 @@ API_TRUTH: List[Dict[str, Any]] = [
                        "server's drp place_transition writes a cross dissolve at an "
                        "abutting cut ({track, atFrame, durationFrames}) and it "
                        "round-trips into Resolve 21.0.4.5 reading back at the "
-                       "expected centered range.",
+                       "expected centered range. On 21.1+ prefer "
+                       "TimelineItem.AddTransition, which takes the type, category, "
+                       "edge, alignment and duration directly.",
         "tags": ["missing-method", "timeline", "transition"],
         "submit": "missing",
     },

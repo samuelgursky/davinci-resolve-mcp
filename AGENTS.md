@@ -78,12 +78,21 @@ semantics.
   limitation, add a `submit`-tagged entry to `src/utils/api_truth.py` and
   regenerate with `scripts/gen_api_limitations.py` (a drift guard enforces it)
 - Bundled Resolve API text: `docs/reference/resolve_scripting_api.txt` — refresh
-  it by copying the shipped `Developer/Scripting/README.txt` over it wholesale,
-  never by hand-adding the lines you already know about. The file's only value
-  is that a diff against it is trustworthy; a hand-patch carries a newer
-  `Last Updated:` header while still hiding everything you did not know to look
-  for. That is exactly how it sat eight weeks stale at 26 May 2026 while ten
-  documented 21.0.4 methods went unwired (PR #139)
+  it by copying the shipped scripting README over it wholesale, never by
+  hand-adding the lines you already know about. The file's only value is that a
+  diff against it is trustworthy; a hand-patch carries a newer `Last Updated:`
+  header while still hiding everything you did not know to look for. That is
+  exactly how it sat eight weeks stale at 26 May 2026 while ten documented
+  21.0.4 methods went unwired (PR #139).
+  **The shipped README moved in 21.1.** `Developer/Scripting/README.txt` is
+  gone; the pack is now `README.md`, a typed `DaVinciResolveScript.pyi` (the
+  full signature surface, which the old README never carried) and a
+  `CHANGELOG.md` of per-version additions. Copying `README.md` over the bundled
+  file is still the right refresh, but it renumbers every line — and
+  `scripts/audit_api_parity.py`, `tests/test_resolve_bridge.py` and a few dozen
+  `resolve_scripting_api.txt line N` comments in `src/` read it. Re-run the
+  parity audit and re-anchor those comments in the same change, or leave the
+  file at its 21.0 revision and cite the `.pyi` for new work
 
 ## Key Paths
 

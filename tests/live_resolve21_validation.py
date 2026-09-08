@@ -63,8 +63,13 @@ from src.utils.project_cleanup import delete_project_safely, save_project_if_saf
 
 PROJECT_PREFIX = "ZZ_r21_delta_"
 EXTRAS_DIR = ("/Library/Application Support/Blackmagic Design/DaVinci Resolve/Extras")
-SCRIPTING_README = ("/Library/Application Support/Blackmagic Design/DaVinci Resolve"
-                    "/Developer/Scripting/README.txt")
+#: Resolve 21.1 split the shipped scripting README into README.md plus a typed
+#: DaVinciResolveScript.pyi and a CHANGELOG.md, and deleted README.txt. Try the
+#: current name first and fall back to the pre-21.1 one.
+_SCRIPTING_DIR = ("/Library/Application Support/Blackmagic Design/DaVinci Resolve"
+                  "/Developer/Scripting")
+SCRIPTING_READMES = (_SCRIPTING_DIR + "/README.md",
+                     _SCRIPTING_DIR + "/README.txt")
 
 #: Resolve 21.0 additions, keyed by the object they hang off. The server gates
 #: each of these with _requires_method(..., "21.0").
@@ -497,13 +502,20 @@ def main():
 
 
 def readme_date():
-    try:
-        with open(SCRIPTING_README, "r", errors="replace", encoding="utf-8") as fh:
-            for line in fh:
-                if line.lower().startswith("last updated"):
-                    return line.strip()
-    except OSError:
-        pass
+    """The README's own 'Last Updated' line, whichever README this build ships.
+
+    21.0's README.txt writes it bare; 21.1's README.md wraps it in markdown
+    emphasis, so the marker characters come off before the match.
+    """
+    for path in SCRIPTING_READMES:
+        try:
+            with open(path, "r", errors="replace", encoding="utf-8") as fh:
+                for line in fh:
+                    stripped = line.strip().strip("*#").strip()
+                    if stripped.lower().startswith("last updated"):
+                        return stripped
+        except OSError:
+            continue
     return None
 
 
