@@ -166,6 +166,109 @@ class UpdateCheckTests(unittest.TestCase):
         self.assertEqual(result["status"], "error")
         self.assertEqual(result["last_success"]["status"], "up_to_date")
 
+    def test_cached_release_is_reclassified_for_newer_running_version(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = Path(tmp) / "update.json"
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "status": "update_available",
+                        "current_version": "2.135.0",
+                        "latest_version": "2.210.0",
+                        "latest_tag": "v2.210.0",
+                        "checked_at": 1000,
+                        "update_mode": "prompt",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            env = {update_check.ENV_STATE_PATH: str(state_path)}
+            with update_check._cached_lock:
+                update_check._cached_status.clear()
+                update_check._cached_status.update({"status": "unknown"})
+
+            result = update_check.get_cached_update_status(tmp, "2.212.1", env=env)
+
+            self.assertEqual(result["current_version"], "2.212.1")
+            self.assertEqual(result["status"], "current_ahead")
+            self.assertEqual(
+                update_check.update_prompt_decision(result, env=env)["action"],
+                "none",
+            )
+
+    def test_throttled_check_reclassifies_without_network(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = Path(tmp) / "update.json"
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "status": "update_available",
+                        "current_version": "2.135.0",
+                        "latest_version": "2.210.0",
+                        "latest_tag": "v2.210.0",
+                        "checked_at": 1000,
+                        "update_mode": "prompt",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            env = {
+                update_check.ENV_STATE_PATH: str(state_path),
+                update_check.ENV_INTERVAL_HOURS: "24",
+            }
+
+            result = update_check.check_for_updates(
+                "2.212.1", tmp, env=env, now=1001, force=False
+            )
+
+            self.assertTrue(result["cached"])
+            self.assertEqual(result["current_version"], "2.212.1")
+            self.assertEqual(result["status"], "current_ahead")
+            persisted = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(persisted["status"], "current_ahead")
+            self.assertEqual(persisted["current_version"], "2.212.1")
+
+    def test_in_memory_cached_release_is_reclassified(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {update_check.ENV_STATE_PATH: str(Path(tmp) / "missing.json")}
+            with update_check._cached_lock:
+                update_check._cached_status.clear()
+                update_check._cached_status.update(
+                    {
+                        "status": "update_available",
+                        "current_version": "2.135.0",
+                        "latest_version": "2.210.0",
+                        "latest_tag": "v2.210.0",
+                    }
+                )
+
+            result = update_check.get_cached_update_status(tmp, "2.212.1", env=env)
+
+            self.assertEqual(result["status"], "current_ahead")
+            self.assertEqual(result["current_version"], "2.212.1")
+
+    def test_error_and_disabled_cached_statuses_are_preserved(self):
+        for status in ("error", "disabled"):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as tmp:
+                state_path = Path(tmp) / "update.json"
+                original = {
+                    "status": status,
+                    "current_version": "2.135.0",
+                    "latest_version": "2.210.0",
+                    "error": "offline" if status == "error" else None,
+                }
+                state_path.write_text(json.dumps(original), encoding="utf-8")
+                env = {update_check.ENV_STATE_PATH: str(state_path)}
+                with update_check._cached_lock:
+                    update_check._cached_status.clear()
+                    update_check._cached_status.update({"status": "unknown"})
+
+                result = update_check.get_cached_update_status(tmp, "2.212.1", env=env)
+
+                self.assertEqual(result["status"], status)
+                self.assertEqual(result["current_version"], "2.135.0")
+                self.assertEqual(result.get("error"), original["error"])
+
 
 if __name__ == "__main__":
     unittest.main()
