@@ -199,10 +199,23 @@ class Verification(unittest.TestCase):
             "property_restore_failures": 2, "properties_restored_items": 5})
         self.assertEqual(v["status"], "partial")
 
-    def test_bulk_counts_become_a_check(self):
-        v = extract_verification({"succeeded": 2, "failed": 1})
-        self.assertEqual(v["status"], "partial")
-        self.assertEqual(v["checks"][0]["check"], "bulk_operations")
+    def test_bulk_counts_do_not_establish_verification(self):
+        for succeeded, failed in ((3, 0), (2, 1), (0, 3)):
+            v = extract_verification({"succeeded": succeeded, "failed": failed})
+            self.assertEqual(v["status"], "unverified")
+            self.assertEqual(v["checks"], [])
+
+    def test_later_pass_does_not_erase_failed_readback(self):
+        v = extract_verification({"readback": {"missing": ["clip"]}, "verified": True})
+        self.assertEqual(v["status"], "failed")
+
+    def test_explicit_pass_does_not_hide_failed_check(self):
+        v = extract_verification({"verification": {"status": "passed", "checks": [{"passed": False}]}})
+        self.assertEqual(v["status"], "failed")
+
+    def test_explicit_pass_does_not_hide_contradiction(self):
+        v = extract_verification({"verification": {"status": "passed"}, "contradiction": True})
+        self.assertEqual(v["status"], "contradiction")
 
     def test_an_impl_that_already_speaks_the_shape_wins(self):
         v = extract_verification({"verification": {"status": "passed", "checks": [{"check": "x"}]}})
