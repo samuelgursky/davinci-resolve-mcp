@@ -7067,8 +7067,15 @@ def _timeline_thumbnail_contact_sheet(proj, tl, p: Dict[str, Any]) -> Dict[str, 
                         )
                         sampled.append(sample)
                         continue
-                    thumbnail = tl.GetCurrentClipThumbnailImage()
-                    if not thumbnail:
+                    # Poll instead of reading once: the viewer has not caught
+                    # up when the scripting call right after a playhead move
+                    # lands, so a single read returns None on every sample and
+                    # the whole sheet comes back "No thumbnail available at
+                    # frame" while the same calls with a settle succeed.
+                    thumbnail, thumb_err = _playhead_thumbnail_settled(tl)
+                    if thumb_err:
+                        sample["error"] = thumb_err.get("error")
+                    elif not thumbnail:
                         sample["error"] = (
                             "No thumbnail available at frame"
                             if on_color
