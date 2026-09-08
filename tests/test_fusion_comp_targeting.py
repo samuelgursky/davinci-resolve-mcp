@@ -166,6 +166,8 @@ class FakeFusionComp:
         self._tools = tools
         self.lock_count = 0
         self.unlock_count = 0
+        self.undo_count = 0
+        self.end_undo_count = 0
 
     def FindTool(self, name):
         return self._tools.get(name)
@@ -175,6 +177,12 @@ class FakeFusionComp:
 
     def Unlock(self):
         self.unlock_count += 1
+
+    def StartUndo(self, name):
+        self.undo_count += 1
+
+    def EndUndo(self, keep):
+        self.end_undo_count += 1
 
 
 class FusionAddKeyframeTests(unittest.TestCase):
@@ -194,7 +202,10 @@ class FusionAddKeyframeTests(unittest.TestCase):
         self.assertTrue(result.get("success"))
         self.assertEqual(tool.modifiers_added, [("Size", "BezierSpline")])
         self.assertEqual(inp.assignments, {0: 1.0})
-        self.assertEqual((comp.lock_count, comp.unlock_count), (1, 1))
+        self.assertEqual((comp.undo_count, comp.end_undo_count), (1, 1))
+        # No comp.Lock() around a keyframe write: under a lock it reads back and
+        # is ignored at render (issue #196) — StartUndo/EndUndo is the escape.
+        self.assertEqual((comp.lock_count, comp.unlock_count), (0, 0))
 
     def test_skips_modifier_when_already_animated(self):
         inp = FakeFusionInput(connected_output=object())
@@ -221,7 +232,7 @@ class FusionAddKeyframeTests(unittest.TestCase):
 
         self.assertEqual(tool.modifiers_added, [("Center", "Path")])
 
-    def test_missing_input_returns_error_and_unlocks(self):
+    def test_missing_input_returns_error_and_ends_the_undo(self):
         tool = FakeFusionTool({})
         comp = FakeFusionComp({"Transform1": tool})
 
@@ -231,8 +242,11 @@ class FusionAddKeyframeTests(unittest.TestCase):
 
         self.assertIn("error", result)
         self.assertEqual(tool.modifiers_added, [])
-        # comp must be unlocked even on the error path.
-        self.assertEqual((comp.lock_count, comp.unlock_count), (1, 1))
+        # the undo block must be closed even on the error path.
+        self.assertEqual((comp.undo_count, comp.end_undo_count), (1, 1))
+        # No comp.Lock() around a keyframe write: under a lock it reads back and
+        # is ignored at render (issue #196) — StartUndo/EndUndo is the escape.
+        self.assertEqual((comp.lock_count, comp.unlock_count), (0, 0))
 
 
 class FusionGetKeyframesTests(unittest.TestCase):
@@ -294,7 +308,10 @@ class FusionDeleteKeyframeTests(unittest.TestCase):
         self.assertTrue(result["success"])
         self.assertEqual(spline.deleted, [75.0])
         self.assertEqual(result["remaining_keyframes"], [0.0])
-        self.assertEqual((comp.lock_count, comp.unlock_count), (1, 1))
+        self.assertEqual((comp.undo_count, comp.end_undo_count), (1, 1))
+        # No comp.Lock() around a keyframe write: under a lock it reads back and
+        # is ignored at render (issue #196) — StartUndo/EndUndo is the escape.
+        self.assertEqual((comp.lock_count, comp.unlock_count), (0, 0))
 
     def test_never_touches_removekeyframe_on_the_input(self):
         # The exact regression: the handler must not reach for a method the
@@ -325,7 +342,10 @@ class FusionDeleteKeyframeTests(unittest.TestCase):
 
         self.assertEqual(result["error"]["code"], "FUSION_INPUT_NOT_ANIMATED")
         self.assertEqual(result["error"]["category"], "precondition")
-        self.assertEqual((comp.lock_count, comp.unlock_count), (1, 1))
+        self.assertEqual((comp.undo_count, comp.end_undo_count), (1, 1))
+        # No comp.Lock() around a keyframe write: under a lock it reads back and
+        # is ignored at render (issue #196) — StartUndo/EndUndo is the escape.
+        self.assertEqual((comp.lock_count, comp.unlock_count), (0, 0))
 
     def test_no_keyframe_at_that_frame_is_a_structured_error(self):
         inp, spline = make_animated_input({0.0: 1.0})
@@ -356,7 +376,10 @@ class FusionDeleteKeyframeTests(unittest.TestCase):
 
         self.assertEqual(result["error"]["code"], "FUSION_DELETE_KEYFRAME_FAILED")
         self.assertIn("boom", result["error"]["message"])
-        self.assertEqual((comp.lock_count, comp.unlock_count), (1, 1))
+        self.assertEqual((comp.undo_count, comp.end_undo_count), (1, 1))
+        # No comp.Lock() around a keyframe write: under a lock it reads back and
+        # is ignored at render (issue #196) — StartUndo/EndUndo is the escape.
+        self.assertEqual((comp.lock_count, comp.unlock_count), (0, 0))
 
     def test_silent_noop_is_not_reported_as_success(self):
         # A Fusion call returning without error is not proof it did anything.
@@ -368,13 +391,16 @@ class FusionDeleteKeyframeTests(unittest.TestCase):
         self.assertEqual(result["error"]["code"], "FUSION_DELETE_KEYFRAME_NOOP")
         self.assertEqual(spline.deleted, [75.0])
 
-    def test_missing_input_returns_error_and_unlocks(self):
+    def test_missing_input_returns_error_and_ends_the_undo(self):
         comp = FakeFusionComp({"Transform1": FakeFusionTool({})})
 
         result = self._run(comp, self._params())
 
         self.assertEqual(result["error"]["code"], "FUSION_INPUT_NOT_FOUND")
-        self.assertEqual((comp.lock_count, comp.unlock_count), (1, 1))
+        self.assertEqual((comp.undo_count, comp.end_undo_count), (1, 1))
+        # No comp.Lock() around a keyframe write: under a lock it reads back and
+        # is ignored at render (issue #196) — StartUndo/EndUndo is the escape.
+        self.assertEqual((comp.lock_count, comp.unlock_count), (0, 0))
 
     def test_non_numeric_time_is_rejected(self):
         inp, _ = make_animated_input({75.0: 1.4})

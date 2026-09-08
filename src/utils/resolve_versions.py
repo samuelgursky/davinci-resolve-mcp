@@ -104,7 +104,9 @@ def at_least(live: Any, required: Any) -> Optional[bool]:
 #
 #   measured   — probed live by this project
 #   reported   — a user's live probe, credited, not independently reproduced
-#   vendor     — stated by Blackmagic's shipped Developer/Scripting/README.txt
+#   vendor     — stated by Blackmagic's shipped Developer/Scripting docs
+#                (README.txt through 21.0; README.md, CHANGELOG.md and
+#                DaVinciResolveScript.pyi from 21.1 on)
 #   documented — a floor this server already enforces at the call site, taken
 #                from Blackmagic's release documentation. See CODE_FLOORS.
 

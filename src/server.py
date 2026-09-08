@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 353-tool granular server instead
 """
 
-VERSION = "2.213.0"
+VERSION = "2.213.1"
 
 import base64
 import os
@@ -7067,8 +7067,15 @@ def _timeline_thumbnail_contact_sheet(proj, tl, p: Dict[str, Any]) -> Dict[str, 
                         )
                         sampled.append(sample)
                         continue
-                    thumbnail = tl.GetCurrentClipThumbnailImage()
-                    if not thumbnail:
+                    # Poll instead of reading once: the viewer has not caught
+                    # up when the scripting call right after a playhead move
+                    # lands, so a single read returns None on every sample and
+                    # the whole sheet comes back "No thumbnail available at
+                    # frame" while the same calls with a settle succeed.
+                    thumbnail, thumb_err = _playhead_thumbnail_settled(tl)
+                    if thumb_err:
+                        sample["error"] = thumb_err.get("error")
+                    elif not thumbnail:
                         sample["error"] = (
                             "No thumbnail available at frame"
                             if on_color
@@ -25840,8 +25847,13 @@ def timeline_markers(action: str, params: Optional[Dict[str, Any]] = None) -> An
         # GetCurrentClipThumbnailImage returns None on every page but Color, and
         # says nothing about why — hold the Color page for the read rather than
         # reporting a page problem as a missing thumbnail.
+        # Read through the settle helper: the first read after the page switch
+        # comes back None before the viewer catches up (see PR #198, where the
+        # contact sheet reported "No thumbnail available" on every frame).
         with _color_page_for_thumbnails(get_resolve()) as on_color:
-            thumbnail = tl.GetCurrentClipThumbnailImage()
+            thumbnail, thumb_err = _playhead_thumbnail_settled(tl)
+        if thumb_err:
+            return thumb_err
         if thumbnail is None:
             return {
                 "success": False,
@@ -30113,7 +30125,15 @@ def fusion_comp(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
         tool = comp.FindTool(p["tool_name"])
         if not tool:
             return _err(f"Tool '{p['tool_name']}' not found")
-        comp.Lock()
+        # No comp.Lock() here — see _FUSION_VALUE_WRITE_NOTE. The keyframe
+        # assignment below is a value write, and under a lock it reads back
+        # (GetKeyFrames lists both keys) while the RENDER ignores it: measured
+        # on Studio 19.1.3.7 (issue #196), a Transform Size keyframed 2.0 -> 1.0
+        # rendered bit-identical to the no-comp baseline (PSNR inf); the same
+        # writes outside the lock rendered the zoom (PSNR 13.3 dB vs baseline).
+        # StartUndo/EndUndo is the escape bulk_set_inputs already uses, and it
+        # also makes "attach spline + first key" one undo step for the user.
+        comp.StartUndo(f"Keyframe {p['input_name']}")
         try:
             inp = tool[p["input_name"]]
             if not inp:
@@ -30155,7 +30175,7 @@ def fusion_comp(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
             tool[p["input_name"]][p["time"]] = p["value"]
             return _ok()
         finally:
-            comp.Unlock()
+            comp.EndUndo(True)
 
     elif action == "get_keyframes":
         tool = comp.FindTool(p["tool_name"])
@@ -30181,11 +30201,13 @@ def fusion_comp(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
         tool = comp.FindTool(p["tool_name"])
         if not tool:
             return _err(f"Tool '{p['tool_name']}' not found")
-        comp.Lock()
+        # Same shape as add_keyframe: a spline edit is a value write, so it runs
+        # under StartUndo/EndUndo rather than comp.Lock() (issue #196).
+        comp.StartUndo(f"Delete keyframe {p.get('input_name')}")
         try:
             return _fusion_delete_keyframe(tool, p)
         finally:
-            comp.Unlock()
+            comp.EndUndo(True)
 
     # --- Composition Control ---
     elif action == "get_comp_info":

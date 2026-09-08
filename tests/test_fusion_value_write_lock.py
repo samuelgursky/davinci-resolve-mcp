@@ -64,6 +64,23 @@ def _is_comp_lock(node: ast.AST) -> bool:
     return _method_name(node) == "Lock"
 
 
+def _is_keyframe_assignment(node: ast.AST) -> bool:
+    """`tool[input][time] = value` — the keyframe write shape.
+
+    A keyframe is a value write too. Under a lock it reads back (GetKeyFrames
+    lists the keys) while the render ignores it: issue #196, measured on Studio
+    19.1.3.7 with a Transform Size keyframed 2.0 -> 1.0 that rendered
+    bit-identical to the no-comp baseline (PSNR inf) and animated the moment
+    the lock came off.
+    """
+    if not isinstance(node, ast.Assign):
+        return False
+    return any(
+        isinstance(t, ast.Subscript) and isinstance(t.value, ast.Subscript)
+        for t in node.targets
+    )
+
+
 def _value_writes_under(node: ast.AST):
     """Value-write method names anywhere beneath `node`."""
     found = []
@@ -71,6 +88,8 @@ def _value_writes_under(node: ast.AST):
         name = _method_name(child)
         if name in VALUE_WRITE_METHODS:
             found.append((name, getattr(child, "lineno", "?")))
+        elif _is_keyframe_assignment(child):
+            found.append(("keyframe assignment", getattr(child, "lineno", "?")))
     return found
 
 
@@ -133,6 +152,24 @@ class FusionValueWriteLockTests(unittest.TestCase):
                 continue
             seen += _value_writes_under(ast.Module(body=node.body, type_ignores=[]))
         self.assertTrue(seen, "guard failed to flag a known-bad locked value write")
+
+    def test_the_guard_sees_a_locked_keyframe_write(self) -> None:
+        """The issue #196 shape: `tool[input][time] = value` under a lock."""
+        bad = ast.parse(
+            "comp.Lock()\n"
+            "try:\n"
+            "    tool['Size'][46] = 1.0\n"
+            "finally:\n"
+            "    comp.Unlock()\n"
+        )
+        seen = []
+        for node in ast.walk(bad):
+            if isinstance(node, ast.Try) and any(
+                _method_name(getattr(s, "value", None)) == "Unlock"
+                for s in node.finalbody if isinstance(s, ast.Expr)
+            ):
+                seen += _value_writes_under(ast.Module(body=node.body, type_ignores=[]))
+        self.assertEqual([name for name, _ in seen], ["keyframe assignment"])
 
 
 if __name__ == "__main__":
