@@ -135,14 +135,13 @@ def get_cached_update_status(
     with _cached_lock:
         cached = dict(_cached_status)
     if cached.get("status") != "unknown":
-        if current_version and "current_version" not in cached:
-            cached["current_version"] = current_version
+        cached = _reclassify_cached_status(cached, current_version)
+        _set_cached_status(cached)
         return cached
 
     state = _read_state(update_state_path(project_dir, env))
     if state:
-        if current_version and "current_version" not in state:
-            state["current_version"] = current_version
+        state = _reclassify_cached_status(state, current_version)
         if "update_mode" not in state:
             state["update_mode"] = get_update_mode(project_dir, env)
         return state
@@ -193,11 +192,12 @@ def check_for_updates(
         and previous
         and checked_at - float(previous.get("checked_at", 0)) < interval_seconds
     ):
-        cached = dict(previous)
+        cached = _reclassify_cached_status(previous, current_version)
         cached["cached"] = True
         cached["update_mode"] = update_mode
         cached["next_check_at"] = float(previous.get("checked_at", 0)) + interval_seconds
         cached["next_check_at_iso"] = _format_timestamp(cached["next_check_at"])
+        _write_state(state_path, cached)
         _set_cached_status(cached)
         return cached
 
@@ -619,6 +619,27 @@ def _scan_for_breaking_changes(body: str) -> list:
 def _version_text(value: Any) -> str:
     match = re.search(r"\d+(?:\.\d+)*", str(value or ""))
     return match.group(0) if match else str(value or "").strip()
+
+
+def _reclassify_cached_status(
+    result: Mapping[str, Any], current_version: Optional[str]
+) -> Dict[str, Any]:
+    """Refresh cached status against the version of the running MCP."""
+    refreshed = dict(result)
+    if refreshed.get("status") not in _SUCCESS_STATUSES:
+        return refreshed
+    if current_version:
+        refreshed["current_version"] = current_version
+    comparison = compare_versions(current_version, refreshed.get("latest_version"))
+    if comparison is None:
+        return refreshed
+    if comparison < 0:
+        refreshed["status"] = "update_available"
+    elif comparison > 0:
+        refreshed["status"] = "current_ahead"
+    else:
+        refreshed["status"] = "up_to_date"
+    return refreshed
 
 
 def _read_state(path: Path) -> Dict[str, Any]:
