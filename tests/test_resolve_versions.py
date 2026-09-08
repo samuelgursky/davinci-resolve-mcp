@@ -102,7 +102,7 @@ class GatesUnavailableTest(unittest.TestCase):
         self.assertIn("Timeline.GetSelectedClips", missing)
 
     def test_new_build_clears_everything_recorded(self):
-        self.assertEqual(gates_unavailable_on("21.0.4.5"), [])
+        self.assertEqual(gates_unavailable_on("21.1.0.14"), [])
 
     def test_the_21_0_2_vs_21_0_4_split_is_visible(self):
         """A 'Resolve 21' label would hide this entirely."""

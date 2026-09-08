@@ -2,6 +2,56 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.213.2 — the full transcript on 21.1, and a frame capture that puts the user's mark range back in the right frame space
+
+Both contributed by @billcarroll (#199, #200).
+
+### Added
+
+- **`media_pool_item get_transcription` reads the whole transcript on Resolve
+  21.1+** through `MediaPoolItem.GetTranscription`, which 21.1 added and which
+  does not truncate: `segments` carries `{start, end, text, speaker}` in
+  **source** timecode, `language` is reported, and `truncated` is False. Pass
+  `include_words` to keep each segment's per-word timings, which are several
+  times the bulk of the text. On 21.0.x it falls back to the `Transcription`
+  clip property exactly as before, and `source` says which route ran. The
+  method is registered in the version ledger as a reported 21.1 surface, so
+  `check_version_support` answers for it. (#199)
+
+### Fixed
+
+- **`timeline_frame capture` flattened a user's mark range to the whole
+  timeline.** Rendering one frame pins the project's render range to that
+  frame, and the cleanup could only reset it to the whole timeline because
+  there is no `GetRenderSettings` to read the previous range from. The mark
+  range is the exception: `Timeline.GetMarkInOut` can be read before the
+  capture, and the user's own range now goes back afterwards. A half-set range
+  (in point only) is still treated as no range, and with no marks set the old
+  whole-timeline fallback applies. (#200)
+- **Adapted on landing: the two calls do not share a frame space.** Resolve
+  documents `GetMarkInOut` relative to the timeline start (its own example is
+  `in: 0, out: 134`), while `SetRenderSettings` takes absolute record frames —
+  measured on Studio 19.1.3.7: on an 86400-start timeline `MarkIn=MarkOut=86420`
+  rendered frame 20 and `MarkIn=MarkOut=20` was silently clamped to the start
+  and rendered frame 0, one frame, no error. Handed back verbatim, a UI-set
+  range would have been "restored" as a clamped range with every readback
+  agreeing. A mark below the timeline start is now offset by the start frame;
+  one at or above it was written absolute (`SetMarkInOut` stores whatever it
+  is given) and is kept. A unit test covers the relative case alongside the
+  PR's absolute, half-set and unreadable cases.
+- **The clamp is now in the API ledger** as a measured bug, with the
+  relative-vs-absolute trap and the remedy, and
+  `docs/reference/api-limitations.md` is regenerated.
+
+### Validation
+
+- Both PRs' unit tests plus the relative-range test. Mark-range frame space
+  measured live on Studio 19.1.3.7 by rendering single frames under both
+  interpretations and matching each against the source frames. The 21.1
+  transcript route cannot be exercised here (no 21.1 build); its ledger entry
+  and `api_truth` say so. Full offline Python suite, drift guards and the
+  advanced Node suite green.
+
 ## What's New in v2.213.1 — Fusion keyframes reach the render; the contact sheet waits for the viewer; the ledger learns Resolve 21.1
 
 Reported in #196 by @JosephConroy93, with a repro precise enough to reproduce

@@ -12,7 +12,7 @@ that none exists).
 
 **Verified on:** DaVinci Resolve Studio 21.0.2
 
-**Totals:** 41 missing capabilities, 50 bugs / unreliable behaviors.
+**Totals:** 41 missing capabilities, 51 bugs / unreliable behaviors.
 
 The authoritative source is the runtime-queryable `api_truth` ledger
 (`resolve_control api_truth "<query>"`); this document is generated from
@@ -540,6 +540,13 @@ values, or automation-hostile modal prompts.
 - **Behavior:** Calling a Studio-only function from the free edition returns False, which the reference documents. What it does NOT document: Resolve also raises a modal upsell dialog ('You have reached a limitation with DaVinci Resolve'), and while that dialog is up, UNRELATED subsequent API calls fail too. Confirmed live on free 21.0.3.7 over the in-app bridge (2026-08-06): Timeline.CreateSubtitlesFromAudio and MediaPoolItem.TranscribeAudio each returned False and raised the dialog; Project.SaveProject then returned False on every attempt until a human clicked 'Not Yet', after which it succeeded. Nothing in any return value, and no error, names the dialog — an automated caller sees only a cascade of unexplained False returns and will misattribute them to whatever it called next.
 - **Workaround / current handling:** Detect the edition BEFORE calling Studio-gated features rather than discovering the gate by tripping it: the product name is 'DaVinci Resolve' on free and 'DaVinci Resolve Studio' on Studio (resolve_control get_version reports it). If a Studio-only call has already returned False on a free build, treat every following failure as suspect: re-run a known-good read, and if that fails too, a modal is blocking and only a human can dismiss it — no API closes it. Known Studio-gated so far: subtitle generation from audio, and audio transcription.
 - **Tags:** free-edition, studio-only, silent-failure, modal, ai, subtitle, transcription
+
+### SetRenderSettings MarkIn/MarkOut below the timeline start are clamped, not refused
+
+- **Object:** `Project / Timeline`
+- **Behavior:** SetRenderSettings takes MarkIn/MarkOut as ABSOLUTE record frames, and a value below the timeline's start frame is silently clamped to the start: measured on Studio 19.1.3.7 (2026-09-08) on an 86400-start timeline, MarkIn=MarkOut=86420 rendered timeline frame 20 and MarkIn=MarkOut=20 rendered frame 0 — one frame, True from SetRenderSettings, no error anywhere. The trap is that Timeline.GetMarkInOut reports the user's marks RELATIVE to the timeline start (Blackmagic's own README example is {'in': 0, 'out': 134}; the 21.1 stub says 'record frame relative to timeline start'), so feeding its output straight into SetRenderSettings renders the wrong range with every readback agreeing. SetMarkInOut itself stores whatever number it is given (10 reads back 10, 86410 reads back 86410), so a script-written range can be in either space.
+- **Workaround / current handling:** Offset GetMarkInOut values by Timeline.GetStartFrame() before passing them to SetRenderSettings when they fall below the start frame (timeline_frame capture does this when it puts a user's range back). Verify a render range from the delivered frames, never from the settings call's return.
+- **Tags:** render, silent-failure, frame-space, mark-range
 
 ### SetRenderSettings ExportSubtitle / SubtitleFormat had no observable effect
 

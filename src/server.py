@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 353-tool granular server instead
 """
 
-VERSION = "2.213.1"
+VERSION = "2.213.2"
 
 import base64
 import os
@@ -14947,6 +14947,27 @@ def _playhead_frame_render(proj, tl, p: Dict[str, Any]):
             original_marks = marks
     except Exception:
         pass
+    # GetMarkInOut reports marks RELATIVE to the timeline start (Blackmagic's
+    # own example is {'in': 0, 'out': 134}; the 21.1 stub says "record frame
+    # relative to timeline start"), while SetRenderSettings MarkIn/MarkOut are
+    # ABSOLUTE record frames — measured on Studio 19.1.3.7: on an 86400-start
+    # timeline MarkIn=MarkOut=86420 rendered frame 20, and MarkIn=MarkOut=20 was
+    # silently clamped to the start and rendered frame 0, one frame, no error.
+    # Handing a relative range straight back would "restore" a clamped range
+    # with no signal. A mark below the timeline start is therefore relative and
+    # is offset; one at or above it was written absolute (SetMarkInOut stores
+    # whatever it is given) and is kept as-is.
+    if original_marks:
+        try:
+            tl_start = int(round(float(tl.GetStartFrame())))
+            original_marks = {
+                key: (int(original_marks[key]) + tl_start
+                      if int(original_marks[key]) < tl_start
+                      else int(original_marks[key]))
+                for key in ("in", "out")
+            }
+        except Exception:
+            original_marks = None
 
     job = None
     try:
@@ -15045,6 +15066,8 @@ def _playhead_frame_render(proj, tl, p: Dict[str, Any]):
         # own range back when they had one, and fall back to the whole timeline
         # when they did not, so the range is never left pinned to the captured
         # frame for the next render job to inherit.
+        # (original_marks is already in SetRenderSettings' absolute space — see
+        # the offset above.)
         try:
             if original_marks:
                 restored_marks = {

@@ -49,7 +49,7 @@ class GetVersionBuildBlockTest(unittest.TestCase):
 
     def test_a_current_build_is_not_told_everything_exists(self):
         """The empty list is the dangerous one — it reads as a green light."""
-        result = _get_version("21.0.4.5")
+        result = _get_version("21.1.0.14")
         self.assertEqual(result["build"]["unavailable_on_this_build"], [])
         note = result["build"]["note"]
         self.assertIn("not a promise", note)

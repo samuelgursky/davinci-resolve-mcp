@@ -1496,6 +1496,31 @@ API_TRUTH: List[Dict[str, Any]] = [
         "submit": "bug",
     },
     {
+        "symbol": "SetRenderSettings MarkIn/MarkOut below the timeline start are clamped, not refused",
+        "object": "Project / Timeline",
+        "reality": "SetRenderSettings takes MarkIn/MarkOut as ABSOLUTE record "
+                   "frames, and a value below the timeline's start frame is "
+                   "silently clamped to the start: measured on Studio 19.1.3.7 "
+                   "(2026-09-08) on an 86400-start timeline, MarkIn=MarkOut=86420 "
+                   "rendered timeline frame 20 and MarkIn=MarkOut=20 rendered "
+                   "frame 0 — one frame, True from SetRenderSettings, no error "
+                   "anywhere. The trap is that Timeline.GetMarkInOut reports the "
+                   "user's marks RELATIVE to the timeline start (Blackmagic's own "
+                   "README example is {'in': 0, 'out': 134}; the 21.1 stub says "
+                   "'record frame relative to timeline start'), so feeding its "
+                   "output straight into SetRenderSettings renders the wrong range "
+                   "with every readback agreeing. SetMarkInOut itself stores "
+                   "whatever number it is given (10 reads back 10, 86410 reads "
+                   "back 86410), so a script-written range can be in either space.",
+        "recommended": "Offset GetMarkInOut values by Timeline.GetStartFrame() before "
+                       "passing them to SetRenderSettings when they fall below the "
+                       "start frame (timeline_frame capture does this when it puts "
+                       "a user's range back). Verify a render range from the "
+                       "delivered frames, never from the settings call's return.",
+        "tags": ["render", "silent-failure", "frame-space", "mark-range"],
+        "submit": "bug",
+    },
+    {
         "symbol": "SetRenderSettings ExportSubtitle / SubtitleFormat had no observable effect",
         "object": "Project (render settings)",
         "reality": "Queuing a render with {'ExportSubtitle': True, "

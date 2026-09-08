@@ -166,6 +166,18 @@ _EVIDENCE_GATES: List[Dict[str, Any]] = [
         "issue": 131,
     },
     {
+        "symbol": "MediaPoolItem.GetTranscription",
+        "introduced_in": "21.1",
+        "source": "reported",
+        "note": "Reported against Studio 21.1.0.14 (PR #199): the untruncated "
+                "transcript, {language, segments[{start, end, text, speaker, "
+                "words[]}]} in SOURCE timecode. media_pool_item get_transcription "
+                "prefers it when present and falls back to the truncated "
+                "'Transcription' clip property below 21.1; `source` in the "
+                "result says which route ran.",
+        "issue": 199,
+    },
+    {
         "symbol": "Project.SetRenderSettings UseFullExtents",
         "introduced_in": "21.0.4",
         "source": "vendor",

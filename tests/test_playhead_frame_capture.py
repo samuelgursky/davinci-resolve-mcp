@@ -331,6 +331,19 @@ class CaptureRenderTest(unittest.TestCase):
         self.assertEqual(calls[-1]["MarkIn"], 86410)
         self.assertEqual(calls[-1]["MarkOut"], 86500)
 
+    def test_a_relative_mark_range_is_offset_by_the_timeline_start(self):
+        # GetMarkInOut reports marks relative to the timeline start (Resolve's
+        # own example is in=0/out=134) while SetRenderSettings takes absolute
+        # record frames; on 19.1.3.7 a MarkIn below the start is silently
+        # clamped to the start. A relative range must come back offset.
+        out, _, calls = self._capture(
+            {"frame": 86424}, marks={"video": {"in": 10, "out": 100},
+                                     "audio": {"in": 10, "out": 100}})
+        self.assertIsInstance(out, Image)
+        self.assertFalse(calls[-1]["SelectAllFrames"])
+        self.assertEqual(calls[-1]["MarkIn"], 86410)
+        self.assertEqual(calls[-1]["MarkOut"], 86500)
+
     def test_a_half_set_mark_range_is_not_treated_as_a_range(self):
         # Only an in point: restoring it as a range would invent an out point.
         out, _, calls = self._capture({"frame": 86424},
