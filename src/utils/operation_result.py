@@ -166,75 +166,57 @@ def extract_verification(raw: Any) -> Dict[str, Any]:
     if not isinstance(raw, dict):
         return unverified
 
-    # An impl that already speaks this shape wins outright.
     existing = raw.get("verification")
-    if isinstance(existing, dict) and existing:
-        merged = dict(existing)
-        merged.setdefault(
-            "status", "passed" if existing.get("verified") else "unverified")
-        merged.setdefault("checks", [])
-        merged.setdefault("contradiction", False)
-        return merged
-
-    checks: List[Dict[str, Any]] = []
-    status = "unverified"
-    contradiction = False
+    existing = existing if isinstance(existing, dict) else {}
+    checks = list(existing.get("checks") or [])
+    statuses = []
+    existing_status = existing.get("status")
+    if existing_status in {"passed", "failed", "partial", "contradiction"}:
+        statuses.append(existing_status)
+    elif existing.get("verified") is True:
+        statuses.append("passed")
+    elif existing.get("verified") is False:
+        statuses.append("failed")
+    contradiction = existing.get("contradiction") is True or raw.get("contradiction") is True
 
     readback = raw.get("readback")
-    if isinstance(readback, dict):
-        missing = readback.get("missing")
-        if isinstance(missing, list):
-            checks.append({
-                "check": "readback_verification",
-                "passed": not missing,
-                "missing_items": len(missing),
-            })
-            status = "passed" if not missing else "failed"
+    if isinstance(readback, dict) and isinstance(readback.get("missing"), list):
+        missing = readback["missing"]
+        checks.append({"check": "readback_verification", "passed": not missing,
+                       "missing_items": len(missing)})
+        statuses.append("failed" if missing else "passed")
 
-    # verify_by_readback's own shape: a mutation that reported success while the
-    # post-state disagrees is a contradiction, this repo's single most valuable
-    # reliability signal — it must not be flattened into a plain failure.
-    if "verified" in raw:
-        verified = bool(raw["verified"])
-        contradiction = bool(raw.get("contradiction"))
-        checks.append({
-            "check": "readback_post_state",
-            "passed": verified,
-            "contradiction": contradiction,
-            "observed": raw.get("observed"),
-        })
-        status = "contradiction" if contradiction else ("passed" if verified else "failed")
+    if type(raw.get("verified")) is bool:
+        checks.append({"check": "readback_post_state", "passed": raw["verified"],
+                       "contradiction": contradiction, "observed": raw.get("observed")})
+        statuses.append("passed" if raw["verified"] else "failed")
 
     if "property_restore_failures" in raw:
         failures = _as_int(raw.get("property_restore_failures"))
-        checks.append({
-            "check": "property_restore",
-            "passed": failures == 0,
-            "restored_items": _as_int(raw.get("properties_restored_items")),
-            "failures": failures,
-        })
-        if failures and status in ("passed", "unverified"):
-            status = "partial"
+        checks.append({"check": "property_restore", "passed": failures == 0,
+                       "restored_items": _as_int(raw.get("properties_restored_items")),
+                       "failures": failures})
+        if failures:
+            statuses.append("partial")
 
-    succeeded, failed = raw.get("succeeded"), raw.get("failed")
-    if isinstance(succeeded, int) and isinstance(failed, int):
-        checks.append({
-            "check": "bulk_operations",
-            "passed": failed == 0,
-            "succeeded": succeeded,
-            "failed": failed,
-        })
-        if status == "unverified":
-            if failed == 0 and succeeded > 0:
-                status = "passed"
-            elif succeeded > 0:
-                status = "partial"
-            elif failed > 0:
-                status = "failed"
-
-    if not checks:
-        return unverified
-    return {"status": status, "checks": checks, "contradiction": contradiction}
+    for check in checks:
+        if isinstance(check, dict):
+            contradiction = contradiction or check.get("contradiction") is True
+            if check.get("passed") is False:
+                statuses.append("partial" if check.get("check") == "property_restore" else "failed")
+    # Command counts are not evidence that Resolve honored those commands.
+    if contradiction or "contradiction" in statuses:
+        status = "contradiction"
+        contradiction = True
+    elif "failed" in statuses:
+        status = "failed"
+    elif "partial" in statuses:
+        status = "partial"
+    elif "passed" in statuses:
+        status = "passed"
+    else:
+        status = "unverified"
+    return {**existing, "status": status, "checks": checks, "contradiction": contradiction}
 
 
 # ─── Changes ─────────────────────────────────────────────────────────────────
