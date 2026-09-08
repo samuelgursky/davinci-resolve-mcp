@@ -82,7 +82,13 @@ Each dispatches on an `action`. Highlights:
 - **`conform`** — offline conform/relink QC engine (frame-oracle math, not filename matching),
   reverse-clip DB repair, sequence lineage store + diff, per-cut frame QC (sampled clear of
   transition windows; ingests Resolve's own FCP7 export — `-1` edges → junctions, no ticks needed).
-- **`color_trace`** — cross-project clip matching → a trace plan for carrying grades across a re-conform.
+- **`color_trace`** — a ColorTrace that works: matches a graded SOURCE timeline against a TARGET
+  timeline (any two projects, from `Project.db`, read-only, no Resolve) on **media identity** —
+  pool item id / file path / reel / file name plus source-range overlap, so a stringout cut into
+  graded sections, a renamed clip, or relinked media still traces; clip names are the last resort.
+  Emits one lossless `.drx` per graded match plus a `plan.json`; the live server's
+  `timeline_item_color.apply_trace_plan` applies it (dry-run resolution table, one
+  confirm_token for the batch, timeline archived first).
 - **`project_read` / `project_db`** — read/patch the Resolve project DB (SQLite or Postgres).
   Includes `list_subtitle_styles` / `set_subtitle_style` — caption font family/size/weight/italic
   and normalised position, which the scripting API cannot touch at all. Whole-track (not

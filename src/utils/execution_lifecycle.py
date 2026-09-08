@@ -169,6 +169,9 @@ class RiskClassificationHook(LifecycleHook):
         # CopyGrades overwrites each target's grade.
         ("graph", "apply_grade_from_drx"),
         ("timeline_item_color", "copy_grades"),
+        # apply_trace_plan runs ApplyGradeFromDRX over every clip a color_trace
+        # plan resolved — one confirm_token, N replaced graphs.
+        ("timeline_item_color", "apply_trace_plan"),
         # Takes. delete removes one; finalize collapses the item to the selected
         # take and discards the rest.
         ("timeline_item_takes", "delete"),

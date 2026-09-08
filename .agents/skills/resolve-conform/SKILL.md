@@ -95,10 +95,27 @@ source. It also does:
 
 ## Carrying grades across a re-conform
 
-`color_trace` matches clips across projects → a **trace plan** for carrying grades
-through a re-conform (pairs with the `resolve-color` skill's `drx grade_transfer`).
-For "what changed between cuts," use `editorial.turnover_changelist`
-(see `resolve-edit`).
+Native ColorTrace keys on timecode/name/order inside one project and gives up on
+renames, reorders, retimes and stringouts. The MCP path is two calls:
+
+1. **Advanced server, no Resolve needed** — `color_trace plan` with
+   `sourceProjectName`/`sourceTimeline` (graded) and `targetProjectName`/`targetTimeline`
+   (the new cut), plus `emitDir` under the system temp dir. It matches on media
+   identity (pool id / file path / reel / file name + source-range overlap — a
+   stringout's graded sections resolve by overlap) and only falls back to names.
+   Read `summary.byMethod`, `ambiguous`, and each match's `confidence`; it writes a
+   lossless `.drx` per graded match and returns `planPath`.
+2. **Live server** — open the target project and timeline, then
+   `timeline_item_color apply_trace_plan` with `plan_path` and `dry_run: true` to
+   get the resolution table (every entry is `apply` or `skip` + reason). Re-call
+   without `dry_run` for a confirm_token, then with it to apply. `version_name`
+   adds a local version per clip first so the previous grade survives; the
+   timeline is archived to the Archive bin before anything is replaced.
+
+Say plainly what did not resolve: `live_item_not_found`, `ambiguous_live_item`
+and `below_min_confidence` entries are reported, never guessed. For a single look,
+the `resolve-color` skill's `drx grade_transfer` is the lighter tool. For "what
+changed between cuts," use `editorial.turnover_changelist` (see `resolve-edit`).
 
 ## Offline-reference clips
 
