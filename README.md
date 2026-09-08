@@ -339,7 +339,7 @@ cheaper to read it here than to discover it mid-project.
 | Not supported | Why, and what you get instead |
 |---|---|
 | **Choosing the best take** | Performance is most of what makes a take right, and none of it is measurable from a waveform or a transcript. `rank_takes` ranks *fluency* — fillers, restarts, script coverage — and says so in every response. The take that plays is regularly the least fluent one, because the hesitation is often the acting. Use it to find the clean safety take, not to choose the read. |
-| **Cutting to music** | No beat or downbeat detection yet. Speech-driven tools will read a music bed as one long region and are the wrong instrument for it. |
+| **Automatic music editing** | Optional `librosa` support provides beat detection and beat/bar/phrase cut-point plans, not a finished assembly. Downbeats are inferred from the first beat; use `beat_offset` for pickups. Speech-silence tools are unsuitable for finding musical edit points. |
 | **Judging a cut** | Nothing here has an opinion about whether an edit is good. Every destructive action is plan → review → confirm for that reason. |
 | **Replacing an editor** | The output is a first-pass assembly, in the assistant-editor sense: ingest, sync, organize, string out, flag problems. It is a starting point you cut, not a finished cut. Defaults are deliberately **generous** — a first assembly is supposed to run long, because trimming is fast and visible while recovering discarded material is slow and invisible. |
 | **Modifying your source media** | By design and without exception — see below. |
