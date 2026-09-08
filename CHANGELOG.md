@@ -2,6 +2,99 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.213.1 — Fusion keyframes reach the render; the contact sheet waits for the viewer; the ledger learns Resolve 21.1
+
+Reported in #196 by @JosephConroy93, with a repro precise enough to reproduce
+on the first run.
+
+### Fixed — Fusion keyframes (#196)
+
+- **`fusion_comp add_keyframe` wrote the keyframe under `comp.Lock()`, so it
+  read back correctly and never rendered.** This is the comp-lock class this
+  repo documented in v2.98.5 for `set_input` — a value write under a lock
+  lands in the graph, `GetKeyFrames` lists it, Fusion's own page playback
+  interpolates it, and the delivered render ignores it — and `add_keyframe`
+  was the site that never got the fix. Measured on Studio 19.1.3.7 with a
+  Transform `Size` keyframed 2.0 → 1.0 over 47 frames on a media-backed clip:
+  through the shipped handler the render was bit-identical to the no-comp
+  baseline (PSNR inf); the identical writes with the lock removed rendered the
+  zoom (PSNR 13.3 dB against baseline, and frame 46 back within 44 dB of the
+  baseline as `Size` returned to 1.0). Four unlocked variants all rendered —
+  modifier locked with the write outside, `StartUndo`/`EndUndo` around both,
+  nothing wrapped, and a spline assigned directly — so the write pattern is
+  not the variable, the lock is. The handler now wraps the spline attach and
+  the first key in `StartUndo`/`EndUndo`, the escape `bulk_set_inputs`
+  already uses, which also gives the user one undo step per keyframe.
+- **`delete_keyframe` moved off the lock for consistency, not because it was
+  broken.** It was mutation-checked: re-locking the delete and rendering still
+  removed the key from the output (frame 46 stayed at the 2.0 zoom, 5.7 dB
+  from baseline). The lock does not suppress a spline delete on 19.1.3.7.
+
+### Notes on the report
+
+- The reporter's own patch — write outside the lock, modifier still inside —
+  made their render fail outright on Windows 19.1.3.7 and 21.0.4.5. That
+  variant rendered correctly here on macOS 19.1.3.7, so the failure was not
+  reproduced and its cause is unknown; the shipped fix uses the undo-wrapped
+  shape instead, which rendered on every attempt.
+- Priming (an unrelated unlocked write first) did not rescue it for the
+  reporter. That matches the v2.98.8 mechanism only partly and was not
+  re-tested here.
+
+### Validation — #196
+
+- `tests/test_fusion_value_write_lock.py` now recognises the keyframe write
+  shape (`tool[input][time] = value`) under a lock, and fails against the
+  pre-fix server naming `add_keyframe`'s line — the guard was confirmed to
+  fail before it was confirmed to pass.
+- Live render witness on Studio 19.1.3.7 through the real `fusion_comp`
+  handlers: `add_keyframe` animates, `delete_keyframe` removes, `get_keyframes`
+  reads the written values. Full offline Python suite, drift guards and the
+  advanced Node suite green.
+
+#197 and #198 contributed by @billcarroll, on the day Resolve 21.1 shipped. Also on landing: `timeline_markers get_thumbnail` read the thumbnail once too and now goes through the same settle helper; live-validated on the same scratch timeline (two of two reads), with the guard covering both sites.
+
+### Fixed — contact sheet and get_thumbnail (#198)
+
+- **`timeline thumbnail_contact_sheet` returned "No thumbnail available" for
+  every frame.** It moved the playhead and read the thumbnail once,
+  immediately; the viewer has not caught up when the scripting call that
+  follows a playhead move lands, so each sample came back empty. The sheet now
+  reads through `_playhead_thumbnail_settled`, the polling helper the
+  single-frame path already used — it was the one caller not switched over.
+  Live-validated on Studio 19.1.3.7: three samples across a scratch timeline,
+  all three returned thumbnails. A static guard now fails the suite if any
+  `GetCurrentClipThumbnailImage` read appears outside that helper. (#198)
+
+### Documentation — Resolve 21.1 in the API ledger (#197)
+
+- **Three `api_truth` entries corrected for Resolve 21.1** (#197), on the
+  strength of the contributor's attribute probe of Studio 21.1.0.14. Native
+  multicam clip creation is withdrawn as a gap (`MediaPool.CreateMulticamClip`,
+  `TimelineItem.FlattenMulticam`, `PerformMulticamSmartSwitch`,
+  `Timeline.AutoAlignClips` resolve on 21.1); transition **creation** is fixed
+  by `TimelineItem.AddTransition` while readback and cloning stay missing; and
+  the truncated `GetClipProperty('Transcription')` now has a real route around
+  it in `MediaPoolItem.GetTranscription()`, which returns per-word timing and
+  speakers for the source clip. `docs/reference/api-limitations.md` regenerated
+  (42 → 41 missing capabilities).
+- **Provenance is stated in each entry.** No 21.1 build exists on the
+  maintainer's machine, so the entries record these as *reported by the
+  contributor, not reproduced here*, following the ledger's existing
+  measured / reported distinction. None of the methods was invoked; the claim
+  is existence and signature only, and each entry says what would falsify it.
+- **The shipped scripting README moved in 21.1.** `Developer/Scripting/README.txt`
+  is gone in favour of `README.md`, a typed `DaVinciResolveScript.pyi` and a
+  `CHANGELOG.md`. `tests/live_resolve21_validation.py` reads either name, and
+  `AGENTS.md` explains why the bundled API text is not refreshed in the same
+  change (every `resolve_scripting_api.txt line N` anchor in `src/` would move).
+
+### Validation — #197 and #198
+
+- Full offline Python suite, drift guards (api-limitations, agent rules,
+  release surfaces), the advanced Node suite. Contact sheet live-validated as
+  above; the api_truth change is documentation and needs no Resolve run.
+
 ## What's New in v2.213.0 — a ColorTrace that matches on media, then applies
 
 ### Added

@@ -689,12 +689,13 @@ API_TRUTH: List[Dict[str, Any]] = [
         "object": "MediaPoolItem",
         "reality": "Returns a PREVIEW of the transcription that ends in an "
                    "ellipsis when the full transcript is longer than the property "
-                   "exposes. Still true on Studio 21.1.0.14 — the property is not "
+                   "exposes. Reported still true on Studio 21.1.0.14 by @billcarroll (PR #197; not "
+                   "reproduced here, no 21.1 install) — the property is not "
                    "the fix. 21.1 adds a SEPARATE method that is not truncated: "
                    "MediaPoolItem.GetTranscription(useNestedClipTranscription=False) "
                    "-> {language, segments[{start, end, text, speaker, words[{start, "
                    "end, text}]}]}, with timecode strings rather than frame numbers. "
-                   "Measured on a live 21.1.0.14 against an already-transcribed "
+                   "The contributor measured it on a live 21.1.0.14 against an already-transcribed "
                    "interview clip: 1550 segments, per-word start/end timecodes, a "
                    "populated `speaker` field, and '(...)' as Resolve's own silence "
                    "marker. Note the transcript is of the SOURCE clip, so timeline "
@@ -867,7 +868,9 @@ API_TRUTH: List[Dict[str, Any]] = [
     {
         "symbol": "Native multicam clip creation",
         "object": "MediaPool",
-        "reality": "WITHDRAWN on Studio 21.1.0.14 (2026-09-08): Resolve 21.1 adds "
+        "reality": "WITHDRAWN on the strength of a contributor's probe of Studio 21.1.0.14 "
+                   "(@billcarroll, PR #197, 2026-09-08; not reproduced here, no 21.1 "
+                   "install): Resolve 21.1 adds "
                    "MediaPool.CreateMulticamClip(clips, multicamOptions) -> "
                    "list[MediaPoolItem], plus TimelineItem.FlattenMulticam, "
                    "TimelineItem.PerformMulticamSmartSwitch and "
@@ -892,8 +895,9 @@ API_TRUTH: List[Dict[str, Any]] = [
     {
         "symbol": "Transition create / copy / clone",
         "object": "Timeline / TimelineItem",
-        "reality": "CREATION IS FIXED IN 21.1, READBACK IS NOT. Measured by "
-                   "attribute probe on Studio 21.1.0.14 (2026-09-08): "
+        "reality": "CREATION IS FIXED IN 21.1, READBACK IS NOT. Reported by @billcarroll "
+                   "(PR #197) from an attribute probe on Studio 21.1.0.14 (2026-09-08; "
+                   "not reproduced here, no 21.1 install): "
                    "TimelineItem.AddTransition resolves to a "
                    "<BlackmagicFusion.PyFunctionCall object>, not None. Its stub "
                    "signature is AddTransition(transitionOptions) -> TimelineItem | "
