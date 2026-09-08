@@ -2,6 +2,32 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.212.2 — failed verification evidence survives the operation envelope
+
+### Fixed
+
+- **A payload that carried its own `verification` block won outright, hiding
+  contradicting evidence beside it.** `extract_verification` returned any
+  pre-shaped `verification` dict untouched, so a top-level `contradiction:
+  true`, a `readback.missing` list, or a failed check inside the block itself
+  could sit next to `status: "passed"`. Evidence now merges: the explicit
+  status, readback misses, post-state readback and property-restore failures
+  are all collected, and precedence runs contradiction > failed > partial >
+  passed > unverified. Contributed in #195 by @denoise.
+- **Bulk command counts no longer count as verification.** `succeeded` /
+  `failed` tallies record what the server sent, not what Resolve honoured; a
+  `succeeded: 3, failed: 0` result used to read `verification.status:
+  "passed"` with no readback at all. The counts still drive the envelope's
+  own `status` (`partial` when both are non-zero), but the verification block
+  stays `unverified` until real evidence — a readback — arrives.
+
+### Validation
+
+- The PR's regression tests plus two added on landing: bulk counts cannot
+  mask a failed readback, and readback evidence is what establishes a pass on
+  a bulk result. Full offline suite, the drift guards and the advanced Node
+  suite are green. No Resolve behavior changed; live test not required.
+
 ## What's New in v2.212.1 — the networked transport's generated bearer token no longer lands in server.log
 
 ### Fixed

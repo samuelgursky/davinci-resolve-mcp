@@ -217,6 +217,21 @@ class Verification(unittest.TestCase):
         v = extract_verification({"verification": {"status": "passed"}, "contradiction": True})
         self.assertEqual(v["status"], "contradiction")
 
+    def test_bulk_counts_cannot_mask_a_failed_readback(self):
+        # A bulk tool that tallied every command as sent, while the readback
+        # found one of the targets missing, must read failed — the tally is
+        # what we sent, the readback is what Resolve kept.
+        v = extract_verification({"succeeded": 3, "failed": 0,
+                                  "readback": {"missing": ["clip_2"]}})
+        self.assertEqual(v["status"], "failed")
+        self.assertEqual([c["check"] for c in v["checks"]], ["readback_verification"])
+
+    def test_readback_evidence_is_what_passes_a_bulk_result(self):
+        v = extract_verification({"succeeded": 3, "failed": 0,
+                                  "readback": {"missing": []}})
+        self.assertEqual(v["status"], "passed")
+        self.assertFalse(v["contradiction"])
+
     def test_an_impl_that_already_speaks_the_shape_wins(self):
         v = extract_verification({"verification": {"status": "passed", "checks": [{"check": "x"}]}})
         self.assertEqual(v["checks"], [{"check": "x"}])
