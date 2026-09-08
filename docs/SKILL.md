@@ -1857,7 +1857,8 @@ Key actions:
 Color / Grade kernel actions (v2.11.0+) add safer grade inspection and
 boundary helpers: `grade_capabilities`, `probe_grade_item`,
 `probe_node_graph`, `safe_set_cdl`, `safe_copy_grade`, `safe_apply_drx`,
-`safe_export_lut`, `grade_version_snapshot`, `grade_version_restore`,
+`apply_trace_plan` (the live half of the advanced server's identity-matched
+`color_trace`), `safe_export_lut`, `grade_version_snapshot`, `grade_version_restore`,
 `color_group_capabilities`, `gallery_capabilities`, and
 `grade_boundary_report`. See `docs/kernels/color-grade-kernel.md` for the live-tested
 support map, and `docs/guides/color-decision-guide.md` for the practical distinction

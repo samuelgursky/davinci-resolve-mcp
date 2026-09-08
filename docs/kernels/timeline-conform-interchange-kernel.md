@@ -138,8 +138,12 @@ files and the project DB.
   reference-render, scale-corrected, red/yellow/cyan verdicts; each cut is
   compared clear of its transition windows, and Resolve's own FCP7 export
   ingests with its `-1` edges resolved and its missing ticks tolerated).
-- **`color_trace`** — cross-project clip matching → a trace plan for carrying
-  grades across a re-conform (pairs with the color kernel's `drx grade_transfer`).
+- **`color_trace`** — cross-project clip matching on media identity (pool id /
+  file path / reel / file name + source-range overlap; names last) → a trace
+  plan with a lossless `.drx` per graded match and a `plan.json`. The live half
+  is `timeline_item_color.apply_trace_plan` (dry-run resolution table → one
+  confirm_token → ApplyGradeFromDRX per resolved clip, timeline archived first).
+  Pairs with the color kernel's `drx grade_transfer` for single looks.
 - **`offline_ref`** — offline-reference clips have **no scripting API** but live
   inside `.drp`/`.drt` as `<OfflineClip>` entries; patch them here.
 - **`editorial`** — `parse_interchange` (EDL/OTIO/XMEML natively; **AAF via pyaaf2**,
