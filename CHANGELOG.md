@@ -2,6 +2,62 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.219.0 — native Resolve 21.1 multicam creation and flattening
+
+Contributed by @legionsound (#211), live-validated on Studio 21.1.0.14.
+
+### Added
+
+- **`media_pool create_multicam_clip`**, with the granular twin
+  `create_multicam_clip`, calling 21.1's native `CreateMulticamClip`. It takes
+  a list of media-pool unique IDs and an options dictionary covering all
+  eleven documented `MulticamOptions` fields. Enum fields accept either a
+  documented Resolve constant name or an integral native value; omitted fields
+  stay omitted rather than being filled with invented defaults. It returns the
+  ids and names of the clips **actually created**, and an empty native result
+  stays `success: false`.
+- **`timeline_item flatten_multicam`**, with the granular twin
+  `flatten_timeline_item_multicam`, calling native `FlattenMulticam` with
+  either documented grade constant. Flattening replaces the item, so the tool
+  documentation tells callers to re-query the track afterwards.
+- Every clip ID is resolved **before** anything is written, and an unknown or
+  duplicated ID refuses with nothing created. That is all-or-nothing input
+  resolution, not a transaction — the module says so in its own docstring
+  rather than implying a guarantee the native call does not offer.
+
+### Changed
+
+- Both actions are registered in **both** write tables — the
+  `destructive_hook` registry and the MEDIUM-risk set in
+  `execution_lifecycle` — so safe mode, the dry-run refusal, the audit log and
+  the operation log all treat them as the mutations they are. Verified by
+  probing the classifier directly rather than reading the diff. Tool count 368
+  → 370 across the docs and the generated agent-rule files.
+- The existing stacked-timeline multicam workflow is unchanged and still
+  available; the native route is an addition, not a replacement.
+
+### Validation
+
+- Full suite green: 3,453 passed, 1 skipped. Both write tables probed directly:
+  `media_pool.create_multicam_clip` and `timeline_item.flatten_multicam` each
+  classify MEDIUM / destructive / recognised.
+- The return shape is right by documentation as well as by measurement — the
+  shipped 21.1 stub declares `CreateMulticamClip(clips, multicamOptions) ->
+  list[MediaPoolItem]`.
+- Live evidence is @legionsound's, measured on Studio 21.1.0.14 with synthetic
+  media in a disposable project, and this was the family where a **rendered**
+  comparison rather than a readback was the bar it had to clear: both
+  interfaces created native multicam items, rendered, flattened with
+  `COPY_GRADE`, and rendered again — all four complete decoded RGB movies
+  identical at 144 frames, media type becoming Video, clip span unchanged.
+  Not reproduced here; this machine is Studio 19.1.3.7, below the 21.1 floor,
+  where both methods refuse with their version error.
+- **What that evidence does not cover**, stated so it is not read as more: it
+  proves the natively-selected angle survives flattening in an ungraded
+  fixture. Angle ordering, alternate-angle selection, grade transfer, audio
+  routing and synchronisation are unverified. Smart Switch and
+  `AutoAlignClips` are deliberately not part of this change.
+
 ## What's New in v2.218.2 — the AddTransition null-duration boundary, measured
 
 Measured by @legionsound on Studio 21.1.0.14 (#209), recorded here; no behavior
