@@ -1,5 +1,6 @@
 """Native Resolve 21.1 discovery and editing controls."""
 from src.utils.resolve211_multicam import create_multicam, resolve_constant, GRADES
+from src.utils.resolve211_dctl import native_dctl_result
 from src.utils.resolve211_edits import validate_edit_options, validate_transition_options, transition_result
 from src.granular.common import (
     mcp, READ_ONLY_TOOL, WRITE_TOOL, DESTRUCTIVE_TOOL, get_resolve, get_current_project,
@@ -229,3 +230,17 @@ def flatten_timeline_item_multicam(grade_option: str = "FLATTEN_MULTICAM_COPY_GR
     if error:
         return {"error": error}
     return {"success": bool(item.FlattenMulticam(grade))}
+
+
+@mcp.tool(annotations=READ_ONLY_TOOL)
+def validate_dctl_native(source: str) -> dict:
+    """Validate shader source with Resolve 21.1. Source layout and native diagnostics are preserved; success means validation, not a rendered shader test."""
+    if not isinstance(source, str):
+        return {"error": "source must be a string"}
+    r = get_resolve()
+    if r is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    missing = _requires_method(r, "ValidateDCTL", "21.1")
+    if missing:
+        return missing
+    return native_dctl_result(r, source)
