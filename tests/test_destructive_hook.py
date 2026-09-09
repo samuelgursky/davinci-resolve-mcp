@@ -219,6 +219,25 @@ class SecurityPolicy(unittest.TestCase):
         with open(self.audit_path, "r", encoding="utf-8") as handle:
             return [json.loads(line) for line in handle if line.strip()]
 
+    def test_native_21_1_setters_are_registered_writes(self) -> None:
+        """#208's set_speed/set_fades landed unregistered: recognised=False,
+        destructive=False, so every gate skipped a clip-speed rewrite (a
+        rippling one moves every later clip). Pin them beside set_retime."""
+        from src.utils.execution_lifecycle import classify_operation_risk
+        for action, params in (
+            ("set_speed", {"options": {"Percentage": 50, "RippleTimeline": True}}),
+            ("set_fades", {"options": {"FadeIn": 24}}),
+        ):
+            with self.subTest(action=action):
+                self.assertTrue(destructive_hook.is_destructive("timeline_item", action))
+                risk = classify_operation_risk("timeline_item", action, params).to_dict()
+                self.assertTrue(risk["recognised"], risk)
+                self.assertTrue(risk["destructive"], risk)
+                self.assertEqual(
+                    destructive_hook.risk_level_for_action("timeline_item", action, params),
+                    destructive_hook.risk_level_for_action("timeline_item", "set_retime", {}),
+                )
+
     def test_risk_level_classifier_names_low_medium_and_high(self) -> None:
         self.assertEqual(
             destructive_hook.risk_level_for_action("timeline_markers", "add", {}),

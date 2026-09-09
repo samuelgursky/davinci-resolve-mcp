@@ -2,6 +2,47 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.217.0 — native Resolve 21.1 speed and fade setters, registered as the mutations they are
+
+Contributed by @legionsound (#208), live-validated on Studio 21.1.0.14.
+
+### Added
+
+- **`timeline_item set_speed` and `set_fades`**, with granular twins
+  `set_timeline_item_speed` / `set_timeline_item_fades`, calling 21.1's native
+  `SetSpeed` and `SetFades`. Each takes an `options` dictionary — `Percentage`
+  (finite number, zero freezes), `PitchCorrection`, `StretchKeyframesToFit`,
+  `RippleTimeline` (strict booleans; ripple defaults to false) and `FadeIn` /
+  `FadeOut` (non-negative integer frames). Unknown keys, non-finite numbers,
+  non-boolean flags and fractional or negative fades are refused before any
+  write; valid partial dictionaries are forwarded unchanged, including zero
+  and false; a native `False` stays `success: false`; a build without the
+  method returns the 21.1 floor error — confirmed here on Studio 19.1.3.7 for
+  both. The legacy retime interface is untouched. Granular count 365 → 367;
+  generated rules, docs, version floors and the read/write report updated.
+  The contributor's frame evidence: at 50% speed the exported timeline-2s
+  frame matched the untreated 1s frame pixel-for-pixel; with 24-frame fades
+  the first and last exported frames were black and the interior frame
+  unchanged. Reverse, freeze, ripple, keyframe stretching and audio pitch are
+  not claimed validated. See `docs/reference/resolve211-speed-fades.md`.
+
+### Changed
+
+- **On landing, both actions are registered in the destructive registry**
+  beside `set_retime`, `set_transform` and the other item setters. As
+  contributed, the risk classifier did not recognise them
+  (`recognised: false, destructive: false`), so safe mode, the dry-run
+  refusal, the security audit and the operation log would all have skipped
+  a call that changes a clip's speed — and, with `RippleTimeline: true`,
+  moves every clip after it. A test now pins both as recognised, destructive
+  writes.
+
+### Validation
+
+- The PR's offline contracts, the registry test, full offline suite, drift
+  guards and the advanced Node suite. Positive behaviour is the contributor's
+  21.1 measurement; the version-floor refusal is measured on 19.1.3.7.
+
 ## What's New in v2.216.1 — ValidateDCTL's layout sensitivity is in the API ledger
 
 ### Documentation

@@ -271,6 +271,11 @@ class RiskClassificationHook(LifecycleHook):
         # whatever the caller passed; `set_retime` changes duration and sync.
         ("timeline_item", "set_property"),
         ("timeline_item", "set_retime"),
+        # Native 21.1 setters (#208): `set_speed` changes duration and, with
+        # RippleTimeline true, moves every clip after it; `set_fades` rewrites
+        # how the clip's edges render. Existing content altered, not deleted.
+        ("timeline_item", "set_speed"),
+        ("timeline_item", "set_fades"),
         # Pool reorganisation: clips and bins move, nothing is destroyed, but
         # paths other work depends on change underneath it.
         ("media_pool", "move_clips"),
