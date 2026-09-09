@@ -96,6 +96,91 @@ def _split_pid(line: str, index: int):
     return -(index + 1), line
 
 
+def _windows_wmic_rows(stdout: str) -> List[Dict[str, Optional[str]]]:
+    """WMIC prints one command line per row, under a `CommandLine` header.
+
+    The header row and WMIC's blank padding rows are left in rather than
+    filtered: they are not Resolve command lines, so the executable match
+    drops them, and a second filter here would be a second place for that
+    decision to drift. There is no pid column to read, so pids are synthetic
+    and negative — they exist only to key the row, never to name a process.
+    """
+    return [{"pid": -(index + 1), "comm": None, "args": line}
+            for index, line in enumerate(stdout.splitlines())]
+
+
+def _windows_cim_rows(stdout: str) -> List[Dict[str, Optional[str]]]:
+    """`ProcessId`, `ExecutablePath` and `CommandLine`, tab-separated per row.
+
+    Four columns rather than the command line alone, because they fail
+    independently exactly as they do on POSIX. Measured on build 26200 by the
+    reporter of #210, querying as an unelevated user: for a process the caller
+    cannot fully read, CIM still returns the row with `ProcessId` and `Name`
+    populated and `CommandLine` NULL — the *column* is access-restricted, not
+    the row. Reading only the command line would turn such an instance into no
+    row at all: an empty list, which does not mean "undeterminable", it means
+    "nothing is running", and that is the answer that launches a second
+    Resolve on top of a live one.
+
+    `Name` rather than `ExecutablePath` alone is the reason this holds. That
+    measurement showed `Name` surviving the access restriction; it did not
+    show `ExecutablePath` surviving it, and for a protected process that field
+    is commonly empty too. So the executable column falls back to the bare
+    process name, which `RESOLVE_PROCESS_PATTERNS` already matches — enough to
+    prove an instance is up, while the mode stays honestly unknown, since
+    `-nogui` is only ever visible in the command line.
+
+    Split at most three times: a command line may itself contain tabs, and it
+    is the last field, so everything after the third separator belongs to it.
+    """
+    rows: List[Dict[str, Optional[str]]] = []
+    for index, line in enumerate(stdout.splitlines()):
+        if not line.strip():
+            continue
+        fields = line.split("\t", 3)
+        fields += [""] * (4 - len(fields))
+        try:
+            pid = int(fields[0].strip())
+        except ValueError:
+            pid = -(index + 1)
+        rows.append({"pid": pid,
+                     "comm": fields[2].strip() or fields[1].strip() or None,
+                     "args": fields[3].strip() or None})
+    return rows
+
+
+#: PowerShell equivalent of the WMIC query, emitting the four columns above.
+#: The output encoding is forced because the default console codepage mangles
+#: a non-ASCII install path before Python ever sees it.
+_CIM_COMMAND = (
+    "[Console]::OutputEncoding=[Text.Encoding]::UTF8; "
+    "Get-CimInstance Win32_Process -Filter \"name='Resolve.exe'\" | "
+    "ForEach-Object { \"$($_.ProcessId)`t$($_.Name)`t$($_.ExecutablePath)`t$($_.CommandLine)\" }"
+)
+
+#: Readers for the Windows process table, tried in order until one answers.
+#:
+#: WMIC first, so a machine that still has it behaves exactly as it did before
+#: — but **WMIC was removed in Windows 11 build 26200** and is neither on PATH
+#: nor at its old System32\wbem location, so on current Windows it raises
+#: FileNotFoundError and every tool refused with "Resolve is not running"
+#: while Resolve sat in front of the user (#210). Keeping the old reader first
+#: costs nothing precisely because absence fails instantly rather than burning
+#: the timeout. Windows PowerShell 5.1 ships with Windows; `pwsh` is the
+#: cross-platform 7.x binary, tried last for a machine that has only that one.
+#:
+#: `None` is returned only when NO reader ran. A reader that ran and found
+#: nothing returns an empty list, which is a different answer.
+WINDOWS_PROCESS_READERS = (
+    (["wmic", "process", "where", "name='Resolve.exe'", "get", "CommandLine"],
+     _windows_wmic_rows),
+    (["powershell", "-NoProfile", "-NonInteractive", "-Command", _CIM_COMMAND],
+     _windows_cim_rows),
+    (["pwsh", "-NoProfile", "-NonInteractive", "-Command", _CIM_COMMAND],
+     _windows_cim_rows),
+)
+
+
 def _process_table() -> Optional[List[Dict[str, Optional[str]]]]:
     """One row per process: `{pid, comm, args}`, or None when undeterminable.
 
@@ -113,27 +198,28 @@ def _process_table() -> Optional[List[Dict[str, Optional[str]]]]:
     """
     if platform.system().lower() == "windows":
         # `tasklist` prints no command line, so the flag is invisible there.
-        # WMIC does print it and is what makes headless detection possible.
+        # The readers below do print it, which is what makes headless
+        # detection possible on Windows at all.
         #
         # Decoded explicitly: `text=True` alone decodes with the locale
         # codepage, which raises UnicodeDecodeError on a byte cp1252 has no
         # mapping for — and this read is the input to the second-instance
         # guard, so it must fail to "cannot tell", never to an exception.
         # ASCII is byte-identical under both codecs, so the matching this
-        # feeds is unchanged; what WMIC emits for a non-ASCII install path
-        # on a non-English Windows is not something we can verify here.
-        try:
-            out = subprocess.run(
-                ["wmic", "process", "where", "name='Resolve.exe'", "get", "CommandLine"],
-                capture_output=True, text=True, encoding="utf-8", errors="replace",
-                timeout=10, check=False,
-            )
-        except Exception:  # pragma: no cover - defensive; an unknown answer is None
-            return None
-        if out.returncode != 0 and not out.stdout:
-            return None
-        return [{"pid": -(i + 1), "comm": None, "args": line}
-                for i, line in enumerate((out.stdout or "").splitlines())]
+        # feeds is unchanged; what these readers emit for a non-ASCII install
+        # path on a non-English Windows is not something we can verify here.
+        for reader, parse in WINDOWS_PROCESS_READERS:
+            try:
+                out = subprocess.run(
+                    reader, capture_output=True, text=True, encoding="utf-8",
+                    errors="replace", timeout=10, check=False,
+                )
+            except Exception:
+                continue  # this reader is unusable here; try the next one
+            if out.returncode != 0 and not (out.stdout or "").strip():
+                continue
+            return parse(out.stdout or "")
+        return None
 
     comm_lines = _run_ps("pid=,comm=")
     args_lines = _run_ps("pid=,args=")

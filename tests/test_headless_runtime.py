@@ -381,5 +381,146 @@ class MatrixTests(unittest.TestCase):
         self.assertIn("every observation reached parity", hd.render_matrix_markdown(matrix))
 
 
+class WindowsProcessReadersTest(unittest.TestCase):
+    r"""The Windows reader chain, and why there is a chain at all.
+
+    WMIC was removed in Windows 11 build 26200 — not on PATH, and absent from
+    C:\Windows\System32\wbem. Spawning it raises FileNotFoundError, the read
+    returned None, and None is "cannot determine", so every tool refused with
+    RESOLVE_NOT_RUNNING while Resolve ran in front of the user. Reported in
+    #210 with the PowerShell replacement, verified there on build 26200; the
+    maintainer has no Windows machine, so these tests are the local half and
+    the hardware half is the reporter's.
+    """
+
+    EXE = r"C:\Program Files\Blackmagic Design\DaVinci Resolve\Resolve.exe"
+
+    def _readers(self, *, wmic=None, powershell=None, pwsh=None):
+        """A fake spawn where each reader either answers or is not installed.
+
+        None means "this binary does not exist here" — FileNotFoundError, the
+        way a missing executable actually fails, not a non-zero exit.
+        """
+        answers = {"wmic": wmic, "powershell": powershell, "pwsh": pwsh}
+
+        def run(command, *args, **kwargs):
+            answer = answers.get(command[0])
+            if answer is None:
+                raise FileNotFoundError(2, "not found: " + command[0])
+            return mock.Mock(returncode=answer[0], stdout=answer[1])
+
+        return run
+
+    def _cim(self, command_line, executable=None, pid=12692, name="Resolve.exe"):
+        return "%d\t%s\t%s\t%s" % (
+            pid, name, self.EXE if executable is None else executable, command_line)
+
+    def _mode(self, run):
+        with mock.patch.object(rr.platform, "system", return_value="Windows"):
+            with mock.patch.object(rr.subprocess, "run", side_effect=run):
+                return rr.runtime_mode()
+
+    def test_a_machine_without_wmic_still_sees_the_running_resolve(self) -> None:
+        """The reported bug: the only reader is gone, so the answer was None."""
+        mode = self._mode(self._readers(powershell=(0, self._cim('"%s"' % self.EXE))))
+        self.assertTrue(mode["determinable"])
+        self.assertTrue(mode["running"])
+        self.assertEqual(mode["instances"], 1)
+        self.assertFalse(mode["headless"])
+
+    def test_the_flag_survives_the_new_reader(self) -> None:
+        """Headless detection is the whole reason a command line is read at
+        all; a fallback that lost `-nogui` would be a silent downgrade."""
+        mode = self._mode(self._readers(powershell=(0, self._cim('"%s" -nogui' % self.EXE))))
+        self.assertTrue(mode["running"])
+        self.assertTrue(mode["headless"])
+
+    def test_an_unreadable_command_line_is_still_a_running_instance(self) -> None:
+        """The case that decided the query's shape.
+
+        A Resolve running elevated or under another account can answer
+        ExecutablePath while CommandLine comes back empty. Reading only the
+        command line makes that instance no row at all — an empty list, which
+        does not mean "cannot tell", it means "nothing is running", and that
+        is the answer that launches a second Resolve onto a live one. The
+        executable column keeps it counted; the mode is honestly unknown.
+        """
+        mode = self._mode(self._readers(powershell=(0, self._cim(""))))
+        self.assertTrue(mode["running"])
+        self.assertEqual(mode["instances"], 1)
+        self.assertIsNone(mode["headless"], "no argv means the mode is unknown, not GUI")
+
+    def test_only_the_process_name_survives_and_it_is_still_an_instance(self) -> None:
+        """The shape the reporter actually measured on build 26200.
+
+        Querying as an unelevated user, a process the caller cannot fully read
+        comes back with ProcessId and Name populated and CommandLine NULL —
+        the *column* is access-restricted, not the row. ExecutablePath was not
+        shown to survive that restriction, and for a protected process it
+        commonly does not, so the executable column falls back to the bare
+        process name. That is still enough to prove an instance is up, which
+        is the only claim that has to hold: the guard this feeds asks "may I
+        launch?", and the answer must be no.
+        """
+        mode = self._mode(self._readers(powershell=(0, self._cim("", executable=""))))
+        self.assertTrue(mode["running"], "a row with only a name still proves Resolve is up")
+        self.assertEqual(mode["instances"], 1)
+        self.assertIsNone(mode["headless"], "-nogui lives only in the command line")
+
+    def test_wmic_is_still_preferred_where_it_exists(self) -> None:
+        """Machines that still have WMIC must be untouched by the fallback."""
+        run = self._readers(wmic=(0, '"%s"' % self.EXE),
+                            powershell=(0, self._cim('"%s" -nogui' % self.EXE)))
+        mode = self._mode(run)
+        self.assertTrue(mode["running"])
+        self.assertFalse(mode["headless"], "the WMIC answer must win, not PowerShell's")
+
+    def test_a_reader_that_runs_and_finds_nothing_ends_the_chain(self) -> None:
+        """An empty answer is an answer. Falling through to the next reader
+        would make "no Resolve running" cost every timeout in the chain."""
+        calls = []
+
+        def run(command, *args, **kwargs):
+            calls.append(command[0])
+            if command[0] == "wmic":
+                raise FileNotFoundError(2, "not found: wmic")
+            return mock.Mock(returncode=0, stdout="")
+
+        mode = self._mode(run)
+        self.assertTrue(mode["determinable"])
+        self.assertFalse(mode["running"])
+        self.assertEqual(mode["instances"], 0)
+        self.assertEqual(calls, ["wmic", "powershell"], "pwsh must not be reached")
+
+    def test_a_broken_reader_falls_through_to_the_next(self) -> None:
+        """Non-zero exit with nothing on stdout is a reader that did not work,
+        not a machine with no Resolve on it."""
+        run = self._readers(powershell=(1, ""), pwsh=(0, self._cim('"%s"' % self.EXE)))
+        mode = self._mode(run)
+        self.assertTrue(mode["running"])
+        self.assertEqual(mode["instances"], 1)
+
+    def test_no_reader_at_all_is_undeterminable_not_empty(self) -> None:
+        """The distinction the whole module is built on must survive the chain."""
+        mode = self._mode(self._readers())
+        self.assertFalse(mode["determinable"])
+        self.assertIsNone(mode["running"])
+        self.assertIsNone(mode["instances"])
+
+    def test_a_command_line_containing_tabs_keeps_its_arguments(self) -> None:
+        """The command line is the last column and may contain the separator,
+        so the split is bounded rather than greedy."""
+        rows = rr._windows_cim_rows('7	Resolve.exe	%s	"%s"	-nogui' % (self.EXE, self.EXE))
+        self.assertEqual(rows[0]["pid"], 7)
+        self.assertTrue(rows[0]["args"].endswith('	-nogui'))
+
+    def test_a_non_numeric_pid_does_not_lose_the_row(self) -> None:
+        """A header or a stray line must not raise; the row still carries its
+        columns, keyed by a synthetic pid the way the WMIC branch always has."""
+        rows = rr._windows_cim_rows("ProcessId	Name	ExecutablePath	CommandLine")
+        self.assertEqual(len(rows), 1)
+        self.assertLess(rows[0]["pid"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

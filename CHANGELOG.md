@@ -2,6 +2,71 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.218.1 — Windows 11 process detection survives the removal of WMIC
+
+Reported by @Nikibakht (#210), verified on Windows 11 Pro build 26200.
+
+### Fixed
+
+- **Every tool refused with `RESOLVE_NOT_RUNNING` on Windows 11 build 26200+,
+  while Resolve was running in front of the user.** Process detection read the
+  running Resolve's command line through `wmic`, which **Microsoft removed in
+  build 26200** — it is neither on `PATH` nor at `C:\Windows\System32\wbem`.
+  Spawning it raised `FileNotFoundError`, the read returned `None`, and `None`
+  correctly means "cannot determine whether Resolve is running", so the server
+  refused to act and declined to launch. The detection logic was right; the
+  reader it depended on had ceased to exist.
+- Windows now tries a chain of readers — `wmic`, then Windows PowerShell's
+  `Get-CimInstance Win32_Process`, then `pwsh` — and uses the first that
+  answers. `None` is returned only when **no** reader ran; a reader that ran
+  and found nothing still returns an empty list, which is a different answer.
+  Machines that still have WMIC are unaffected, and keeping it first costs
+  nothing, because a missing binary fails instantly rather than burning the
+  ten-second timeout.
+
+### Changed
+
+- The PowerShell reader returns **`ProcessId`, `Name`, `ExecutablePath` and
+  `CommandLine`**, not the command line alone, so Windows now fills the same
+  two-column process table as macOS and Linux. The columns fail independently,
+  and @Nikibakht measured how: querying as an unelevated user on build 26200, a
+  process the caller cannot fully read still returns its row with `ProcessId`
+  and `Name` populated and `CommandLine` NULL — the *column* is
+  access-restricted, not the row. Reading only the command line would turn
+  such an instance into no row at all: an empty list, which does not mean
+  "cannot tell", it means "nothing is running", and that is the answer that
+  launches a second Resolve on top of a live one.
+- `Name` is in that query because of the same measurement. It showed `Name`
+  surviving the access restriction; it did **not** show `ExecutablePath`
+  surviving it, and for a protected process that field is commonly empty too,
+  so the executable column falls back to the bare process name — which the
+  existing match patterns already accept. An instance is counted on either
+  column, and the mode is reported as unknown rather than guessed when the
+  argument vector is unreadable, since `-nogui` is only ever visible there.
+  Windows rows also carry real pids instead of the synthetic negative ones the
+  WMIC branch invents.
+
+### Validation
+
+- Full suite green: 3,446 passed, 1 skipped. Ten new tests cover the reader chain: a machine with no WMIC, `-nogui`
+  surviving the new reader, an unreadable command line still counting as an
+  instance, a row where only the process name survives, WMIC still winning
+  where it exists, an empty answer ending the chain rather than falling
+  through, a broken reader falling through, no reader at all staying
+  undeterminable, and the two parsing edges (a command line containing tabs, a
+  non-numeric pid).
+- **Not verified on Windows hardware by this project — there is none here.**
+  The WMIC absence, the `FileNotFoundError` it raises inside the server's own
+  venv, and the access-restricted row shape were all measured by @Nikibakht on
+  Windows 11 Pro build 26200. The local half is the unit coverage above, run
+  against a faked process spawn.
+- One thing remains **untested by anyone**: an actual Resolve running elevated
+  or under a different Windows account. The reporter runs it as the same
+  unelevated user and said so rather than guessing; the access-restricted row
+  shape above is a proxy measured on other processes in that same access
+  class. The fallback is written so that it costs nothing if that case never
+  arises.
+
 ## What's New in v2.218.0 — native Resolve 21.1 transition creation
 
 Contributed by @legionsound (#209), live-validated on Studio 21.1.0.14.
