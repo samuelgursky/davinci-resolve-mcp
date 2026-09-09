@@ -1,7 +1,7 @@
 """Native Resolve 21.1 discovery and editing controls."""
-from src.utils.resolve211_edits import validate_edit_options
+from src.utils.resolve211_edits import validate_edit_options, validate_transition_options, transition_result
 from src.granular.common import (
-    mcp, READ_ONLY_TOOL, WRITE_TOOL, get_resolve, get_current_project,
+    mcp, READ_ONLY_TOOL, WRITE_TOOL, DESTRUCTIVE_TOOL, get_resolve, get_current_project,
     _get_timeline, _get_timeline_item, _requires_method, has_method,
 )
 
@@ -181,3 +181,20 @@ def set_timeline_item_fades(options: dict, track_type: str = "video", track_inde
     if missing:
         return missing
     return {"success": bool(item.SetFades(dict(options)))}
+
+
+@mcp.tool(annotations=DESTRUCTIVE_TOOL)
+def add_timeline_item_transition(options: dict, track_type: str = "video", track_index: int = 1, item_index: int = 0) -> dict:
+    """Add a native 21.1 transition using type/category/position/alignment and optional duration in frames. Returns actual span; clip indexes can change after insertion."""
+    error = validate_transition_options(options)
+    if error:
+        return {"error": error}
+    if track_type not in ("video", "audio") or track_index < 1 or item_index < 0:
+        return {"error": "Use video/audio, a 1-based track index and a non-negative item index"}
+    item, error = _get_timeline_item(track_type, track_index, item_index)
+    if error:
+        return error
+    missing = _requires_method(item, "AddTransition", "21.1")
+    if missing:
+        return missing
+    return transition_result(item.AddTransition(dict(options)))

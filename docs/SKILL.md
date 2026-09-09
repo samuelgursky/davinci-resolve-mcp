@@ -345,7 +345,7 @@ to the user as verified.
 | Mode | Entry point | Tool count | Use when |
 |---|---|---|---|
 | Compound (default) | `src/server.py` | 36 tools | Most workflows — keeps context lean |
-| Granular (full) | `src/server.py --full` | 367 tools | Power users needing one tool per API method |
+| Granular (full) | `src/server.py --full` | 368 tools | Power users needing one tool per API method |
 
 Resolve 21.1 adds [twelve read-only discovery controls](reference/resolve211-read-controls.md)
 for edition, presets, audio formats/codecs, normalization modes, speed, fades
@@ -2481,3 +2481,5 @@ setups:
 The full API reference is in `docs/reference/resolve_scripting_api.txt`.
 
 Native Resolve 21.1 speed and fade setters: see [speed/fades](reference/resolve211-speed-fades.md) for options, version guards and contributor validation limits.
+
+Native 21.1 transition creation: see [transition controls](reference/resolve211-native-transitions.md) for options, item-index changes and contributor-rendered evidence.
