@@ -33,6 +33,7 @@ import uuid
 from typing import Any, Callable, Dict, FrozenSet, Optional, Tuple
 
 from src.utils import analysis_runs, brain_edits, media_pool_changes, timeline_versioning
+from src.utils.bool_params import coerce_bool, explicit_bool_param
 from src.utils.execution_lifecycle import RiskAssessment, RiskLevel, classify_operation_risk
 
 logger = logging.getLogger("resolve-mcp.destructive-hook")
@@ -292,6 +293,7 @@ DRY_RUN_DEFAULT_TRUE_ACTIONS: frozenset = frozenset({
 
 NATIVE_DRY_RUN_ACTIONS: frozenset = frozenset({
     ("media_pool", "clear_clip_marks"),
+    ("timeline_markers", "add"),
     ("timeline_item_color", "apply_trace_plan"),
     ("media_pool", "set_clip_marks"),
     ("media_pool", "setup_multicam_timeline"),
@@ -302,13 +304,7 @@ NATIVE_DRY_RUN_ACTIONS: frozenset = frozenset({
 
 
 def _explicit_dry_run_requested(params: Optional[Dict[str, Any]]) -> bool:
-    if not isinstance(params, dict):
-        return False
-    if "dry_run" in params:
-        return bool(params["dry_run"])
-    if "dryRun" in params:
-        return bool(params["dryRun"])
-    return False
+    return explicit_bool_param(params, "dry_run", "dryRun") is True
 
 
 def lacks_native_dry_run(
@@ -370,11 +366,14 @@ def _payload_is_plan_only(
     tool_name: str, action: str, params: Optional[Dict[str, Any]],
 ) -> bool:
     """True iff this call only produces a plan and mutates nothing."""
+    dry_run = explicit_bool_param(params, "dry_run", "dryRun")
+    if (tool_name, action) in NATIVE_DRY_RUN_ACTIONS and dry_run is True:
+        return True
     if (tool_name, action) not in DRY_RUN_DEFAULT_TRUE_ACTIONS:
         return False
-    if not isinstance(params, dict):
+    if dry_run is None:
         return True  # dry_run defaults to True for these actions
-    return bool(params.get("dry_run", params.get("dryRun", True)))
+    return dry_run
 
 
 def _payload_only_touches_no_archive_keys(
@@ -507,16 +506,7 @@ def _read_preference(key: str, default: Any = None) -> Any:
 
 
 def _coerce_bool(value: Any, default: bool = False) -> bool:
-    if value is None:
-        return default
-    if isinstance(value, str):
-        lowered = value.strip().lower()
-        if lowered in {"1", "true", "yes", "on"}:
-            return True
-        if lowered in {"0", "false", "no", "off"}:
-            return False
-        return default
-    return bool(value)
+    return coerce_bool(value, default)
 
 
 def _safe_mode_enabled() -> bool:

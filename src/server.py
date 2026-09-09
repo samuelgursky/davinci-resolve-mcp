@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 376-tool granular server instead
 """
 
-VERSION = "2.223.0"
+VERSION = "2.224.0"
 
 import base64
 import os
@@ -69,6 +69,7 @@ from src.utils.proc import safe_run
 from src.utils.readback import verify_by_readback, verification_stats as _verification_stats
 from src.utils import operation_result as _operation_result
 from src.utils import operation_log as _operation_log
+from src.utils.bool_params import explicit_bool_param as _explicit_bool_param
 from src.utils.operation_result import (
     build_operation_envelope as _build_operation_envelope,
     get_envelope_mode as _get_envelope_mode,
@@ -26033,7 +26034,7 @@ def timeline_markers(action: str, params: Optional[Dict[str, Any]] = None) -> An
     itself refuses sub-start timecodes with a bare False.
 
     Actions:
-      add(frame|frame_id|frameId|timecode?, color?, name?, note?, duration?, custom_data?) -> {success, frame}
+      add(frame|frame_id|frameId|timecode?, color?, name?, note?, duration?, custom_data?, dry_run?/dryRun?) -> {success, frame} or dry-run preview
         If frame/timecode is omitted, add uses the current playhead timecode.
       get_all() -> {markers}
       get_by_custom_data(custom_data) -> {markers}
@@ -26066,6 +26067,21 @@ def timeline_markers(action: str, params: Optional[Dict[str, Any]] = None) -> An
         marker, marker_err = _marker_add_payload(p, tl=tl, default_to_current=True)
         if marker_err:
             return marker_err
+        if _explicit_bool_param(p, "dry_run", "dryRun") is True:
+            return {
+                "success": True,
+                "dry_run": True,
+                "executed": False,
+                "would_change": {
+                    "operation": "timeline_markers.add",
+                    "frame": marker["frame"],
+                    "color": marker["color"],
+                    "name": marker["name"],
+                    "note": marker["note"],
+                    "duration": marker["duration"],
+                    "custom_data": marker["custom_data"],
+                },
+            }
         return _add_marker(tl, marker)
     elif action == "get_all":
         return {"markers": _ser(tl.GetMarkers())}

@@ -16,6 +16,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
+from src.utils.bool_params import coerce_bool, explicit_bool_param
 from src.utils import operation_result
 
 logger = logging.getLogger("resolve-mcp.operation-log")
@@ -41,16 +42,7 @@ def _read_preference(key: str, default: Any = None) -> Any:
 
 
 def _coerce_bool(value: Any, default: bool = False) -> bool:
-    if value is None:
-        return default
-    if isinstance(value, str):
-        lowered = value.strip().lower()
-        if lowered in {"1", "true", "yes", "on"}:
-            return True
-        if lowered in {"0", "false", "no", "off"}:
-            return False
-        return default
-    return bool(value)
+    return coerce_bool(value, default)
 
 
 def operation_log_enabled() -> bool:
@@ -72,12 +64,12 @@ def _now_iso() -> str:
 
 
 def _dry_run_requested(params: Optional[Dict[str, Any]], result: Any) -> bool:
-    if isinstance(params, dict):
-        if "dry_run" in params:
-            return bool(params["dry_run"])
-        if "dryRun" in params:
-            return bool(params["dryRun"])
-    return bool(isinstance(result, dict) and result.get("dry_run") is True)
+    requested = explicit_bool_param(params, "dry_run", "dryRun")
+    if requested is not None:
+        return requested
+    if isinstance(result, dict) and "dry_run" in result:
+        return coerce_bool(result.get("dry_run"))
+    return False
 
 
 def _envelope(result: Any) -> Dict[str, Any]:
@@ -119,9 +111,18 @@ def _status(result: Any, envelope: Dict[str, Any]) -> str:
     return str(envelope.get("status") or operation_result.normalize_status(result))
 
 
-def _summary(tool_name: str, action: str, status: str, envelope: Dict[str, Any]) -> str:
+def _summary(
+    tool_name: str,
+    action: str,
+    status: str,
+    envelope: Dict[str, Any],
+    *,
+    dry_run: bool = False,
+) -> str:
     operation = f"{tool_name}.{action}"
     changes = envelope.get("changes")
+    if dry_run and status == "success":
+        return f"{operation} dry-run preview"
     if isinstance(changes, dict) and changes:
         parts = [f"{key}={value}" for key, value in sorted(changes.items())[:4]]
         return f"{operation} {status}; " + ", ".join(parts)
@@ -140,6 +141,7 @@ def build_record(
 ) -> Dict[str, Any]:
     env = _envelope(result)
     status = _status(result, env)
+    dry_run = _dry_run_requested(params, result)
     record = {
         "operation_id": _operation_id(result, env),
         "tool": tool_name,
@@ -147,9 +149,9 @@ def build_record(
         "operation": f"{tool_name}.{action}",
         "risk_level": risk.get("level", "unknown"),
         "risk_established": risk.get("recognised"),
-        "dry_run": _dry_run_requested(params, result),
+        "dry_run": dry_run,
         "timestamp": _now_iso(),
-        "summary": _summary(tool_name, action, status, env),
+        "summary": _summary(tool_name, action, status, env, dry_run=dry_run),
         "status": status,
     }
     if env.get("execution_id") and env.get("execution_id") != record["operation_id"]:

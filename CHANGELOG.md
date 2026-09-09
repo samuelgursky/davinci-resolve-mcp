@@ -2,6 +2,41 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.224.0 — marker add dry-run preview
+
+Contributed by @rohitkanithi.
+
+### Added
+
+- **`timeline_markers add` now has a native dry-run path.** When callers pass
+  `dry_run=true` or `dryRun=true`, the tool validates the same marker payload
+  it would use for the real edit, resolves defaults such as the current
+  playhead frame, normalizes marker color/duration/custom data, and returns a
+  `would_change` preview without calling Resolve's `AddMarker`.
+- The preview reports `success=true`, `dry_run=true`, and `executed=false`, so
+  automated clients can distinguish an honest no-mutation preview from a
+  completed marker edit.
+
+### Fixed
+
+- Dry-run parsing now treats common string booleans consistently across the
+  destructive-action hook and operation log. Values such as `"false"`, `"0"`,
+  `"no"`, and `"off"` no longer behave like truthy dry-run requests just
+  because they are non-empty strings.
+- Native dry-run previews are treated as plan-only payloads by the destructive
+  hook, so `timeline_markers add` previews do not create timeline archives or
+  versioning rows before returning the preview.
+
+### Validation
+
+- Added marker tests proving `timeline_markers add` with `dry_run=true` returns
+  the resolved preview without adding a marker, while `dry_run="false"` still
+  performs the real add.
+- Added destructive-hook tests for native dry-run plan-only behavior and string
+  boolean coercion.
+- Added operation-log tests so dry-run string values are recorded correctly and
+  successful dry-run attempts summarize as previews.
+
 ## What's New in v2.223.0 — native Resolve 21.1 DCTL validation
 
 Contributed by @legionsound (#215), live-validated on Studio 21.1.0.14.
