@@ -2,6 +2,31 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.214.3 — the advanced launcher heals a wrong-Node registration
+
+### Fixed
+
+- **`davinci-resolve-advanced-mcp` re-executes itself under a Node ≥ 20.9 when
+  started by an older one.** The floor is unchanged and deliberate (sharp's own
+  engine floor is 20.9; better-sqlite3 is a native module built for one ABI;
+  Node 18 is end-of-life). What kept recurring was the MCP registration's
+  `command` landing on an nvm v18 binary after a client app rewrote its config
+  (twice on the reference machine), which left the server "disconnected" with
+  the fix buried in a log. The launcher now looks for a suitable Node before
+  refusing — `DAVINCI_RESOLVE_NODE` first, then nvm's versions directory
+  newest-first, then Homebrew/system paths (Windows: Program Files and the
+  per-user install) — probes each with `-p process.versions.node`, re-execs
+  with the same stdio under the first that passes, and says so on stderr.
+  A re-exec marks itself so a bad replacement cannot loop; with no usable
+  candidate the refusal now lists what was probed. Measured live: started by
+  v18.20.8, it came up under v22.22.3 and served the MCP handshake.
+- **`--node-check`** prints `{node, execPath, reexec}` after the floor check —
+  the answer to "which Node is this registration actually running?".
+  `--version` and `--help` still answer before the floor, whatever started them.
+- `DAVINCI_RESOLVE_ADVANCED_ASSUME_NODE` fakes the running version and
+  `DAVINCI_RESOLVE_ADVANCED_NO_NODE_SEARCH=1` limits the search to the explicit
+  override; both exist for the tests and are documented in the launcher.
+
 ## What's New in v2.214.2 — a running Resolve is counted by its executable path, not only by its argument vector
 
 ### Fixed
