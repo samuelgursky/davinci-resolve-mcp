@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 365-tool granular server instead
 """
 
-VERSION = "2.215.2"
+VERSION = "2.216.0"
 
 import base64
 import os

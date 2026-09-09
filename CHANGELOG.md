@@ -2,6 +2,37 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.216.0 — twelve Resolve 21.1 read-only controls, in both server modes
+
+Contributed by @legionsound (#206), live-measured on Studio 21.1.0.14.
+
+### Added
+
+- **Twelve readers for data 21.1 exposes natively**, each as a compound
+  action and a granular tool: `resolve_control is_studio`,
+  `get_keyboard_presets`, `get_current_keyboard_preset`; `project_settings
+  get_project_settings_presets`; `render get_audio_formats`,
+  `get_audio_codecs(format)`; `timeline get_normalize_audio_modes`,
+  `get_output_blanking`; `timeline_item get_speed`, `get_fades`,
+  `get_output_blanking`, `get_use_timeline_for_output_blanking`. Native
+  values pass through untouched, including `false`, empty inherited blanking
+  and fractional fade durations; the four blanking values are pixel
+  coordinates, not margins. A build without the method returns an explicit
+  "requires DaVinci Resolve 21.1+" error — confirmed here on Studio 19.1.3.7,
+  where all twelve refuse cleanly. The granular count moves from 353 to 365
+  tools; docs, generated agent rules, the version ledger and the coverage
+  reference are updated together. `GetProjectLastModifiedTime` was deferred
+  because it returned `None` for existing projects on the test install.
+  See `docs/reference/resolve211-read-controls.md`.
+
+### Validation
+
+- The PR's offline contracts (absent methods, argument forwarding, preserved
+  false/empty payloads, invalid locators), the full offline suite, drift
+  guards and the advanced Node suite. Positive payloads are the contributor's
+  measurement on 21.1.0.14 through both interfaces; the version-floor refusal
+  is measured here on 19.1.3.7.
+
 ## What's New in v2.215.2 — the granular server accepts Resolve 21.1's lowercase item types; the 21.1 typed API ships as reference
 
 Both contributed by @legionsound (#204, #205), measured on Studio 21.1.0.14.
