@@ -8,7 +8,7 @@ Each tool groups related operations via an 'action' parameter.
 
 Usage:
     python src/server.py              # Start the MCP server
-    python src/server.py --full       # Start the 368-tool granular server instead
+    python src/server.py --full       # Start the 371-tool granular server instead
 """
 
 VERSION = "2.218.0"
@@ -42,6 +42,7 @@ for p in [current_dir, project_dir]:
     if p not in sys.path:
         sys.path.insert(0, p)
 
+from src.utils.resolve211_blanking import validate_blanking
 from src.utils.resolve211_edits import validate_edit_options, validate_transition_options, transition_result
 
 # Platform-specific Resolve paths
@@ -25045,7 +25046,7 @@ def edit_engine(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
 
 
 _TIMELINE_ACTIONS = [
-    "get_normalize_audio_modes", "get_output_blanking",
+    "set_output_blanking", "get_normalize_audio_modes", "get_output_blanking",
     # Offline authoring — served without a Resolve connection, above the _check() gate.
     "author_offline", "offline_fallback_capabilities",
     "list", "get_current", "set_current", "get_name", "set_name", "get_start_frame",
@@ -25094,6 +25095,7 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
     (resolve_control api_truth "GetSourceStartFrame").
 
     Actions:
+      set_output_blanking(options) -> {success} — native 21.1 pixel coordinates.
       get_normalize_audio_modes() -> {modes} — documented on Resolve 21.1+.
       get_output_blanking() -> {blanking} — documented on Resolve 21.1+. Pixel coordinates; empty on a clip inheriting timeline blanking.
       list() -> {timelines}
@@ -25411,6 +25413,15 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
     tl = proj.GetCurrentTimeline()
     if not tl:
         return _err("No current timeline")
+
+    if action == "set_output_blanking":
+        error = validate_blanking(p.get("options"))
+        if error:
+            return _err(error)
+        missing = _requires_method(tl, "SetOutputBlanking", "21.1")
+        if missing:
+            return missing
+        return {"success": bool(tl.SetOutputBlanking(dict(p["options"])))}
 
     if action == "get_normalize_audio_modes":
         missing = _requires_method(tl, "GetNormalizeAudioModes", "21.1")
@@ -26274,6 +26285,8 @@ def timeline_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
     Identify by track_type, track_index, item_index (item_index is 0-BASED: 0 = first clip; track_index is 1-based).
 
     Actions:
+      set_output_blanking(options, ...) -> {success} — native 21.1; disable timeline inheritance first.
+      set_use_timeline_for_output_blanking(use_timeline, ...) -> {success} — explicit inheritance switch.
       add_transition(options, ...) -> {success, transition?} — native 21.1 transition; reports actual span.
       set_speed(options, ...) -> {success} — native 21.1 speed options; RippleTimeline defaults false.
       set_fades(options, ...) -> {success} — native 21.1 FadeIn/FadeOut integer frames.
@@ -26330,6 +26343,22 @@ def timeline_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
     tl, item, err = _get_item(p)
     if err:
         return err
+
+    if action == "set_output_blanking":
+        error = validate_blanking(p.get("options"))
+        if error:
+            return _err(error)
+        missing = _requires_method(item, "SetOutputBlanking", "21.1")
+        if missing:
+            return missing
+        return {"success": bool(item.SetOutputBlanking(dict(p["options"])))}
+    if action == "set_use_timeline_for_output_blanking":
+        if type(p.get("use_timeline")) is not bool:
+            return _err("use_timeline must be a boolean")
+        missing = _requires_method(item, "SetUseTimelineForOutputBlanking", "21.1")
+        if missing:
+            return missing
+        return {"success": bool(item.SetUseTimelineForOutputBlanking(p["use_timeline"]))}
 
     if action == "add_transition":
         options = p.get("options")
@@ -26552,7 +26581,7 @@ def timeline_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
             return _err(f"Invalid interpolation. Must be one of: {', '.join(valid)}")
         return {"success": bool(item.SetKeyframeInterpolation(p["property"], p["frame"], p["interpolation"]))}
 
-    return _unknown(action, ["add_transition","set_speed","set_fades","get_speed","get_fades","get_output_blanking","get_use_timeline_for_output_blanking","get_name","get_property","set_property","get_duration","get_start","get_end","get_source_start_frame","get_source_end_frame","get_source_start_time","get_source_end_time","get_left_offset","get_right_offset","set_clip_enabled","get_clip_enabled","update_sidecar","get_unique_id","get_media_pool_item","get_stereo_convergence","get_stereo_left_window","get_stereo_right_window","get_linked_items","get_track_type_and_index","get_source_audio_mapping","load_burnin_preset","set_name","get_voice_isolation_state","set_voice_isolation_state","get_retime","set_retime","get_transform","set_transform","get_crop","set_crop","get_composite","set_composite","get_audio","set_audio","get_keyframes","add_keyframe","modify_keyframe","delete_keyframe","set_keyframe_interpolation"])
+    return _unknown(action, ["set_output_blanking","set_use_timeline_for_output_blanking","add_transition","set_speed","set_fades","get_speed","get_fades","get_output_blanking","get_use_timeline_for_output_blanking","get_name","get_property","set_property","get_duration","get_start","get_end","get_source_start_frame","get_source_end_frame","get_source_start_time","get_source_end_time","get_left_offset","get_right_offset","set_clip_enabled","get_clip_enabled","update_sidecar","get_unique_id","get_media_pool_item","get_stereo_convergence","get_stereo_left_window","get_stereo_right_window","get_linked_items","get_track_type_and_index","get_source_audio_mapping","load_burnin_preset","set_name","get_voice_isolation_state","set_voice_isolation_state","get_retime","set_retime","get_transform","set_transform","get_crop","set_crop","get_composite","set_composite","get_audio","set_audio","get_keyframes","add_keyframe","modify_keyframe","delete_keyframe","set_keyframe_interpolation"])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -32674,9 +32703,9 @@ if __name__ == "__main__":
     start_background_update_check(VERSION, project_dir, logger, env=_setup_update_env())
     _install_threaded_tool_dispatch(mcp)
 
-    # Support --full flag to run the 368-tool granular server instead
+    # Support --full flag to run the 371-tool granular server instead
     if "--full" in sys.argv:
-        logger.info("Starting full 368-tool granular server...")
+        logger.info("Starting full 371-tool granular server...")
         sys.argv = [arg for arg in sys.argv if arg != "--full"]
         from src.granular import mcp as granular_mcp
 
