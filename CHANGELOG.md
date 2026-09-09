@@ -2,6 +2,43 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.214.2 — a running Resolve is counted by its executable path, not only by its argument vector
+
+### Fixed
+
+- **`resolve_control runtime_mode` could report `running: false, instances: 0`
+  while Resolve was up and answering scripting calls.** Seen on 2026-09-08
+  against Studio 19.1.3.7 at the stock macOS path, in the same minute
+  `get_version` connected. The scan read only `ps`'s argument-vector column
+  and required the line to *end* in the executable after flag stripping, so
+  it had a single point of failure that the exact trigger did not need to be
+  known to remove: the kernel withholds argv for some processes (`ps` prints
+  `(Resolve)`), a launch argument after the path — a project file — is not a
+  flag and defeated the suffix test, and `ps` was not asked for wide output.
+  The scan now reads two columns keyed by pid: the executable path (`comm`,
+  the full path on macOS, readable whenever the process is) decides whether an
+  instance exists; the argument vector decides its mode. An instance whose
+  argv cannot be read is counted with `headless: null` — never `false`, since
+  a wrong "it has a UI" is what makes an agent wait for a dialog that never
+  opens, and the tool's callers consult it before every project switch for
+  exactly that reason. `ps` is run with `-ww`. The "a shell line that merely
+  names the binary is not an instance" rule is kept and extended to the
+  unquoted `sh -c /opt/resolve/bin/resolve -nogui` shape.
+- **The exact 2026-09-08 condition was not reproduced.** The same install,
+  restarted, matched the old scan. The fix is a removal of the scan's
+  dependence on argv parsing, verified against a fake process table built
+  from the real `ps` rows of that machine (pid 39560 at the stock path, its
+  IOXPC helper beside it), plus the unreadable-argv, positional-argument,
+  wide-output and one-column-failing cases.
+
+### Validation
+
+- Seven new tests in `tests/test_headless_runtime.py` pin those cases; the
+  existing 29 pass unchanged against the new scan (their bare-command-line
+  fake tables are read as both columns of one process). Live on this machine:
+  `running: true, instances: 1, headless: false` at the stock path. Full
+  offline suite, drift guards and the advanced Node suite green.
+
 ## What's New in v2.214.1 — grade calls fail silently off the Color page; apply_trace_plan switches for you
 
 ### Fixed
