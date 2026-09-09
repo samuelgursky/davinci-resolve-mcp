@@ -2,6 +2,52 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.221.0 — native Resolve 21.1 audio level normalization
+
+Contributed by @legionsound (#214), live-validated on Studio 21.1.0.14.
+
+### Added
+
+- **`timeline normalize_audio_level`**, with the granular twin
+  `normalize_timeline_audio_level`, calling native 21.1 `NormalizeAudioLevel`
+  on explicit audio timeline item IDs. All four `NormalizeAudioOptions` fields
+  are supported — `normalizationMode`, `targetLevel` in dBFS, `targetLoudness`
+  in LKFS and `setLevelMode` — with either documented constant names or
+  integral native values. Every ID resolves before anything is written;
+  duplicate or missing IDs and malformed options are refused with nothing
+  changed. A native `false` stays `false`, and native defaults stay native
+  defaults rather than being pre-filled by the wrapper.
+- Registered in **both** write tables with a 21.1 callable-method floor,
+  destructive granular annotations and compound dry-run refusal tests. Tool
+  count 373 → 374.
+- **Source audio files are untouched** — this writes clip levels on the
+  timeline, not the media on disk.
+
+### Validation
+
+- Full suite green: 3,461 passed, 1 skipped. `timeline.normalize_audio_level`
+  probed directly: MEDIUM / destructive / recognised in the classifier, and
+  present in the destructive registry.
+- Live evidence is @legionsound's on Studio 21.1.0.14, and it is measured from
+  the **exported audio** rather than from a readback — independent FFmpeg
+  analysis of WAVs the wrappers actually produced: relative peak normalization
+  to −6 dBFS preserved the source 12 dB difference (−6.0 / −18.0 dBFS),
+  independent peak normalization measured −6.0 / −6.0 dBFS, and an EBU R128
+  target of −23 LKFS measured −22.9 LUFS, within 0.1 LU. Complete decoded PCM
+  was identical between both interfaces in every case. Not reproduced here;
+  this machine is Studio 19.1.3.7, below the 21.1 floor.
+- **Not claimed**: other normalization modes, difficult true-peak limiting,
+  multichannel routing, long programs and other source formats.
+
+### Changed
+
+- Adapted on merge, the same way #213 was. The branch was rebased onto
+  v2.219.0, so its 370 → 371 count bump and every generated agent-rule file
+  collided with the 373 that output blanking had landed. Counts resolved to
+  **374**, confirmed independently by the agent-rule generator, and the
+  generated files regenerated rather than hand-merged. No behaviour changed in
+  the adaptation.
+
 ## What's New in v2.220.0 — native Resolve 21.1 output blanking, timeline and clip
 
 Contributed by @legionsound (#213), live-validated on Studio 21.1.0.14.
