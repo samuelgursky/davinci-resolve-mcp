@@ -2,6 +2,50 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.223.0 — native Resolve 21.1 DCTL validation
+
+Contributed by @legionsound (#215), live-validated on Studio 21.1.0.14.
+
+### Added
+
+- **`dctl validate_native`**, with the granular twin `validate_dctl_native`,
+  calling Resolve 21.1's own `ValidateDCTL`. The existing `dctl validate`
+  remains the static offline checker — this is new surface beside it, not a
+  change to what that action claims. Tool count 375 → 376.
+- **Source layout is passed through unchanged and native diagnostics are
+  returned verbatim.** That is the rule recorded in the ledger back in
+  v2.216.1, when @legionsound narrowed `ValidateDCTL` to being sensitive to
+  source layout — the same function validates multi-line and fails on one line
+  — and it is now implemented rather than merely written down: a wrapper that
+  reflowed the user's source to make validation pass would be hiding the very
+  behaviour the ledger entry exists to warn about.
+- `None` means valid, strings mean invalid, and an **unexpected native result
+  type is an error rather than a false success** — the distinction that keeps a
+  changed API from silently reading as "your shader is fine".
+- Version-gated and explicitly classified **read-only**: verified here as LOW /
+  non-destructive. It does not install, encrypt, apply or render a DCTL, and
+  a successful validation is not a rendered shader test.
+
+### Validation
+
+- Full suite green: 3,470 passed, 1 skipped. Focused contracts cover CRLF and
+  Unicode preservation, so the source that reaches Resolve is byte-for-byte
+  what the caller supplied.
+- Live evidence is @legionsound's on Studio 21.1.0.14, checked against the
+  official Resolve MCP and both community interfaces: the multi-line identity
+  fixture validates, its one-line form reproduces the known missing-return
+  diagnostic, and invalid source returns the missing-entry-function
+  diagnostic — with both wrappers matching native results exactly. Not
+  reproduced here; this machine is Studio 19.1.3.7, below the 21.1 floor.
+- **Not claimed**: encryption, and any statement that validation implies a
+  shader renders correctly.
+
+### Changed
+
+- Adapted on merge, as with #212, #213 and #214: counts resolved to **376**,
+  confirmed by the agent-rule generator, generated files regenerated rather
+  than hand-merged. No behaviour changed in the adaptation.
+
 ## What's New in v2.222.0 — native Resolve 21.1 timecode and waveform alignment
 
 Contributed by @legionsound (#212), live-validated on Studio 21.1.0.14.
