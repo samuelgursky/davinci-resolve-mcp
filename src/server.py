@@ -8,7 +8,7 @@ Each tool groups related operations via an 'action' parameter.
 
 Usage:
     python src/server.py              # Start the MCP server
-    python src/server.py --full       # Start the 353-tool granular server instead
+    python src/server.py --full       # Start the 365-tool granular server instead
 """
 
 VERSION = "2.215.2"
@@ -16571,6 +16571,9 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
     """App-level DaVinci Resolve operations.
 
     Actions:
+      is_studio() -> {is_studio} — documented on Resolve 21.1+.
+      get_keyboard_presets() -> {presets} — documented on Resolve 21.1+.
+      get_current_keyboard_preset() -> {name} — documented on Resolve 21.1+.
       launch(headless?) -> {success, message, running, headless, guidance}
         — Launch DaVinci Resolve if not running. Call this FIRST if any tool returns
           a 'Not connected' error. headless=true starts it with no UI (-nogui):
@@ -16928,6 +16931,21 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
     if r is None:
         return _not_connected_error()
 
+    if action == "is_studio":
+        if not _has_method(r, "IsStudio"):
+            return _err("IsStudio is unavailable on this Resolve build")
+        return {"is_studio": _ser(r.IsStudio())}
+    if action == "get_keyboard_presets":
+        missing = _requires_method(r, "GetKeyboardPresetList", "21.1")
+        if missing:
+            return missing
+        return {"presets": _ser(r.GetKeyboardPresetList())}
+    if action == "get_current_keyboard_preset":
+        missing = _requires_method(r, "GetCurrentKeyboardPreset", "21.1")
+        if missing:
+            return missing
+        return {"name": _ser(r.GetCurrentKeyboardPreset())}
+
     if action == "get_version":
         update_env = _setup_update_env()
         mcp_update = get_cached_update_status(project_dir, VERSION, env=update_env)
@@ -17048,7 +17066,7 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         if err:
             return _err(err)
         return {"success": bool(r.ExportUserPreferencesPreset(clean["name"], clean["path"]))}
-    return _unknown(action, ["launch","runtime_mode","get_version","api_truth","check_version_support","verification_stats","job_status","list_jobs","get_execution_trace","get_execution","list_recent_executions","begin_execution","end_execution","export_execution_report","clear_executions","inspect_operation","list_lifecycle_hooks","mcp_update_status","set_mcp_update_policy","ignore_mcp_update","snooze_mcp_update","clear_mcp_update_preferences","get_page","open_page","get_keyframe_mode","set_keyframe_mode","quit","get_fairlight_presets","set_high_priority","disable_background_tasks_for_current_session","list_user_preferences_presets","save_user_preferences_preset","load_user_preferences_preset","delete_user_preferences_preset","import_user_preferences_preset","export_user_preferences_preset","open_control_panel","control_panel_status","close_control_panel","save_state","restore_state"])
+    return _unknown(action, ["is_studio","get_keyboard_presets","get_current_keyboard_preset","launch","runtime_mode","get_version","api_truth","check_version_support","verification_stats","job_status","list_jobs","get_execution_trace","get_execution","list_recent_executions","begin_execution","end_execution","export_execution_report","clear_executions","inspect_operation","list_lifecycle_hooks","mcp_update_status","set_mcp_update_policy","ignore_mcp_update","snooze_mcp_update","clear_mcp_update_preferences","get_page","open_page","get_keyframe_mode","set_keyframe_mode","quit","get_fairlight_presets","set_high_priority","disable_background_tasks_for_current_session","list_user_preferences_presets","save_user_preferences_preset","load_user_preferences_preset","delete_user_preferences_preset","import_user_preferences_preset","export_user_preferences_preset","open_control_panel","control_panel_status","close_control_panel","save_state","restore_state"])
 
 
 # ─── V2 C4: Per-field corrections with provenance + changelog ────────────────
@@ -19342,6 +19360,7 @@ def project_settings(action: str, params: Optional[Dict[str, Any]] = None) -> Di
     """Project metadata, settings, and color groups.
 
     Actions:
+      get_project_settings_presets() -> {presets} — documented on Resolve 21.1+.
       get_name() -> {name}
       set_name(name) -> {success}
       get_setting(name?) -> {settings}  — omit name for all settings
@@ -19369,6 +19388,12 @@ def project_settings(action: str, params: Optional[Dict[str, Any]] = None) -> Di
     _, proj, err = _check()
     if err:
         return err
+
+    if action == "get_project_settings_presets":
+        missing = _requires_method(proj, "GetProjectSettingsPresetList", "21.1")
+        if missing:
+            return missing
+        return {"presets": _ser(proj.GetProjectSettingsPresetList())}
 
     if action == "get_name":
         return {"name": proj.GetName()}
@@ -19497,7 +19522,7 @@ def project_settings(action: str, params: Optional[Dict[str, Any]] = None) -> Di
             result = _ai_result_payload(proj.ResetIntellisearchAnalysis())
             _rec.success = result["success"]
         return result
-    return _unknown(action, ["get_name","set_name","get_setting","set_setting","get_unique_id","get_presets","set_preset","refresh_luts","get_gallery","export_frame_as_still","project_summary","load_burnin_preset","insert_audio","get_color_groups","add_color_group","delete_color_group","apply_fairlight_preset","generate_speech","reset_intellisearch_analysis"])
+    return _unknown(action, ["get_project_settings_presets","get_name","set_name","get_setting","set_setting","get_unique_id","get_presets","set_preset","refresh_luts","get_gallery","export_frame_as_still","project_summary","load_burnin_preset","insert_audio","get_color_groups","add_color_group","delete_color_group","apply_fairlight_preset","generate_speech","reset_intellisearch_analysis"])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -20311,6 +20336,8 @@ def render(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
     """Render pipeline: jobs, presets, formats, codecs, and rendering.
 
     Actions:
+      get_audio_formats() -> {formats} — documented on Resolve 21.1+.
+      get_audio_codecs(format) -> {codecs} — documented on Resolve 21.1+. Audio file extension, e.g. wav.
       add_job() -> {job_id}
       delete_job(job_id) -> {success}
       delete_all_jobs() -> {success}
@@ -20582,6 +20609,19 @@ def render(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
         return _ok()
     elif action == "is_rendering":
         return {"rendering": bool(proj.IsRenderingInProgress())}
+    elif action == "get_audio_formats":
+        missing = _requires_method(proj, "GetAudioRenderFormats", "21.1")
+        if missing:
+            return missing
+        return {"formats": _ser(proj.GetAudioRenderFormats())}
+    elif action == "get_audio_codecs":
+        if not isinstance(p.get("format"), str) or not p["format"].strip():
+            return _err("get_audio_codecs requires a non-empty format string")
+        missing = _requires_method(proj, "GetAudioRenderCodecs", "21.1")
+        if missing:
+            return missing
+        return {"codecs": _ser(proj.GetAudioRenderCodecs(p["format"]))}
+
     elif action == "get_formats":
         return {"formats": _ser(proj.GetRenderFormats())}
     elif action == "get_codecs":
@@ -20699,7 +20739,7 @@ def render(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
         return _safe_quick_export(proj, p)
     elif action == "export_render_boundary_report":
         return _export_render_boundary_report(proj, p)
-    return _unknown(action, ["add_job","delete_job","delete_all_jobs","list_jobs","get_job_status","verify_output","start","stop","is_rendering","get_formats","get_codecs","get_format_and_codec","set_format_and_codec","get_mode","set_mode","get_resolutions","get_settings","set_settings","list_presets","load_preset","save_preset","delete_preset","quick_export_presets","quick_export",*_RENDER_KERNEL_ACTIONS])
+    return _unknown(action, ["get_audio_formats","get_audio_codecs","add_job","delete_job","delete_all_jobs","list_jobs","get_job_status","verify_output","start","stop","is_rendering","get_formats","get_codecs","get_format_and_codec","set_format_and_codec","get_mode","set_mode","get_resolutions","get_settings","set_settings","list_presets","load_preset","save_preset","delete_preset","quick_export_presets","quick_export",*_RENDER_KERNEL_ACTIONS])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -25003,6 +25043,7 @@ def edit_engine(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
 
 
 _TIMELINE_ACTIONS = [
+    "get_normalize_audio_modes", "get_output_blanking",
     # Offline authoring — served without a Resolve connection, above the _check() gate.
     "author_offline", "offline_fallback_capabilities",
     "list", "get_current", "set_current", "get_name", "set_name", "get_start_frame",
@@ -25051,6 +25092,8 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
     (resolve_control api_truth "GetSourceStartFrame").
 
     Actions:
+      get_normalize_audio_modes() -> {modes} — documented on Resolve 21.1+.
+      get_output_blanking() -> {blanking} — documented on Resolve 21.1+. Pixel coordinates; empty on a clip inheriting timeline blanking.
       list() -> {timelines}
       get_current() -> {name, id, start_frame, end_frame, start_timecode}
       set_current(index|id|name) -> {success}  — id/name are stable across archives; index is 1-based
@@ -25366,6 +25409,17 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
     tl = proj.GetCurrentTimeline()
     if not tl:
         return _err("No current timeline")
+
+    if action == "get_normalize_audio_modes":
+        missing = _requires_method(tl, "GetNormalizeAudioModes", "21.1")
+        if missing:
+            return missing
+        return {"modes": _ser(tl.GetNormalizeAudioModes())}
+    if action == "get_output_blanking":
+        missing = _requires_method(tl, "GetOutputBlanking", "21.1")
+        if missing:
+            return missing
+        return {"blanking": _ser(tl.GetOutputBlanking())}
 
     if action == "clip_where":
         return _timeline_clip_where(tl, p)
@@ -26218,6 +26272,10 @@ def timeline_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
     Identify by track_type, track_index, item_index (item_index is 0-BASED: 0 = first clip; track_index is 1-based).
 
     Actions:
+      get_speed(...) -> {speed} — documented on Resolve 21.1+.
+      get_fades(...) -> {fades} — documented on Resolve 21.1+. Native frame durations.
+      get_output_blanking(...) -> {blanking} — documented on Resolve 21.1+. Pixel coordinates; empty on a clip inheriting timeline blanking.
+      get_use_timeline_for_output_blanking(...) -> {use_timeline} — documented on Resolve 21.1+.
       get_name(track_type?, track_index?, item_index?) -> {name}
       get_property(key?, ...) -> {properties}
       set_property(key, value, ...) -> {success}
@@ -26267,6 +26325,27 @@ def timeline_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
     tl, item, err = _get_item(p)
     if err:
         return err
+
+    if action == "get_speed":
+        missing = _requires_method(item, "GetSpeed", "21.1")
+        if missing:
+            return missing
+        return {"speed": _ser(item.GetSpeed())}
+    if action == "get_fades":
+        missing = _requires_method(item, "GetFades", "21.1")
+        if missing:
+            return missing
+        return {"fades": _ser(item.GetFades())}
+    if action == "get_output_blanking":
+        missing = _requires_method(item, "GetOutputBlanking", "21.1")
+        if missing:
+            return missing
+        return {"blanking": _ser(item.GetOutputBlanking())}
+    if action == "get_use_timeline_for_output_blanking":
+        missing = _requires_method(item, "GetUseTimelineForOutputBlanking", "21.1")
+        if missing:
+            return missing
+        return {"use_timeline": _ser(item.GetUseTimelineForOutputBlanking())}
 
     if action == "get_name":
         return {"name": item.GetName()}
@@ -26443,7 +26522,7 @@ def timeline_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
             return _err(f"Invalid interpolation. Must be one of: {', '.join(valid)}")
         return {"success": bool(item.SetKeyframeInterpolation(p["property"], p["frame"], p["interpolation"]))}
 
-    return _unknown(action, ["get_name","get_property","set_property","get_duration","get_start","get_end","get_source_start_frame","get_source_end_frame","get_source_start_time","get_source_end_time","get_left_offset","get_right_offset","set_clip_enabled","get_clip_enabled","update_sidecar","get_unique_id","get_media_pool_item","get_stereo_convergence","get_stereo_left_window","get_stereo_right_window","get_linked_items","get_track_type_and_index","get_source_audio_mapping","load_burnin_preset","set_name","get_voice_isolation_state","set_voice_isolation_state","get_retime","set_retime","get_transform","set_transform","get_crop","set_crop","get_composite","set_composite","get_audio","set_audio","get_keyframes","add_keyframe","modify_keyframe","delete_keyframe","set_keyframe_interpolation"])
+    return _unknown(action, ["get_speed","get_fades","get_output_blanking","get_use_timeline_for_output_blanking","get_name","get_property","set_property","get_duration","get_start","get_end","get_source_start_frame","get_source_end_frame","get_source_start_time","get_source_end_time","get_left_offset","get_right_offset","set_clip_enabled","get_clip_enabled","update_sidecar","get_unique_id","get_media_pool_item","get_stereo_convergence","get_stereo_left_window","get_stereo_right_window","get_linked_items","get_track_type_and_index","get_source_audio_mapping","load_burnin_preset","set_name","get_voice_isolation_state","set_voice_isolation_state","get_retime","set_retime","get_transform","set_transform","get_crop","set_crop","get_composite","set_composite","get_audio","set_audio","get_keyframes","add_keyframe","modify_keyframe","delete_keyframe","set_keyframe_interpolation"])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -32565,9 +32644,9 @@ if __name__ == "__main__":
     start_background_update_check(VERSION, project_dir, logger, env=_setup_update_env())
     _install_threaded_tool_dispatch(mcp)
 
-    # Support --full flag to run the 353-tool granular server instead
+    # Support --full flag to run the 365-tool granular server instead
     if "--full" in sys.argv:
-        logger.info("Starting full 353-tool granular server...")
+        logger.info("Starting full 365-tool granular server...")
         sys.argv = [arg for arg in sys.argv if arg != "--full"]
         from src.granular import mcp as granular_mcp
 
