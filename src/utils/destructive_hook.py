@@ -151,6 +151,7 @@ DESTRUCTIVE_ACTIONS_BY_TOOL: Dict[str, FrozenSet[str]] = {
         # classifier did not recognise them, so safe mode, the dry-run refusal,
         # the audit log and the operation log all skipped a call that rewrites a
         # clip's speed — and, with RippleTimeline true, moves every clip after it.
+        "add_transition",
         "set_speed",
         "set_fades",
     }),
