@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 353-tool granular server instead
 """
 
-VERSION = "2.214.4"
+VERSION = "2.215.0"
 
 import base64
 import os
@@ -238,7 +238,9 @@ mcp = FastMCP(
         "reachable via the in-app bridge (Workspace > Scripts > resolve_bridge — it is "
         "used automatically when external scripting is unavailable; "
         "DAVINCI_RESOLVE_BRIDGE=1 only forces it), so a connection error does NOT mean "
-        "the free edition is unsupported."
+        "the free edition is unsupported — on Resolve 21.0.x. Resolve 21.1 moved Python "
+        "scripting to Studio and free 21.1 no longer lists Python scripts in that menu "
+        "(issue #203), so on 21.1+ a free-edition connection error may be final."
     ),
 )
 
@@ -1086,7 +1088,10 @@ def _not_connected_error():
                         "On the free edition: install the in-app bridge and run "
                         "Workspace > Scripts > resolve_bridge — once it is running it is used "
                         "automatically, no environment variable needed "
-                        "(DAVINCI_RESOLVE_BRIDGE=1 only forces it and disables this fallback).",
+                        "(DAVINCI_RESOLVE_BRIDGE=1 only forces it and disables this fallback). "
+                        "On free 21.1+ Blackmagic moved Python scripting to Studio and the "
+                        "Scripts menu no longer lists Python scripts (issue #203), so the bridge "
+                        "may have no launch path there.",
             # Which Resolve is refusing matters to the reader: a headless render
             # worker and the editor the user is looking at warrant different
             # responses, and the in-app bridge is not an option for the former.

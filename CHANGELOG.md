@@ -2,6 +2,55 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.215.0 — mutating operations write a structured operation log; the free-edition bridge is version-qualified for Resolve 21.1
+
+### Added
+
+- **Recognised mutating operations now write compact JSONL records** to
+  `logs/operation-log.jsonl`: operation id, tool, action, `tool.action`, risk
+  level and whether the classifier established it, blast radius, dry-run
+  flag, timestamp, final status, duration, and a short summary. When a result
+  already reports semantic changes through the `_operation` envelope those
+  changes are copied, never guessed. A mutating handler that raises before
+  returning still writes a `failed` record with the exception type and
+  message; a destructive attempt refused before mutation is logged as
+  `blocked`; read-only operations are skipped. Contributed in #202 by
+  @Rohitkanithi.
+- **Setup defaults for it:** `destructive.operation_log` (default on) and
+  `destructive.operation_log_path`; `RESOLVE_MCP_OPERATION_LOG_FILE` overrides
+  the path for deployments routing logs outside the repository. The offline
+  suite redirects the default path to a temporary file, the same way it
+  already redirects the security audit log.
+- **Why a third log.** Execution traces explain how a multi-step run
+  unfolded; the security audit records destructive gate decisions. This is
+  the plain chronological trail of what tried to change the project and how
+  it ended, with no parameters or file paths recorded.
+
+### Changed
+
+- **The free-edition bridge's claim is now version-qualified.** The README,
+  SKILL and the bridge module said the Workspace ▸ Scripts menu "is not gated
+  … on any edition". That was measured on free 21.0.3.7 only. Resolve 21.1
+  (2026-09-08) moved Python scripting to Studio, and the first field report
+  (#203, Fedora 44, free 21.1) shows the Scripts menu no longer listing any
+  `.py` file while a Lua script in the same folder lists normally. The docs
+  now say so, and the connection-failure remediation that sent free-edition
+  users to start the bridge now names the 21.1 change instead of promising a
+  path that may not exist. Whether the Console still runs Python on free 21.1
+  is unconfirmed and is the open question on #203.
+
+### Notes on the adaptation
+
+- The PR's bundled version bump and CHANGELOG entry were dropped, as with
+  the contributor's earlier PRs; everything else landed as authored, and the
+  offline-guard redirect it adds is what keeps the suite from writing a real
+  operation log.
+
+### Validation
+
+- The PR's seven tests plus the full offline suite, drift guards and the
+  advanced Node suite. No Resolve behavior changed; no live run required.
+
 ## What's New in v2.214.4 — the offline test suite no longer writes into the operator's server.log
 
 ### Fixed

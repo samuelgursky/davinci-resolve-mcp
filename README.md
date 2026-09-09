@@ -2,7 +2,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-[![Version](https://img.shields.io/badge/version-2.214.4-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
+[![Version](https://img.shields.io/badge/version-2.215.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![npm](https://img.shields.io/npm/v/davinci-resolve-mcp.svg?label=npm&color=CB3837)](https://www.npmjs.com/package/davinci-resolve-mcp)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](docs/reference/api-coverage.md)
 [![Tools](https://img.shields.io/badge/MCP%20Tools-36%20(353%20full)-blue.svg)](#server-modes)
@@ -42,10 +42,14 @@ The installer and server check the latest GitHub release for MCP updates. Checks
 
 Blackmagic gates *external* scripting to Studio: on the free edition
 `scriptapp("Resolve")` refuses a foreign process, whatever the preference says.
-The **Workspace ▸ Scripts** menu is not gated — a script launched from it is
-handed the live `resolve` object on any edition — so the server can reach the
-free edition through a small script that runs *inside* Resolve and re-exports it
-over an authenticated loopback listener.
+Through Resolve 21.0.x the **Workspace ▸ Scripts** menu was not gated — a script
+launched from it is handed the live `resolve` object (measured on free 21.0.3.7) —
+so the server can reach the free edition through a small script that runs *inside*
+Resolve and re-exports it over an authenticated loopback listener. **Resolve 21.1
+moved Python scripting to Studio.** On free 21.1 the Scripts menu no longer lists
+`.py` files at all (reported on Fedora 44 in #203; a Lua script in the same folder
+lists normally). Whether the Console still runs Python there is unconfirmed, so
+treat the bridge as a 21.0.x path until that is measured.
 
 ```bash
 python scripts/install_resolve_bridge.py

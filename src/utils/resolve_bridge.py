@@ -1,11 +1,14 @@
 """Authenticated loopback bridge that runs *inside* DaVinci Resolve.
 
 External scripting is a Studio feature: `fusionscript` refuses a connection from
-a foreign process on the free edition. The in-app path is not gated — Blackmagic's
-own README documents the Workspace ▸ Scripts menu with no edition qualifier, and a
-script launched from it is handed the same `resolve` object Studio exposes. This
-module is that script: it re-exports a *named, allowlisted* operation surface over
-127.0.0.1 so the MCP server can drive Resolve on any edition.
+a foreign process on the free edition. Through 21.0.x the in-app path was not gated —
+Blackmagic's README documented the Workspace ▸ Scripts menu with no edition
+qualifier, and a script launched from it is handed the same `resolve` object Studio
+exposes (measured on free 21.0.3.7). This module is that script: it re-exports a
+*named, allowlisted* operation surface over 127.0.0.1 so the MCP server can drive
+Resolve on any edition that still runs Python scripts in-app. Resolve 21.1 moved
+Python scripting to Studio; on free 21.1 the Scripts menu no longer lists `.py`
+files (#203, Fedora 44), and whether the Console still runs Python is unconfirmed.
 
 This is the documented in-app path, not a circumvention of the licence check —
 but Blackmagic could close it, so treat this tier as supported-until-it-isn't.

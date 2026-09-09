@@ -22,8 +22,10 @@ take up to 60 seconds.
 **Free edition.** Both of those preferences are Studio features; on the free
 edition `scriptapp("Resolve")` refuses a foreign process regardless. A third
 transport reaches it — a script run from **Workspace ▸ Scripts** is handed the
-live `resolve` object on any edition and re-exports it over an authenticated
-loopback listener. Install with `python scripts/install_resolve_bridge.py` and
+live `resolve` object (measured on free 21.0.3.7) and re-exports it over an
+authenticated loopback listener. Resolve 21.1 moved Python scripting to Studio:
+on free 21.1 the Scripts menu no longer lists `.py` files (#203), so on that
+build expect the bridge to have no launch path until the Console is checked. Install with `python scripts/install_resolve_bridge.py` and
 start it from that menu; once running it is used automatically when external
 scripting is unavailable, with no environment variable needed.
 `DAVINCI_RESOLVE_BRIDGE=1` *forces* it — the bridge becomes the only transport
