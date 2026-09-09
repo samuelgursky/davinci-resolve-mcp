@@ -2,6 +2,65 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.218.0 — native Resolve 21.1 transition creation
+
+Contributed by @legionsound (#209), live-validated on Studio 21.1.0.14.
+
+### Added
+
+- **`timeline_item add_transition`**, with the granular twin
+  `add_timeline_item_transition`, calling 21.1's native `AddTransition`. The
+  `options` dictionary requires `type` (e.g. `"Cross Dissolve"`), `category`
+  (`simple` | `fusion` | `ofx` | `audio`), `position` (`start` | `end`) and
+  `alignment` (`left` | `center` | `right`); `duration` in frames is optional
+  and, when omitted or null, is forwarded as given rather than replaced with an
+  invented default. Unknown keys, blank types, unrecognised enum values and
+  non-positive or fractional durations are refused before any write. A native
+  `None` or `False` stays `success: false`; a build without the method returns
+  the 21.1 floor error, confirmed here on Studio 19.1.3.7.
+- The result reports the **transition Resolve actually created** — its id, name,
+  start, end and duration read back off the returned object — rather than
+  echoing the requested duration. Inserting a transition can change the track's
+  item indexes, and the tool documentation says so.
+
+### Changed
+
+- `add_transition` is registered in **both** write tables: the
+  `destructive_hook` action registry and the MEDIUM-risk set in
+  `execution_lifecycle`. Without both, safe mode, the dry-run refusal, the audit
+  log and the operation log would all treat a timeline mutation as a read. Tool
+  count 367 → 368 across the docs and the generated agent-rule files.
+- The existing offline `.drp` transition workflow is unchanged and still the
+  render-proven route on builds below 21.1; the native call is an addition, not
+  a replacement.
+
+### Documentation
+
+- `docs/reference/resolve211-native-transitions.md` records the fixture and its
+  limits, and the `api_truth` entry for `TimelineItem.AddTransition` is upgraded
+  from "signature only, never invoked" to a contributor measurement — while
+  keeping the standing 21.1 gap it does not close: there is still no accessor
+  for an existing transition's type, alignment or duration beyond its name and
+  frame range, and no clone verb.
+
+### Validation
+
+- Full suite green: 3,436 passed, 1 skipped. Static checks, drift guards and
+  the agent-rule generator all clean.
+- Write registration probed directly rather than inferred:
+  `classify_operation_risk("timeline_item", "add_transition")` returns MEDIUM /
+  destructive / recognised, and `destructive_hook.is_destructive` agrees.
+- No live Resolve run on this machine, which is Studio 19.1.3.7 — below the 21.1
+  floor, where every one of these calls correctly refuses. The rendered
+  evidence is @legionsound's, measured on Studio 21.1.0.14: a 24-frame centered
+  Cross Dissolve with source handles landed at frames 59–83 around a cut at 71
+  with adjacent clip spans unchanged, both server modes rendered byte-identical
+  142-frame ProRes movies with a progressive red-to-blue blend, and the
+  zero-handle case failed cleanly with no transition written. That covers the
+  tested Cross Dissolve fixture, not every effect the API accepts — other
+  alignments, automatic duration, audio and Fusion/OFX transitions, and repeated
+  insertion remain unverified.
+
 ## What's New in v2.217.0 — native Resolve 21.1 speed and fade setters, registered as the mutations they are
 
 Contributed by @legionsound (#208), live-validated on Studio 21.1.0.14.
