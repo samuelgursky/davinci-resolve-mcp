@@ -2,6 +2,56 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.220.0 — native Resolve 21.1 output blanking, timeline and clip
+
+Contributed by @legionsound (#213), live-validated on Studio 21.1.0.14.
+
+### Added
+
+- **`timeline set_output_blanking`** and **`timeline_item set_output_blanking`**,
+  with granular twins `set_timeline_output_blanking` and
+  `set_timeline_item_output_blanking`, calling native 21.1 `SetOutputBlanking`.
+  `Top`/`Bottom`/`Left`/`Right` are **native pixel coordinates, not independent
+  margin widths** — the wrapper says so rather than letting the names imply
+  otherwise. Whole-valued native floats round-trip without conversion,
+  malformed values and unknown keys are refused, and no undocumented geometry
+  limits are invented.
+- **`timeline_item set_use_timeline_for_output_blanking`**, with the granular
+  twin `set_timeline_item_use_timeline_for_output_blanking`, as an explicit
+  inheritance switch.
+- **A clip override does not silently disable timeline inheritance.** Measured:
+  a clip write while inheritance was on returned false without changing
+  inheritance, and succeeded only after an explicit disable. The wrapper
+  preserves that native false instead of quietly flipping the switch on the
+  caller's behalf — a clip that stops inheriting is a change nobody asked for.
+- All three actions carry method floors, entries in **both** write-risk tables,
+  destructive granular annotations and dry-run refusal tests. Tool count 370 →
+  373.
+
+### Validation
+
+- Full suite green: 3,457 passed, 1 skipped. All six mutating actions added
+  across #209, #211 and #213 probed directly against the classifier and the
+  destructive registry — every one MEDIUM / destructive / recognised in both.
+- Live evidence is @legionsound's on Studio 21.1.0.14: both interfaces exported
+  synthetic red-clip PNGs with exact lit-pixel bounds — full `0/0/640/360`,
+  timeline `64/36/576/324`, clip `128/72/512/288`, restored inheritance
+  `64/36/576/324` — and a native partial write of `Top: 80.0` updated one
+  coordinate while preserving the others on readback. Recorded as sampled-frame
+  and readback results, **not** whole-movie or out-of-range behaviour claims.
+  Not reproduced here; this machine is Studio 19.1.3.7, below the 21.1 floor.
+
+### Changed
+
+- Adapted on merge. The branch was cut before #211, so its tool-count bump
+  (368 → 371) and every generated agent-rule file conflicted with the 370 that
+  multicam had landed. Counts were resolved to **373** — confirmed
+  independently by the agent-rule generator rather than by arithmetic alone —
+  and the generated files were regenerated instead of hand-merged, which is
+  the only resolution that cannot silently disagree with its source. Both
+  documentation pointers were kept. No behaviour was changed in the
+  adaptation.
+
 ## What's New in v2.219.0 — native Resolve 21.1 multicam creation and flattening
 
 Contributed by @legionsound (#211), live-validated on Studio 21.1.0.14.
