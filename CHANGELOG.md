@@ -2,6 +2,39 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.218.2 — the AddTransition null-duration boundary, measured
+
+Measured by @legionsound on Studio 21.1.0.14 (#209), recorded here; no behavior
+changed.
+
+### Documentation
+
+- **An explicit `"duration": null` is not a special case.** v2.218.0 shipped
+  `add_transition` forwarding an explicit null verbatim rather than dropping
+  the key, on the principle that inventing a default would misreport what the
+  server asked Resolve for — but only the 24-frame case had been measured, so
+  whether Resolve read a null as "automatic" or refused it was an open
+  question raised on #209. It is now answered: on fresh timelines with the same
+  handled red/blue fixture, **omitting the key and passing `duration: null`
+  behaved identically**, each creating a transition of 8 frames spanning 67–75
+  around a cut at 71.
+- So the shipped behavior is correct as written, and the ledger now says why a
+  future wrapper must **not** strip an explicit null to route around a
+  refusal — there is no refusal to route around. `resolve_control api_truth
+  "AddTransition"` carries this, alongside the standing 21.1 gap it does not
+  close: there is still no accessor for an existing transition's type,
+  alignment or duration beyond its name and frame range, and no clone verb.
+- The 8 frames is recorded as **what that build chose for that fixture, not a
+  documented default**, and these two cases were creation and readback only —
+  they were not rendered, unlike the 24-frame fixture behind v2.218.0.
+
+### Validation
+
+- Ledger and generated `docs/reference/api-limitations.md` regenerated; full
+  suite green. No code path changed, so no live Resolve run was required here —
+  and this machine is Studio 19.1.3.7, below the 21.1 floor, where the method
+  refuses by design. The measurement is @legionsound's on 21.1.0.14.
+
 ## What's New in v2.218.1 — Windows 11 process detection survives the removal of WMIC
 
 Reported by @Nikibakht (#210), verified on Windows 11 Pro build 26200.

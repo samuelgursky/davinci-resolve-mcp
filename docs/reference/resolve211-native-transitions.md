@@ -45,8 +45,17 @@ The included scratch test exercises both community interfaces and creates render
 jobs for independent movie inspection. Unit tests cover actual returned spans,
 missing native methods, None/False failures, malformed options, optional duration,
 write classification, and dry-run refusal. Audio transitions, Fusion/OFX effects,
-other alignments, automatic duration and repeated insertion are not live-validated
-by this contribution. Support for their documented options is pass-through.
+other alignments and repeated insertion are not live-validated by this
+contribution. Support for their documented options is pass-through.
+
+Automatic duration was measured afterwards, by @legionsound on Studio 21.1.0.14
+(2026-09-09), on fresh timelines with the same handled red/blue fixture: omitting
+the `duration` key and passing `duration: null` behaved identically, each creating
+a transition of 8 frames spanning 67-75 around a cut at 71. An explicit null is
+therefore not a special case, and a wrapper must not strip it to route around a
+refusal — there is no refusal. The 8 frames is what that build chose for that
+fixture, not a documented default, and these two cases were creation and readback
+only; they were not rendered.
 
 `python tests/live_resolve211_transitions.py OUTPUT_DIR` requires a disposable
 project named `Codex Native Transition Validation 20260909`, set to 640x360/24 fps,
