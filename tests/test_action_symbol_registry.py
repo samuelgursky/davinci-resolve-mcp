@@ -15,6 +15,7 @@ Each is a silent failure, so each gets a guard.
 """
 from __future__ import annotations
 
+import pathlib
 import unittest
 from unittest import mock
 
@@ -53,6 +54,27 @@ class RegistryIntegrity(unittest.TestCase):
                     f"{entry['symbol']} destroys unrecoverable work but no action maps "
                     "to it, so the refusal can never fire.",
                 )
+
+    def test_work_destroying_entries_have_a_live_probe(self):
+        """A fact strong enough to refuse a call must be re-measurable.
+
+        `destroys_prior_work` turns a verified fact into a hard refusal. If the
+        behaviour it describes ever changes and nothing re-measures it, the
+        refusal becomes a superstition that blocks legitimate work. So every such
+        entry must be named by some live probe.
+        """
+        probes = list(pathlib.Path("src/utils").glob("*_live_probe.py"))
+        self.assertTrue(probes, "no live probe modules found")
+        corpus = "\n".join(f.read_text(encoding="utf-8") for f in probes)
+        for entry in API_TRUTH:
+            if not entry.get("destroys_prior_work"):
+                continue
+            method = entry["symbol"].split(".")[-1]
+            self.assertIn(
+                method, corpus,
+                f"{entry['symbol']} carries destroys_prior_work (it refuses calls) but no "
+                "live probe re-measures it. Add one, or drop the flag.",
+            )
 
     def test_unmapped_action_returns_nothing(self):
         # Never guess. An unmapped action gets no fact rather than a nearby one.
