@@ -24,7 +24,7 @@ When you add or change a ``submit``-tagged entry, regenerate the report
 (``venv/bin/python scripts/gen_api_limitations.py``) or the
 ``tests.test_api_limitations_doc`` drift guard fails.
 """
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 VERIFIED_ON = "DaVinci Resolve Studio 21.0.2"
 
@@ -3382,3 +3382,64 @@ def submittable_limitations() -> Dict[str, List[Dict[str, Any]]]:
         if kind in groups:
             groups[kind].append(e)
     return groups
+
+
+# ── Action → Resolve symbol registry ─────────────────────────────────────────
+#
+# Which Resolve symbols a compound (tool, action) actually calls. Used to push
+# the relevant fact to the caller at the moment of the call instead of waiting
+# for someone to think to query this file.
+#
+# Every mapping is declared explicitly and matched by exact symbol equality.
+# Substring or fuzzy matching is forbidden here for the reason given in
+# `server._setting_limitation`: attaching an unrelated explanation to a call
+# reads as a diagnosis, and a wrong diagnosis is worse than none. A guard
+# (`tests/test_action_symbol_registry.py`) asserts every symbol named below is a
+# real API_TRUTH entry and every action is a real handler.
+ACTION_SYMBOLS: Dict[Tuple[str, str], List[str]] = {
+    ("timeline_item_color", "copy_grades"): ["TimelineItem.CopyGrades"],
+    ("timeline_item_color", "safe_copy_grade"): ["TimelineItem.CopyGrades"],
+    ("timeline_item_color", "bulk_match_to_hero"): ["TimelineItem.CopyGrades"],
+    ("timeline", "apply_look_to_items"): ["TimelineItem.CopyGrades"],
+    ("timeline_item_color", "export_lut"): ["TimelineItem.ExportLUT"],
+    ("timeline_item_color", "safe_export_lut"): ["TimelineItem.ExportLUT"],
+    ("timeline", "duplicate"): ["Timeline.DuplicateTimeline"],
+}
+
+
+def _entry_for_symbol(symbol: str) -> Optional[Dict[str, Any]]:
+    """The single entry whose `symbol` is exactly `symbol`."""
+    for entry in API_TRUTH:
+        if entry.get("symbol") == symbol:
+            return entry
+    return None
+
+
+def traps_for(tool: str, action: str) -> List[Dict[str, Any]]:
+    """Verified facts for the symbols this (tool, action) actually calls.
+
+    Exact matches only — an action with no declared mapping returns nothing
+    rather than guessing.
+    """
+    out: List[Dict[str, Any]] = []
+    for symbol in ACTION_SYMBOLS.get((tool, action), ()):
+        entry = _entry_for_symbol(symbol)
+        if entry is not None:
+            out.append(entry)
+    return out
+
+
+def trap_notice(entry: Dict[str, Any]) -> Dict[str, str]:
+    """The compact push form: what it does, what to do instead.
+
+    Deliberately three fields. A full entry carries signature, tags, submit
+    status and mitigation lists that cost tokens on every single call and tell
+    the caller nothing they can act on at the callsite. Response weight is a
+    real cost on long grading sessions, so the push stays small and the full
+    entry stays one `resolve_control(action="api_truth")` away.
+    """
+    return {
+        "symbol": entry.get("symbol", ""),
+        "reality": entry.get("reality", ""),
+        "recommended": entry.get("recommended", ""),
+    }
