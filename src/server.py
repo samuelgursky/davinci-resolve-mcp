@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 353-tool granular server instead
 """
 
-VERSION = "2.215.0"
+VERSION = "2.215.1"
 
 import base64
 import os
@@ -14963,6 +14963,18 @@ def _playhead_frame_render(proj, tl, p: Dict[str, Any]):
         original_fc = proj.GetCurrentRenderFormatAndCodec()
     except Exception:
         pass
+    # Render MODE is project state too, and it decides whether the capture can
+    # work at all. In "Individual clips" mode (0) Resolve ignores CustomName,
+    # renders the WHOLE clip under the frame's own file naming, and the
+    # single-frame file this helper waits for never appears — measured
+    # 2026-09-09 on a project whose delivery preset was per-clip: every capture
+    # reported success, wrote no file, and took 30+ s rendering the clip.
+    # Force single clip (1) for the capture and put the mode back afterwards.
+    original_mode = None
+    try:
+        original_mode = proj.GetCurrentRenderMode()
+    except Exception:
+        original_mode = None
     # Rendering pulls Resolve onto the Deliver page and moves the playhead;
     # measured leaving the user on Deliver at a different frame. Both are ours
     # to put back.
@@ -15014,6 +15026,16 @@ def _playhead_frame_render(proj, tl, p: Dict[str, Any]):
 
     job = None
     try:
+        if original_mode is not None and original_mode != 1:
+            if not proj.SetCurrentRenderMode(1):
+                return _err(
+                    "Resolve refused to switch the render mode to single clip; in "
+                    "individual-clips mode a single-frame capture renders the whole clip "
+                    "under Resolve's own naming and the captured file never appears",
+                    code="RENDER_MODE_REFUSED", category="api_error",
+                    remediation="render(action='set_mode', params={'mode': 1}) then retry.",
+                    state={"render_mode": original_mode},
+                )
         codecs = proj.GetRenderCodecs("JPEG" if fmt == "jpg" else fmt.upper()) or {}
         codec = list(codecs.values())[0] if codecs else fmt
         if not proj.SetCurrentRenderFormatAndCodec(fmt, codec):
@@ -15040,6 +15062,13 @@ def _playhead_frame_render(proj, tl, p: Dict[str, Any]):
         job = proj.AddRenderJob()
         if not job:
             return _err("AddRenderJob returned nothing", code="RENDER_JOB_FAILED", category="api_error")
+        # The folder is shared (every sandbox path redirects to one
+        # ~/Documents/resolve-stills) and the cleanup below removes it when it
+        # empties, so another capture — or anything else — can take it away
+        # between the makedirs above and here. Measured 2026-09-09: frame 81 of a
+        # 214-frame QC batch died in os.listdir on the missing folder. Recreate,
+        # don't assume.
+        os.makedirs(folder, exist_ok=True)
         before = set(os.listdir(folder))
         # Positional on purpose: the free-edition bridge proxies method calls
         # positionally, and a keyword argument dies inside _BoundMethod with
@@ -15087,6 +15116,19 @@ def _playhead_frame_render(proj, tl, p: Dict[str, Any]):
                 proj.DeleteRenderJob(job)
             except Exception:
                 pass
+        if original_mode is not None and original_mode != 1:
+            # Same teardown contract as the format/codec restore below.
+            try:
+                restored_mode = bool(proj.SetCurrentRenderMode(original_mode))
+            except Exception as exc:
+                restored_mode, mode_exc = False, exc
+            else:
+                mode_exc = None
+            if not restored_mode:
+                logger.warning(
+                    "frame capture could not restore render mode %r: %s",
+                    original_mode, mode_exc or "SetCurrentRenderMode returned False",
+                )
         if original_fc:
             # A failed restore leaves the Deliver page on the capture's format
             # and codec, which the user's next render would silently inherit.

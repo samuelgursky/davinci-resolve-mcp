@@ -2,6 +2,32 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.215.1 — single-frame capture survives per-clip render mode and a vanished stills folder
+
+### Fixed
+
+- **`timeline_frame capture` forces Single-clip render mode and restores it.**
+  Measured 2026-09-09 on a project whose delivery preset was "Individual
+  clips": every single-frame capture reported success, wrote no file, and took
+  30+ seconds, because in that mode Resolve ignores `CustomName`, renders the
+  whole clip under its own naming, and the frame this helper waits for never
+  appears. The helper now reads `GetCurrentRenderMode()`, switches to single
+  clip (1) for the render, puts the mode back afterwards, and refuses with
+  `RENDER_MODE_REFUSED` before adding a job if the switch fails.
+- **The shared stills folder is recreated before every directory listing.**
+  Every sandbox path redirects to one `~/Documents/resolve-stills`, and the
+  helper's own cleanup removes it once it empties, so a concurrent capture (or
+  anything else) can take it away between the makedirs at the top and the
+  `os.listdir` that follows. Frame 81 of a 214-frame QC batch died on exactly
+  that. Recreate, do not assume.
+
+### Measured (not code)
+
+- A per-clip `.drx` carries the clip node graph losslessly (applying a clip's
+  own emitted grade back onto it re-renders bit-identically, PSNR 99 on 5/5),
+  but NOT colour-group pre/post grades, NOT Colour-page input sizing, and with
+  `grade_mode` 0 NOT keyframes. A traced conform whose source used groups needs
+  the group grades carried separately.
 ## What's New in v2.215.0 — mutating operations write a structured operation log; the free-edition bridge is version-qualified for Resolve 21.1
 
 ### Added

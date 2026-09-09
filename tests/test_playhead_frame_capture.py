@@ -240,7 +240,7 @@ class CaptureRenderTest(unittest.TestCase):
     """quality='frame' — the default, and the only frame-accurate route."""
 
     def _capture(self, params, rendering=False, job="job-1", status="Complete",
-                 write=True, ffmpeg="/usr/bin/ffmpeg", marks=None):
+                 write=True, ffmpeg="/usr/bin/ffmpeg", marks=None, mode=1, mode_switch=True):
         """Returns (result, project mock, list of SetRenderSettings payloads)."""
         resolve = _FakeResolve(page="color")
         tl = _fake_timeline(resolve)
@@ -249,6 +249,8 @@ class CaptureRenderTest(unittest.TestCase):
         tl.GetMarkInOut.return_value = marks if marks is not None else {}
         proj = mock.Mock()
         proj.IsRenderingInProgress.side_effect = [rendering, False]
+        proj.GetCurrentRenderMode.return_value = mode
+        proj.SetCurrentRenderMode.return_value = mode_switch
         proj.GetCurrentRenderFormatAndCodec.return_value = {"format": "mov", "codec": "H.264"}
         proj.GetRenderCodecs.return_value = {"JPEG": "YUV420_8"}
         proj.SetCurrentRenderFormatAndCodec.return_value = True
@@ -312,6 +314,30 @@ class CaptureRenderTest(unittest.TestCase):
             proj.SetCurrentRenderFormatAndCodec.call_args_list[-1].args,
             ("mov", "H.264"),
         )
+
+    def test_individual_clips_mode_is_forced_to_single_clip_and_restored(self):
+        # Measured 2026-09-09: in "Individual clips" mode (0) the single-frame
+        # capture rendered the WHOLE clip under Resolve's own naming and the
+        # expected file never appeared ("reported success, wrote no file").
+        out, proj, _ = self._capture({"frame": 86424}, mode=0)
+        self.assertIsInstance(out, Image)
+        modes = [c.args[0] for c in proj.SetCurrentRenderMode.call_args_list]
+        self.assertEqual(modes, [1, 0])
+        # the switch happens before the job is added, the restore after
+        self.assertLess(
+            proj.method_calls.index(mock.call.SetCurrentRenderMode(1)),
+            proj.method_calls.index(mock.call.AddRenderJob()),
+        )
+
+    def test_single_clip_mode_is_left_alone(self):
+        out, proj, _ = self._capture({"frame": 86424}, mode=1)
+        self.assertIsInstance(out, Image)
+        proj.SetCurrentRenderMode.assert_not_called()
+
+    def test_refused_mode_switch_is_an_error_before_any_job(self):
+        out, proj, _ = self._capture({"frame": 86424}, mode=0, mode_switch=False)
+        self.assertEqual(out["error"]["code"], "RENDER_MODE_REFUSED")
+        proj.AddRenderJob.assert_not_called()
 
     def test_mark_range_falls_back_to_the_whole_timeline(self):
         # No marks were set, so there is nothing to restore. It must still not be
