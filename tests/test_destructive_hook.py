@@ -435,8 +435,8 @@ class SecurityPolicy(unittest.TestCase):
 
     # ── dry_run on actions without a native dry-run path ──────────────────
     #
-    # Before v2.211.0 `timeline_markers.add` with dry_run=true added a real
-    # marker: the handler never read the flag. The wrapper now refuses an
+    # Before v2.211.0 some marker operations with dry_run=true still ran for real:
+    # the handlers never read the flag. The wrapper now refuses an
     # explicit dry-run request on every registered destructive action outside
     # NATIVE_DRY_RUN_ACTIONS — before archive, before state lookup, before the
     # handler — and says that nothing was simulated or executed.
@@ -455,7 +455,10 @@ class SecurityPolicy(unittest.TestCase):
             calls.append(action)
             return {"success": True}
 
-        result = fake_markers("add", {"frame": 12, "dry_run": True})
+        result = fake_markers(
+            "update_custom_data",
+            {"frame": 12, "custom_data": "marker-12", "dry_run": True},
+        )
 
         self.assertFalse(result["success"])
         self.assertEqual(result["status"], "dry_run_unavailable")
@@ -517,8 +520,30 @@ class SecurityPolicy(unittest.TestCase):
             calls.append(action)
             return {"success": True}
 
-        result = fake_markers("add", {"frame": 12, "dry_run": False})
+        for value in (False, "false", "0", "no", "off"):
+            with self.subTest(value=value):
+                result = fake_markers("add", {"frame": 12, "dry_run": value})
+                self.assertTrue(result["success"])
+        self.assertEqual(calls, ["add", "add", "add", "add", "add"])
+
+    def test_native_dry_run_payload_skips_archive_and_reaches_handler(self) -> None:
+        self._prefs(safe_mode=False)
+
+        def failing_provider():
+            raise AssertionError("native dry-run preview must not resolve project state")
+        destructive_hook.register_project_root_provider(failing_provider)
+
+        calls: list[str] = []
+
+        @destructive_hook.destructive_op("timeline_markers")
+        def fake_markers(action: str, params=None):
+            calls.append(action)
+            return {"success": True, "dry_run": True, "executed": False}
+
+        result = fake_markers("add", {"frame": 12, "dry_run": "true"})
+
         self.assertTrue(result["success"])
+        self.assertTrue(result["dry_run"])
         self.assertEqual(calls, ["add"])
 
     def test_dry_run_on_a_non_destructive_action_is_untouched(self) -> None:

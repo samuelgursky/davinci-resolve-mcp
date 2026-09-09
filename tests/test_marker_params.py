@@ -135,6 +135,51 @@ class TimelineMarkerParamTest(unittest.TestCase):
             (12, "Green", "Marker", "", 1, ""),
         )
 
+    def test_add_dry_run_returns_preview_without_adding_marker(self):
+        out = compound.timeline_markers(
+            "add",
+            {
+                "frame": 12,
+                "color": "green",
+                "name": "Review",
+                "note": "Check audio",
+                "duration": 4,
+                "custom_data": "marker-12",
+                "dry_run": True,
+            },
+        )
+
+        self.assertEqual(
+            _strip_versioning(out),
+            {
+                "success": True,
+                "dry_run": True,
+                "executed": False,
+                "would_change": {
+                    "operation": "timeline_markers.add",
+                    "frame": 12,
+                    "color": "Green",
+                    "name": "Review",
+                    "note": "Check audio",
+                    "duration": 4,
+                    "custom_data": "marker-12",
+                },
+            },
+        )
+        self.assertEqual(self.timeline.add_calls, [])
+
+    def test_add_dry_run_false_string_adds_marker(self):
+        out = compound.timeline_markers(
+            "add",
+            {"frame": 12, "color": "green", "dry_run": "false"},
+        )
+
+        self.assertEqual(_strip_versioning(out), {"success": True, "frame": 12})
+        self.assertEqual(
+            self.timeline.add_calls[-1],
+            (12, "Green", "Marker", "", 1, ""),
+        )
+
     def test_add_accepts_timecode_with_nominal_ntsc_rate(self):
         # 01:00:10:00 @ 23.976 (nominal 24) is 86640 absolute -> 240 relative.
         self.timeline.fps = "23.976"
