@@ -17,7 +17,8 @@ The variable was isolated against the comp handle (AddFusionComp,
 GetFusionCompByIndex and GetFusionCompByName all render), the node name, and
 the write form. Only the lock around the write decided it.
 
-All six write paths the v2.98.5 fix touched are covered. Four of them are
+All six write paths the v2.98.5 fix touched are covered, plus the seventh site
+found by a reporter two weeks later (issue #196, fixed v2.213.1). Five are
 genuinely broken by the lock; two escape, and the reason is now known.
 
     set_input            Blur XBlurSize          scalar write
@@ -26,6 +27,8 @@ genuinely broken by the lock; two escape, and the reason is now known.
     bulk_set_expressions Blur XBlurSize          expression write
     bulk_set_inputs      Blur XBlurSize          scalar write, undo-wrapped
     add_fusion_mask      RectangleMask W/H       scalar writes after AddTool
+    add_keyframe         Transform Size          keyframe write tool[input][t] = v
+    delete_keyframe      Transform Size          spline DeleteKeyFrames (control)
 
 WHICH OF THESE THE LOCK ACTUALLY BREAKS (each mutation-checked on 19.1.3.7 by
 reintroducing the lock and re-rendering):
@@ -36,8 +39,17 @@ reintroducing the lock and re-rendering):
     add_fusion_mask       lock -> PSNR inf    SUPPRESSED
     bulk_set_inputs       lock -> unchanged   escapes
     bulk_set_expressions  lock -> unchanged   escapes
+    add_keyframe          lock -> PSNR inf    SUPPRESSED  (issue #196, 2026-09-08)
+    delete_keyframe       lock -> unchanged   escapes     (mutation-checked same day)
 
 The two that escape are the two that wrap their write in StartUndo/EndUndo.
+The keyframe site escaped v2.98.5-v2.98.8 entirely because the static guard
+only knew SetInput/SetExpression, not the `tool[input][time] = value` shape; a
+Transform Size keyframed 2.0 -> 1.0 through the shipped handler read back as two
+keys and rendered bit-identical to the no-comp baseline, and animated the moment
+the lock came off (13.3 dB vs baseline). The handler now uses StartUndo/EndUndo.
+The delete row is a CONTROL: re-locking DeleteKeyFrames still removed the key
+from the render, so its lock removal was consistency, not a fix.
 
 MECHANISM, isolated 2026-08-22 with raw-API probes:
 
@@ -194,6 +206,27 @@ def _psnr(a: Path, b: Path) -> float:
     if not match:
         raise AssertionError(f"PSNR parse failed: {proc.stderr[-400:]}")
     return float("inf") if match.group(1) == "inf" else float(match.group(1))
+
+
+def _frame_psnr(a: Path, b: Path, frame: int, work_dir: Path, tag: str) -> float:
+    """PSNR between frame `frame` of two renders (both at timeline resolution).
+
+    The whole-clip PSNR cannot separate "animated" from "static but changed":
+    a Size keyframed 2.0 -> 1.0 and a Size stuck at 2.0 both differ from the
+    baseline. Frame 46 can: with the animation honoured Size is back at 1.0
+    there and the frame matches the baseline (~44 dB); stuck at 2.0 it reads
+    the zoom (~5.7 dB).
+    """
+    pngs = []
+    for label, mov in (("a", a), ("b", b)):
+        png = work_dir / f"{tag}_{label}_f{frame}.png"
+        subprocess.run(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", str(mov),
+             "-vf", f"select=eq(n\\,{frame})", "-vframes", "1", str(png)],
+            check=True,
+        )
+        pngs.append(png)
+    return _psnr(pngs[0], pngs[1])
 
 
 def _render(project, mark_in, mark_out, target_dir: Path, name: str) -> Path:
@@ -427,6 +460,74 @@ def run(server, keep_open: bool) -> int:
         default_mask = masked_bg_render("mask_default", {})
         sized_mask = masked_bg_render("mask_sized", {"width": 0.08, "height": 0.08})
         check("add_fusion_mask", _psnr(default_mask, sized_mask))
+
+        # --- Case 7: fusion_comp add_keyframe + delete_keyframe (issue #196) --
+        # The keyframe write `tool[input][time] = value` is a value write too,
+        # and until v2.213.1 it ran under comp.Lock(): GetKeyFrames listed both
+        # keys, Fusion's page playback interpolated them, and the render ignored
+        # them. Graph wired through the real add_tool/connect handlers (locked
+        # structural edits - the suppression needs a graph built under the
+        # lock) and NOTHING written before the keyframes: priming would hide it.
+        #
+        # Measured on Studio 19.1.3.7 (2026-09-08), Transform Size 2.0 @0 ->
+        # 1.0 @46 over 48 frames:
+        #   shipped (locked) handler   vs baseline PSNR inf     IGNORED
+        #   undo-wrapped handler       vs baseline PSNR 13.3    ANIMATED
+        #   frame 46 vs baseline f46   44.2 dB  (Size back to 1.0)
+        #   after delete_keyframe @46  frame 46 vs baseline f46 5.7 dB (2.0 zoom)
+        #   delete re-locked (mutant)  frame 46 vs baseline f46 5.7 dB (escapes)
+        item, mark_in, mark_out = fresh_item("add_keyframe")
+        base = _render(project, mark_in, mark_out, work_dir, "kf_base")
+        item.AddFusionComp()
+        kf_item_id = item.GetUniqueId()
+
+        def call7(action, params):
+            payload = {"clip_id": kf_item_id, "comp_index": 1}
+            payload.update(params)
+            out = server.fusion_comp(action, payload)
+            if isinstance(out, dict) and out.get("error"):
+                raise AssertionError(f"fusion_comp.{action}: {out['error']}")
+            return out
+
+        call7("add_tool", {"tool_type": "Transform", "name": "KFX"})
+        call7("connect", {"target_tool": "KFX", "input_name": "Input",
+                          "source_tool": "MediaIn1"})
+        call7("connect", {"target_tool": "MediaOut1", "input_name": "Input",
+                          "source_tool": "KFX"})
+        call7("add_keyframe", {"tool_name": "KFX", "input_name": "Size",
+                               "time": 0, "value": 2.0})
+        call7("add_keyframe", {"tool_name": "KFX", "input_name": "Size",
+                               "time": 46, "value": 1.0})
+        keys = call7("get_keyframes", {"tool_name": "KFX", "input_name": "Size"})
+        print(f"add_keyframe readback: {keys.get('keyframes')} "
+              f"(readback ALWAYS agrees - the render is the only witness)")
+        kf_out = _render(project, mark_in, mark_out, work_dir, "kf_out")
+        check("add_keyframe", _psnr(base, kf_out))
+        # Animated, not merely changed: frame 46 must be back at the baseline.
+        f46 = _frame_psnr(base, kf_out, 46, work_dir, "kf_anim")
+        measurements["add_keyframe frame46"] = f46
+        print(f"  add_keyframe frame 46 vs baseline: PSNR {f46} -> "
+              f"{'ANIMATED (Size back to 1.0)' if f46 > PSNR_APPLIED_MAX_DB else 'NOT animated'}")
+        if f46 <= PSNR_APPLIED_MAX_DB:
+            failures.append(
+                f"add_keyframe: the render changed but frame 46 did not return to "
+                f"the baseline (PSNR {f46}) - the second key was not honoured")
+        # delete_keyframe is the control: with the @46 key gone Size holds at
+        # 2.0, so frame 46 must now DIFFER from the baseline.
+        deleted = call7("delete_keyframe", {"tool_name": "KFX", "input_name": "Size",
+                                            "time": 46})
+        if not deleted.get("success"):
+            raise AssertionError(f"delete_keyframe failed: {deleted}")
+        kf_del = _render(project, mark_in, mark_out, work_dir, "kf_del")
+        f46_del = _frame_psnr(base, kf_del, 46, work_dir, "kf_del")
+        measurements["delete_keyframe frame46"] = f46_del
+        print(f"  delete_keyframe frame 46 vs baseline: PSNR {f46_del} -> "
+              f"{'DELETE REACHED RENDER (2.0 zoom held)' if f46_del <= PSNR_APPLIED_MAX_DB else 'delete IGNORED at render'}")
+        if f46_del > PSNR_APPLIED_MAX_DB:
+            failures.append(
+                f"delete_keyframe: the key is gone from GetKeyFrames but frame 46 "
+                f"still matches the baseline (PSNR {f46_del}) - the delete did not "
+                f"reach the render")
 
         if failures:
             for line in failures:
