@@ -312,6 +312,51 @@ file paths. The one free-text field is the `request` you pass to
 `begin_execution`, so treat it the way you would a commit message on a client
 project.
 
+## Verified-Trap Guard
+
+`src/utils/api_truth.py` records behaviours of the Resolve API that were measured
+against a live build rather than read off a signature — calls that return `True`
+having done nothing, settings keys silently rejected, methods that are not there
+at all. That ledger used to be **pull-only**: it answered
+`resolve_control(action="api_truth")` and was otherwise a file nobody greps in
+the middle of a job.
+
+It now reaches the caller at the callsite. An action mapped to a symbol with a
+recorded fact carries a compact `known_limitation` on its result — symbol,
+reality, recommendation, and nothing else, because response weight is a real cost
+on a long grading session and the full entry is one lookup away.
+
+A fact is only attached when the mapping names that exact symbol. Nothing is
+inferred from a similar name: an unrelated explanation stapled to a failure reads
+as a diagnosis, and a wrong diagnosis is worse than none.
+
+**One behaviour refuses rather than warns.** `TimelineItem.CopyGrades` replaces
+the target's grade wholesale — measured by baking each state to a 33-point LUT
+and comparing bytes — returns `True` while doing it, and creates no version to go
+back to. Applied to clips carrying hand-work, that is unrecoverable loss reported
+as success. So actions that call it refuse until the caller passes
+`acknowledge_trap: true`:
+
+```json
+{
+  "success": false,
+  "error": "'timeline_item_color.copy_grades' is refused: its verified behaviour destroys existing work that cannot be recovered afterwards.",
+  "known_limitation": [{"symbol": "TimelineItem.CopyGrades", "reality": "...", "recommended": "..."}],
+  "retry_with": {"acknowledge_trap": true}
+}
+```
+
+The intent is not to forbid the operation — it is to make the caller say out loud
+that they know what it does. Dry runs are exempt: a preview destroys nothing.
+
+Set `RESOLVE_MCP_DISABLE_TRAP_GUARD=1` to turn both the refusal and the advisory
+push off. This is a behaviour change for callers that previously received a bare
+`{"success": true}` from a destructive copy.
+
+Facts that power a refusal must stay re-measurable, so a live probe re-derives
+each one and records `drifted` when Resolve stops agreeing; a test fails if a
+`destroys_prior_work` entry has no probe.
+
 ## Optional Extras
 
 The core install is deliberately small: Python, ffmpeg, and the Resolve scripting
