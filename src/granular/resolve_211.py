@@ -1,4 +1,5 @@
 """Native Resolve 21.1 discovery and editing controls."""
+from src.utils.resolve211_alignment import auto_align
 from src.utils.resolve211_normalization import normalize_audio
 from src.utils.resolve211_blanking import validate_blanking
 from src.utils.resolve211_multicam import create_multicam, resolve_constant, GRADES
@@ -291,3 +292,15 @@ def normalize_timeline_audio_level(item_ids: list[str], options: dict | None = N
     if missing:
         return missing
     return normalize_audio(get_resolve(), timeline, item_ids, {} if options is None else options)
+
+
+@mcp.tool(annotations=DESTRUCTIVE_TOOL)
+def auto_align_timeline_clips(item_ids: list[str], options: dict | None = None) -> dict:
+    """Native 21.1 alignment of current video/audio items by unique ID. Include linked audio AND video IDs to move both; selection is not expanded. Options SyncUsing and UseTrack accept documented constant names or integral native values."""
+    _, timeline, error = _get_timeline()
+    if error:
+        return error
+    missing = _requires_method(timeline, "AutoAlignClips", "21.1")
+    if missing:
+        return missing
+    return auto_align(get_resolve(), timeline, item_ids, {} if options is None else options)

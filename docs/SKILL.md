@@ -345,7 +345,7 @@ to the user as verified.
 | Mode | Entry point | Tool count | Use when |
 |---|---|---|---|
 | Compound (default) | `src/server.py` | 36 tools | Most workflows — keeps context lean |
-| Granular (full) | `src/server.py --full` | 374 tools | Power users needing one tool per API method |
+| Granular (full) | `src/server.py --full` | 375 tools | Power users needing one tool per API method |
 
 Resolve 21.1 adds [twelve read-only discovery controls](reference/resolve211-read-controls.md)
 for edition, presets, audio formats/codecs, normalization modes, speed, fades
@@ -2488,3 +2488,5 @@ Native multicam creation and flattening: [21.1 controls](reference/resolve211-mu
 Native timeline/clip output blanking: [21.1 controls](reference/resolve211-blanking.md), with explicit inheritance and pixel-bound evidence.
 
 Native audio normalization: [21.1 controls](reference/resolve211-normalization.md), with independently measured exported-audio evidence.
+
+Native timecode/waveform alignment: [21.1 controls](reference/resolve211-alignment.md), including linked-item selection semantics and rendered video/audio evidence.

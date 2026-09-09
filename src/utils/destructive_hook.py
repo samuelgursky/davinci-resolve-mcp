@@ -89,6 +89,7 @@ DESTRUCTIVE_ACTIONS_BY_TOOL: Dict[str, FrozenSet[str]] = {
     "timeline": frozenset({
         "set_output_blanking",
         "normalize_audio_level",
+        "auto_align_clips",
         "delete_clips",
         "move_clips",
         "duplicate_clips",

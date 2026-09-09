@@ -25,7 +25,7 @@ Every non-deprecated method in the bundled legacy README is represented. This
 does not claim complete coverage of the newer Resolve 21.1 typed API. The
 default compound server exposes **36 tools** that group related operations by
 action parameter, keeping LLM context windows lean. The full granular server
-provides **374 individual tools** for power users. The legacy coverage spans
+provides **375 individual tools** for power users. The legacy coverage spans
 13 API object classes. MCP-level kernel actions are tracked separately in
 [Kernel Action Coverage](../kernels/README.md).
 
@@ -638,3 +638,5 @@ Native multicam creation and flattening: [21.1 controls](resolve211-multicam.md)
 Native timeline/clip output blanking: [21.1 controls](resolve211-blanking.md), with explicit inheritance and pixel-bound evidence.
 
 Native audio normalization: [21.1 controls](resolve211-normalization.md), with independently measured exported-audio evidence.
+
+Native timecode/waveform alignment: [21.1 controls](resolve211-alignment.md), including linked-item selection semantics and rendered video/audio evidence.

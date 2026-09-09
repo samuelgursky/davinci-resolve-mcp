@@ -275,6 +275,7 @@ class RiskClassificationHook(LifecycleHook):
         # RippleTimeline true, moves every clip after it; `set_fades` rewrites
         # how the clip's edges render. Existing content altered, not deleted.
         ("media_pool", "create_multicam_clip"),
+        ("timeline", "auto_align_clips"),
         ("timeline_item", "flatten_multicam"),
         ("timeline", "set_output_blanking"),
         ("timeline_item", "set_output_blanking"),
