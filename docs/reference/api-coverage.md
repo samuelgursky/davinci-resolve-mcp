@@ -1,12 +1,16 @@
 # API Coverage and Test Results
 
-Complete Resolve scripting API coverage, live-test status, and method-by-method reference.
+Legacy-reference coverage, incremental Resolve 21.1 coverage, live-test status,
+and method-by-method reference.
 
 ## Key Stats
 
+The API totals below refer to the bundled legacy README baseline. Resolve 21.1
+additions are tracked separately in the section below.
+
 | Metric | Value |
 |--------|-------|
-| MCP Tools | **36** compound (default) / **353** granular |
+| MCP Tools | **36** compound (default) / **365** granular |
 | Kernel Actions | **136** guarded MCP workflow actions across 9 compound tools |
 | API Methods Covered | **361/361** (100%) |
 | Methods Live Tested | **338/361** (93.6%) |
@@ -17,7 +21,18 @@ Complete Resolve scripting API coverage, live-test status, and method-by-method 
 
 ## API Coverage
 
-Every non-deprecated method in the DaVinci Resolve Scripting API is covered. The default compound server exposes **36 tools** that group related operations by action parameter, keeping LLM context windows lean. The full granular server provides **353 individual tools** for power users. Both modes cover all 13 API object classes. MCP-level kernel actions are tracked separately in [Kernel Action Coverage](../kernels/README.md).
+Every non-deprecated method in the bundled legacy README is represented. This
+does not claim complete coverage of the newer Resolve 21.1 typed API. The
+default compound server exposes **36 tools** that group related operations by
+action parameter, keeping LLM context windows lean. The full granular server
+provides **365 individual tools** for power users. The legacy coverage spans
+13 API object classes. MCP-level kernel actions are tracked separately in
+[Kernel Action Coverage](../kernels/README.md).
+
+Twelve additional [Resolve 21.1 read-only controls](resolve211-read-controls.md)
+are implemented in both interfaces and were live-measured by a contributor on
+Studio 21.1.0.14. Their evidence and limitations are recorded separately from
+the historical aggregate above.
 
 The 34th compound tool is `timeline_versioning` (C6) — an MCP-level workflow
 tool, not a wrapper around a Resolve API method. It surfaces the
@@ -28,7 +43,8 @@ for usage.
 Workflow helpers can go beyond one-to-one API method coverage while still using
 only public Resolve calls. For example, `media_pool.setup_multicam_timeline`
 prepares a stacked timeline for Resolve's multicam UI, but native multicam clip
-creation itself is not exposed by the scripting API. Similarly,
+creation is available in Resolve 21.1 through CreateMulticamClip; that native
+route is not implemented by this helper. Similarly,
 `media_analysis.detect_sync_events` is a source-safe FFmpeg/FFprobe helper for
 advisory 2-pop and slate-clap sync points; it is not a Resolve API method.
 `media_analysis.add_sync_event_markers` is an explicit marker-write helper for

@@ -345,7 +345,11 @@ to the user as verified.
 | Mode | Entry point | Tool count | Use when |
 |---|---|---|---|
 | Compound (default) | `src/server.py` | 36 tools | Most workflows — keeps context lean |
-| Granular (full) | `src/server.py --full` | 353 tools | Power users needing one tool per API method |
+| Granular (full) | `src/server.py --full` | 365 tools | Power users needing one tool per API method |
+
+Resolve 21.1 adds [twelve read-only discovery controls](reference/resolve211-read-controls.md)
+for edition, presets, audio formats/codecs, normalization modes, speed, fades
+and blanking in both server interfaces. These readers do not invoke setters.
 
 This skill document covers the **compound server** (the default). Each compound
 tool accepts an `action` string and an optional `params` object.

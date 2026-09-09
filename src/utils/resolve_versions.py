@@ -225,6 +225,20 @@ _EVIDENCE_GATES: List[Dict[str, Any]] = [
 # disagree, which is what keeps the two from drifting apart again.
 
 CODE_FLOORS: Dict[str, str] = {
+    # Documented in the shipped 21.1 scripting CHANGELOG; read-only contributor
+    # validation on Studio 21.1.0.14. No claim of a live older-build bisect.
+    "Resolve.GetKeyboardPresetList": "21.1",
+    "Resolve.GetCurrentKeyboardPreset": "21.1",
+    "Project.GetProjectSettingsPresetList": "21.1",
+    "Project.GetAudioRenderFormats": "21.1",
+    "Project.GetAudioRenderCodecs": "21.1",
+    "Timeline.GetNormalizeAudioModes": "21.1",
+    "Timeline.GetOutputBlanking": "21.1",
+    "TimelineItem.GetSpeed": "21.1",
+    "TimelineItem.GetFades": "21.1",
+    "TimelineItem.GetOutputBlanking": "21.1",
+    "TimelineItem.GetUseTimelineForOutputBlanking": "21.1",
+
     "MediaPoolItem.LinkProxyMedia": "17.0",
     "MediaPoolItem.LinkFullResolutionMedia": "20.0",
     "MediaPoolItem.MonitorGrowingFile": "20.0",
