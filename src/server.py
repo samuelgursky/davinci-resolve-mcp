@@ -8,7 +8,7 @@ Each tool groups related operations via an 'action' parameter.
 
 Usage:
     python src/server.py              # Start the MCP server
-    python src/server.py --full       # Start the 375-tool granular server instead
+    python src/server.py --full       # Start the 376-tool granular server instead
 """
 
 VERSION = "2.222.0"
@@ -45,6 +45,7 @@ for p in [current_dir, project_dir]:
 from src.utils.resolve211_multicam import create_multicam, resolve_constant, GRADES
 from src.utils.resolve211_blanking import validate_blanking
 from src.utils.resolve211_alignment import auto_align
+from src.utils.resolve211_dctl import native_dctl_result
 from src.utils.resolve211_normalization import normalize_audio
 from src.utils.resolve211_edits import validate_edit_options, validate_transition_options, transition_result
 
@@ -31142,6 +31143,7 @@ def dctl(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]
       remove(name, category?, subdir?, ext?) -> {success}
       read(name, category?, subdir?, ext?) -> {source, encrypted}
       validate(source) -> {valid, errors, warnings, checker}
+      validate_native(source) -> {valid, diagnostic, checker} — Resolve 21.1 validation; source and diagnostic unchanged.
       template(kind, name, options?) -> {source, kind, name, suggested_category}
         — kind: 'transform' | 'transform_alpha' | 'transition' | 'matrix' |
                 'kernel' | 'lut_apply' | 'aces_idt' | 'aces_odt'
@@ -31295,6 +31297,18 @@ def dctl(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]
         return {"source": src, "path": target,
                 "encrypted": ext == ".dctle", "category": cat}
 
+    if action == "validate_native":
+        source = p.get("source")
+        if not isinstance(source, str):
+            return _err("validate_native requires a source string")
+        r = get_resolve()
+        if r is None:
+            return _not_connected_error()
+        missing = _requires_method(r, "ValidateDCTL", "21.1")
+        if missing:
+            return missing
+        return native_dctl_result(r, source)
+
     if action == "validate":
         source = p.get("source")
         if not isinstance(source, str):
@@ -31321,7 +31335,7 @@ def dctl(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]
         }
 
     return _unknown(action, ["path", "list", "install", "remove", "read",
-                             "validate", "template", "list_templates"])
+                             "validate_native", "validate", "template", "list_templates"])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -32737,9 +32751,9 @@ if __name__ == "__main__":
     start_background_update_check(VERSION, project_dir, logger, env=_setup_update_env())
     _install_threaded_tool_dispatch(mcp)
 
-    # Support --full flag to run the 375-tool granular server instead
+    # Support --full flag to run the 376-tool granular server instead
     if "--full" in sys.argv:
-        logger.info("Starting full 375-tool granular server...")
+        logger.info("Starting full 376-tool granular server...")
         sys.argv = [arg for arg in sys.argv if arg != "--full"]
         from src.granular import mcp as granular_mcp
 

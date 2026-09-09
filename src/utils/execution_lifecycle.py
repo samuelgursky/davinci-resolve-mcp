@@ -404,7 +404,7 @@ class RiskClassificationHook(LifecycleHook):
                 else BlastRadius.ITEM
             )
             reasons.append(f"Recoverable edit to existing state: {action}")
-        elif any(action.startswith(p) for p in cls._READ_ONLY_PREFIXES) or action in {"read", "status", "info"}:
+        elif any(action.startswith(p) for p in cls._READ_ONLY_PREFIXES) or action in {"read", "status", "info"} or pair == ("dctl", "validate_native"):
             level = RiskLevel.LOW
             destructive = False
             radius = BlastRadius.ITEM

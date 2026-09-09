@@ -1,4 +1,5 @@
 """Native Resolve 21.1 discovery and editing controls."""
+from src.utils.resolve211_dctl import native_dctl_result
 from src.utils.resolve211_alignment import auto_align
 from src.utils.resolve211_normalization import normalize_audio
 from src.utils.resolve211_blanking import validate_blanking
@@ -304,3 +305,17 @@ def auto_align_timeline_clips(item_ids: list[str], options: dict | None = None) 
     if missing:
         return missing
     return auto_align(get_resolve(), timeline, item_ids, {} if options is None else options)
+
+
+@mcp.tool(annotations=READ_ONLY_TOOL)
+def validate_dctl_native(source: str) -> dict:
+    """Validate shader source with Resolve 21.1. Source layout and native diagnostics are preserved; success means validation, not a rendered shader test."""
+    if not isinstance(source, str):
+        return {"error": "source must be a string"}
+    r = get_resolve()
+    if r is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    missing = _requires_method(r, "ValidateDCTL", "21.1")
+    if missing:
+        return missing
+    return native_dctl_result(r, source)

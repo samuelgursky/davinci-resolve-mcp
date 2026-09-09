@@ -3263,7 +3263,12 @@ API_TRUTH: List[Dict[str, Any]] = [
                        "across lines before believing it. This server's own "
                        "`dctl validate` is a static, offline check (entry point, "
                        "brace balance, float suffixes) and does not call "
-                       "ValidateDCTL at all.",
+                       "ValidateDCTL at all. The separate `dctl validate_native` and "
+                       "granular `validate_dctl_native` now expose the native "
+                       "validator without changing source or diagnostics. Both "
+                       "interfaces were contributor-validated against the three "
+                       "fixtures on Studio 21.1.0.14; see "
+                       "resolve211-dctl-validation.md.",
         "tags": ["dctl", "validation", "unreliable-return", "version-gated", "reported"],
         "submit": "bug",
     },
