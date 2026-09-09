@@ -2,7 +2,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-[![Version](https://img.shields.io/badge/version-2.214.3-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
+[![Version](https://img.shields.io/badge/version-2.214.4-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![npm](https://img.shields.io/npm/v/davinci-resolve-mcp.svg?label=npm&color=CB3837)](https://www.npmjs.com/package/davinci-resolve-mcp)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](docs/reference/api-coverage.md)
 [![Tools](https://img.shields.io/badge/MCP%20Tools-36%20(353%20full)-blue.svg)](#server-modes)
@@ -298,7 +298,9 @@ and an audit document is the last place to let a reader read it as an all-clear.
 
 Traces live in a 100-entry in-memory ring and are appended to
 `logs/execution-traces.jsonl` beside `server.log` — `RESOLVE_MCP_TRACE_FILE`
-moves it. `list_recent_executions` reports that path and whether it is
+moves it, and `RESOLVE_MCP_LOG_FILE` moves `server.log` itself (a path, or empty
+for no file; the offline test suite points it at a temporary file so it never
+writes into the operator's log). `list_recent_executions` reports that path and whether it is
 writable, so "the log is empty" and "nothing is being written" are
 distinguishable without reading the source. What is recorded is tool name,
 action, timing, status, semantic deltas and verification — no parameters and no

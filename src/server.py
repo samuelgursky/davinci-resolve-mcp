@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 353-tool granular server instead
 """
 
-VERSION = "2.214.3"
+VERSION = "2.214.4"
 
 import base64
 import os
@@ -185,10 +185,40 @@ if RESOLVE_MODULES_PATH not in sys.path:
 
 log_dir = os.path.join(project_dir, "logs")
 os.makedirs(log_dir, exist_ok=True)
+
+#: Where this process logs. Unset: `logs/server.log` under the repository, as
+#: always. A path: that file (its directory is created). Empty: no file at all.
+#:
+#: The variable exists because importing this module attaches the file handler,
+#: and the offline unit suite imports this module. Without it the suite's
+#: MagicMock "connections" and lifecycle warnings landed in the operator's real
+#: server.log — 240 such lines in a 128 MB log on the maintainer's machine —
+#: which is the file every live debugging session reads. `tests/__init__.py`
+#: points it at a temporary file before any test module runs.
+ENV_LOG_FILE = "RESOLVE_MCP_LOG_FILE"
+
+
+def _log_file_from_env(env=None) -> str:
+    """The log path this process should use, or "" for none."""
+    values = os.environ if env is None else env
+    value = values.get(ENV_LOG_FILE)
+    if value is None:
+        return os.path.join(log_dir, "server.log")
+    return os.path.expanduser(value.strip())
+
+
+def _log_handlers():
+    target = _log_file_from_env()
+    if not target:
+        return [logging.NullHandler()]
+    os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
+    return [logging.FileHandler(target)]
+
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[logging.FileHandler(os.path.join(log_dir, "server.log"))]
+    handlers=_log_handlers(),
 )
 logger = logging.getLogger("resolve-mcp")
 

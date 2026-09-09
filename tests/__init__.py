@@ -23,6 +23,20 @@ regardless, since it makes them independent of run order under either runner.
 
 from __future__ import annotations
 
-from . import offline_guard
+import os
+import tempfile
+
+# Before ANY import that can reach src.server: importing it attaches the root
+# logger's FileHandler, and left alone that handler points at the operator's
+# real logs/server.log. The suite's MagicMock "connections" and lifecycle
+# warnings were landing there (240 lines in a 128 MB log). Point this process
+# at a throwaway file instead; a caller who already set the variable — CI, or
+# someone wanting the suite's log — keeps their choice.
+if "RESOLVE_MCP_LOG_FILE" not in os.environ:
+    os.environ["RESOLVE_MCP_LOG_FILE"] = os.path.join(
+        tempfile.mkdtemp(prefix="resolve-mcp-test-logs-"), "server.log"
+    )
+
+from . import offline_guard  # noqa: E402 - after the log redirect above
 
 offline_guard.install()

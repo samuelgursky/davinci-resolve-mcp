@@ -2,6 +2,35 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.214.4 — the offline test suite no longer writes into the operator's server.log
+
+### Fixed
+
+- **The unit suite was appending to `logs/server.log`.** Importing
+  `src/server.py` attaches the root logger's FileHandler to that file, and the
+  suite imports the server, so every MagicMock "connection" the bridge tests
+  provoke and every lifecycle warning about a MagicMock timeline landed in the
+  operator's real log — the file a live debugging session reads. On the
+  maintainer's machine that log had grown to 128 MB with 240 such lines in it.
+  The log target is now `RESOLVE_MCP_LOG_FILE`: unset means `logs/server.log`
+  as before, a path means that file, empty means no file. `tests/__init__.py`
+  sets it to a temporary file before any test module imports the server, on
+  both the `unittest` and `pytest` paths, and `tests/test_log_isolation.py`
+  fails the suite if a handler on the root or `resolve-mcp` logger ever targets
+  the real log during a run. The live server's behaviour is unchanged, and the
+  transport-token redaction test, which builds its own root FileHandler, still
+  passes.
+- **The existing log is untouched.** The 128 MB file is the operator's; this
+  change only stops adding to it. Rotate or trim it by hand if wanted.
+
+### Validation
+
+- `tests/test_log_isolation.py` (four tests, including the unset-means-real-log
+  case that pins the live behaviour). Proven with an audited full run — a
+  `sys.addaudithook` on every `open` of the operator's log — that recorded zero
+  opens across 3371 tests. Full offline suite, drift guards and the advanced
+  Node suite green.
+
 ## What's New in v2.214.3 — the advanced launcher heals a wrong-Node registration
 
 ### Fixed
