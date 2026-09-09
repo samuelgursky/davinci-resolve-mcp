@@ -1,5 +1,6 @@
 """Native Resolve 21.1 discovery and editing controls."""
 from src.utils.resolve211_multicam import create_multicam, resolve_constant, GRADES
+from src.utils.resolve211_blanking import validate_blanking
 from src.utils.resolve211_edits import validate_edit_options, validate_transition_options, transition_result
 from src.granular.common import (
     mcp, READ_ONLY_TOOL, WRITE_TOOL, DESTRUCTIVE_TOOL, get_resolve, get_current_project,
@@ -229,3 +230,51 @@ def flatten_timeline_item_multicam(grade_option: str = "FLATTEN_MULTICAM_COPY_GR
     if error:
         return {"error": error}
     return {"success": bool(item.FlattenMulticam(grade))}
+
+
+@mcp.tool(annotations=DESTRUCTIVE_TOOL)
+def set_timeline_output_blanking(options: dict) -> dict:
+    """Set native 21.1 timeline Top/Bottom/Left/Right pixel coordinates."""
+    error = validate_blanking(options)
+    if error:
+        return {"error": error}
+    _, tl, error = _get_timeline()
+    if error:
+        return error
+    missing = _requires_method(tl, "SetOutputBlanking", "21.1")
+    if missing:
+        return missing
+    return {"success": bool(tl.SetOutputBlanking(dict(options)))}
+
+
+@mcp.tool(annotations=DESTRUCTIVE_TOOL)
+def set_timeline_item_output_blanking(options: dict, track_type: str = "video", track_index: int = 1, item_index: int = 0) -> dict:
+    """Set native 21.1 clip pixel coordinates. Disable timeline blanking inheritance first; this call does not change inheritance."""
+    error = validate_blanking(options)
+    if error:
+        return {"error": error}
+    if track_type not in ("video", "audio") or track_index < 1 or item_index < 0:
+        return {"error": "Use video/audio, a 1-based track index and a non-negative item index"}
+    item, error = _get_timeline_item(track_type, track_index, item_index)
+    if error:
+        return error
+    missing = _requires_method(item, "SetOutputBlanking", "21.1")
+    if missing:
+        return missing
+    return {"success": bool(item.SetOutputBlanking(dict(options)))}
+
+
+@mcp.tool(annotations=DESTRUCTIVE_TOOL)
+def set_timeline_item_use_timeline_for_output_blanking(use_timeline: bool, track_type: str = "video", track_index: int = 1, item_index: int = 0) -> dict:
+    """Explicitly enable/disable native 21.1 timeline blanking inheritance for a clip."""
+    if type(use_timeline) is not bool:
+        return {"error": "use_timeline must be a boolean"}
+    if track_type not in ("video", "audio") or track_index < 1 or item_index < 0:
+        return {"error": "Use video/audio, a 1-based track index and a non-negative item index"}
+    item, error = _get_timeline_item(track_type, track_index, item_index)
+    if error:
+        return error
+    missing = _requires_method(item, "SetUseTimelineForOutputBlanking", "21.1")
+    if missing:
+        return missing
+    return {"success": bool(item.SetUseTimelineForOutputBlanking(use_timeline))}

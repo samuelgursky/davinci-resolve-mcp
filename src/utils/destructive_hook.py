@@ -87,6 +87,7 @@ DESTRUCTIVE_ACTIONS_BY_TOOL: Dict[str, FrozenSet[str]] = {
         "execute_swap",
     }),
     "timeline": frozenset({
+        "set_output_blanking",
         "delete_clips",
         "move_clips",
         "duplicate_clips",
@@ -138,6 +139,8 @@ DESTRUCTIVE_ACTIONS_BY_TOOL: Dict[str, FrozenSet[str]] = {
         "create_subtitles",
     }),
     "timeline_item": frozenset({
+        "set_output_blanking",
+        "set_use_timeline_for_output_blanking",
         "set_clip_enabled",
         "set_property",
         "set_name",
