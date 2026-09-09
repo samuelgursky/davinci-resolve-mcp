@@ -2,6 +2,49 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.215.2 — the granular server accepts Resolve 21.1's lowercase item types; the 21.1 typed API ships as reference
+
+Both contributed by @legionsound (#204, #205), measured on Studio 21.1.0.14.
+
+### Fixed
+
+- **Granular timeline-item tools rejected ordinary video clips on Resolve
+  21.1.** Studio 21.1 returns lowercase `video` / `audio` from
+  `TimelineItem.GetType()`, as its shipped typed API declares, and the
+  granular guards compared against `Video` / `Audio` — so every transform,
+  crop, composite, stabilization and keyframe-mode write refused a plain video
+  clip, and the property resource omitted the type-specific sections. Type
+  values are now normalised for the checks, title-case still passes, a
+  missing or non-string type is unknown rather than a clip, and the optional
+  `GetMediaType` accessor is only called when it is callable (on the probed
+  21.1 clip it is not). Public `type` values are unchanged. The compound
+  server has no title-case comparison of its own, so the class was confined
+  to the granular layer. Seven regression tests drive the real handlers; the
+  contributor's live write on a synthetic clip changed the rendered frame as
+  expected. (#204)
+- **On landing:** the accompanying live script selected a clip with
+  `item.GetMediaPoolItem()`, which on Studio 19.1.3.7 resolves to `None` on a
+  conform timeline's items and raised before the read; it now checks the
+  accessor is callable first.
+
+### Documentation
+
+- **Blackmagic's 21.1 `DaVinciResolveScript.pyi` is bundled unmodified** under
+  `docs/reference/`, with its SHA-256, the shipped 21.1 scripting changelog,
+  and a provenance note; the legacy README snapshot and every
+  `resolve_scripting_api.txt line N` anchor are untouched, as the #197 review
+  asked. `scripts/audit_typed_api.py` inventories the stub's 410 methods and
+  46 option dictionaries against executable references in `src/`, marking
+  same-name methods on different classes as receiver-unresolved rather than
+  covered; it reports candidate gaps and makes no coverage claim. (#205)
+
+### Validation
+
+- Both PRs' tests plus the full offline suite, drift guards and the advanced
+  Node suite. The lowercase behaviour is the contributor's measurement on
+  21.1.0.14 and is recorded as such; title-case compatibility is pinned by
+  the unit tests, not by a live read here.
+
 ## What's New in v2.215.1 — single-frame capture survives per-clip render mode and a vanished stills folder
 
 ### Fixed

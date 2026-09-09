@@ -25,7 +25,11 @@ def main():
         item
         for track in range(1, timeline.GetTrackCount("video") + 1)
         for item in (timeline.GetItemListInTrack("video", track) or [])
-        if item.GetMediaPoolItem() is not None
+        # `GetMediaPoolItem` resolves to None on some items (a conform
+        # timeline's transitions on Studio 19.1.3.7), and calling None raises
+        # before the read under test; only call it where it is callable.
+        if callable(getattr(item, "GetMediaPoolItem", None))
+        and item.GetMediaPoolItem() is not None
     ), None)
     if item is None:
         raise SystemExit("No ordinary video clip found; nothing was changed.")
