@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 353-tool granular server instead
 """
 
-VERSION = "2.213.3"
+VERSION = "2.214.0"
 
 import base64
 import os
@@ -27093,6 +27093,33 @@ def _resolve_trace_plan(tl, plan: Dict[str, Any], p: Dict[str, Any]) -> List[Dic
     return rows
 
 
+_TRACE_MAX_ROWS_DEFAULT = 40
+
+
+def _trace_report(p: Dict[str, Any], plan: Dict[str, Any], kind: str, payload: Dict[str, Any]) -> Optional[str]:
+    """Write the full per-clip tables next to the plan (or to report_path) and
+    return the path. A real cut is 800+ rows — far past what a tool response
+    should carry — so the file is the durable artifact and the response stays
+    compact (see max_rows)."""
+    report_path = p.get("report_path")
+    if not report_path:
+        plan_path = p.get("plan_path")
+        base = os.path.dirname(os.path.abspath(plan_path)) if plan_path else tempfile.gettempdir()
+        report_path = os.path.join(base, f"{kind}-report.json")
+    try:
+        with open(report_path, "w", encoding="utf-8") as fh:
+            json.dump({"kind": f"color_trace.{kind}", "written_at": _time.time(),
+                       "plan_source": plan.get("source"), **payload}, fh, indent=1, default=str)
+        return report_path
+    except Exception as exc:
+        logger.warning("apply_trace_plan: could not write %s report: %s", kind, exc)
+        return None
+
+
+def _trace_compact(rows: List[Dict[str, Any]], max_rows: int) -> Dict[str, Any]:
+    return {"count": len(rows), "truncated": len(rows) > max_rows, "rows": rows[:max_rows]}
+
+
 def _apply_trace_plan(p: Dict[str, Any]) -> Dict[str, Any]:
     plan, err = _load_trace_plan(p)
     if err:
@@ -27126,12 +27153,25 @@ def _apply_trace_plan(p: Dict[str, Any]) -> Dict[str, Any]:
     public = [{k: v for k, v in r.items() if not k.startswith("_")} for r in rows]
     grade_mode = p.get("grade_mode", 0)
     version_name = p.get("version_name")
+    max_rows = p.get("max_rows", _TRACE_MAX_ROWS_DEFAULT)
+    max_rows = len(public) if p.get("verbose") else max(0, int(max_rows))
+    # Entries that deserve a human look: skipped for a reason other than the
+    # two bulk ones, or applied on a tie / a partial source-range overlap.
+    bulk = {"unmatched", "no-source-grade"}
+    attention = [r for r in public if (r["status"] != "apply" and r["reason"] not in bulk)
+                 or (r["status"] == "apply" and r["ambiguous"])]
 
     if p.get("dry_run"):
+        report_path = _trace_report(p, plan, "dry-run", {"summary": summary, "resolution": public})
         return _ok(dry_run=True, timeline=live_name, plan_source=plan.get("source"),
-                   summary=summary, resolution=public, grade_mode=grade_mode, version_name=version_name)
+                   summary=summary, report_path=report_path,
+                   attention=_trace_compact(attention, max_rows),
+                   resolution=_trace_compact(public, max_rows),
+                   grade_mode=grade_mode, version_name=version_name)
     if not to_apply:
-        return _ok(timeline=live_name, applied=[], failed=[], summary=summary, resolution=public,
+        report_path = _trace_report(p, plan, "apply", {"summary": summary, "resolution": public, "applied": [], "failed": []})
+        return _ok(timeline=live_name, applied=[], failed=[], summary=summary, report_path=report_path,
+                   attention=_trace_compact(attention, max_rows), resolution=_trace_compact(public, max_rows),
                    note="nothing to apply — every plan entry was skipped (see skipped_by_reason)")
     if "confirm_token" not in p and "confirmToken" not in p and _confirm_token_required():
         preview = {
@@ -27177,13 +27217,17 @@ def _apply_trace_plan(p: Dict[str, Any]) -> Dict[str, Any]:
         rec["status"] = "applied" if ok else "failed"
         (applied if ok else failed).append(rec)
     summary.update({"applied": len(applied), "failed": len(failed)})
+    skipped = [r for r in public if r["status"] != "apply"]
+    report_path = _trace_report(p, plan, "apply", {"summary": summary, "applied": applied, "failed": failed, "skipped": skipped})
     return {
         "success": not failed,
         "timeline": live_name,
         "plan_source": plan.get("source"),
-        "applied": applied,
-        "failed": failed,
-        "skipped": [r for r in public if r["status"] != "apply"],
+        "report_path": report_path,
+        "applied": _trace_compact(applied, max_rows),
+        "failed": failed,  # never truncated: every failure is actionable
+        "skipped": _trace_compact(skipped, max_rows),
+        "attention": _trace_compact(attention, max_rows),
         "summary": summary,
         "grade_mode": grade_mode,
         "version_name": version_name,
@@ -27311,8 +27355,8 @@ _ACTION_HELP: Dict[str, Dict[str, Dict[str, Any]]] = {
         },
         "apply_trace_plan": {
             "summary": "Apply a color_trace plan (advanced server) to the CURRENT timeline: one ApplyGradeFromDRX per resolved clip. REPLACES those graphs; gated by confirm_token; timeline archived first.",
-            "params": "plan_path: str (planPath from color_trace plan with emitDir) | plan: dict, dry_run?, min_confidence? (default 0.8), start_tolerance? (frames, default 0), grade_mode? (0=no keyframes, 1=source TC aligned, 2=start aligned), version_name? (AddVersion per clip before applying), require_temp_path? (default True), allow_timeline_mismatch?, confirm_token?",
-            "returns": "{success, timeline, applied: [...], failed: [...], skipped: [...], summary: {plan_matches, would_apply, applied, failed, skipped_by_reason, ambiguous_in_plan}}; dry_run → {resolution: [{target, source, method, confidence, status, reason, live}]}",
+            "params": "plan_path: str (planPath from color_trace plan with emitDir) | plan: dict, dry_run?, min_confidence? (default 0.8), start_tolerance? (frames, default 0), grade_mode? (0=no keyframes, 1=source TC aligned, 2=start aligned), version_name? (AddVersion per clip before applying), require_temp_path? (default True), allow_timeline_mismatch?, max_rows? (default 40; verbose=True returns every row), report_path? (default <plan dir>/dry-run-report.json | apply-report.json), confirm_token?",
+            "returns": "{success, timeline, report_path, summary: {plan_matches, would_apply, applied, failed, skipped_by_reason, ambiguous_in_plan}, attention: {count, truncated, rows}, applied: {count, truncated, rows}, failed: [...] (never truncated), skipped: {count, truncated, rows}}; dry_run → {resolution: {count, truncated, rows: [{target, source, method, confidence, status, reason, live}]}}",
             "example": (
                 '# 1. advanced server (no Resolve needed):\n'
                 '#    color_trace(action="plan", {sourceProjectName: "SHOW_v07", sourceTimeline: "REEL_01 v07",\n'
@@ -28147,13 +28191,15 @@ def timeline_item_color(action: str, params: Optional[Dict[str, Any]] = None) ->
       safe_apply_drx(path, source?, grade_mode?, require_temp_path?) -> {success}
         REPLACES the target graph. Captures a version snapshot first; require_temp_path defaults True.
         # example: action_help(name='<action_name>')
-      apply_trace_plan(plan_path|plan, dry_run?, min_confidence?=0.8, start_tolerance?=0, grade_mode?=0, version_name?, require_temp_path?=True, allow_timeline_mismatch?, confirm_token?) -> {success, applied, failed, skipped, summary}
+      apply_trace_plan(plan_path|plan, dry_run?, min_confidence?=0.8, start_tolerance?=0, grade_mode?=0, version_name?, require_temp_path?=True, allow_timeline_mismatch?, max_rows?=40, verbose?, report_path?, confirm_token?) -> {success, applied, failed, skipped, attention, summary, report_path}
         The live half of the advanced server's color_trace (a ColorTrace that matches on media
         identity, cross-project, from the project DB). Resolves each plan entry to a clip on the
         CURRENT timeline by (name, record start, duration), then ApplyGradeFromDRX per clip —
         one confirm_token for the batch, timeline archived first. dry_run returns the resolution
         table without a token. version_name adds a new local version per clip before applying so
         the previous grade stays intact. Never guesses: unresolved entries are reported, not applied.
+        The full per-clip tables go to report_path (default: next to the plan); the response carries
+        the summary, `attention` (ties, partial overlaps, non-bulk skips) and the first max_rows rows.
         # example: action_help(name='<action_name>')
       safe_export_lut(type?, path, require_temp_path?) -> {success, path, size}
         Sandboxed LUT export.

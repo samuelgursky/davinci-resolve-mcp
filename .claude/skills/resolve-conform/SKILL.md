@@ -100,7 +100,10 @@ renames, reorders, retimes and stringouts. The MCP path is two calls:
 
 1. **Advanced server, no Resolve needed** — `color_trace plan` with
    `sourceProjectName`/`sourceTimeline` (graded) and `targetProjectName`/`targetTimeline`
-   (the new cut), plus `emitDir` under the system temp dir. It matches on media
+   (the new cut), plus `emitDir` under the system temp dir. Projects in a **Postgres /
+   network / cloud library** have no `Project.db` to open: export each with
+   `project_manager safe_project_export` (`allow_non_mcp_name: true`, works without
+   loading the project) and pass `sourceDrp` / `targetDrp` instead. It matches on media
    identity (pool id / file path / reel / file name + source-range overlap — a
    stringout's graded sections resolve by overlap) and only falls back to names.
    Read `summary.byMethod`, `ambiguous`, and each match's `confidence`; it writes a

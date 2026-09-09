@@ -126,14 +126,20 @@ class ApplyTracePlanTest(unittest.TestCase):
         out = compound._apply_trace_plan({"plan_path": path, "dry_run": True})
         self.assertTrue(out["success"])
         self.assertTrue(out["dry_run"])
-        statuses = [(r["status"], r["reason"]) for r in out["resolution"]]
+        self.assertTrue(os.path.isfile(out["report_path"]))
+        self.assertEqual(os.path.dirname(out["report_path"]), self.tmp)
+        self.assertFalse(out["resolution"]["truncated"])
+        statuses = [(r["status"], r["reason"]) for r in out["resolution"]["rows"]]
         self.assertEqual(statuses, [
             ("apply", None), ("apply", None),
             ("skip", "live_item_not_found"), ("skip", "below_min_confidence"),
             ("skip", "drx_missing"), ("skip", "no-source-grade"), ("skip", "unmatched"),
         ])
-        self.assertEqual(out["resolution"][1]["live"]["id"], "b")
+        self.assertEqual(out["resolution"]["rows"][1]["live"]["id"], "b")
         self.assertEqual(out["summary"]["would_apply"], 2)
+        # attention = non-bulk skips; unmatched / no-source-grade are bulk noise
+        self.assertEqual(sorted(r["reason"] for r in out["attention"]["rows"]),
+                         ["below_min_confidence", "drx_missing", "live_item_not_found"])
         self.assertEqual(out["summary"]["skipped_by_reason"]["live_item_not_found"], 1)
         self.assertEqual(self.a.graph.calls, [])  # nothing mutated
 
@@ -142,7 +148,7 @@ class ApplyTracePlanTest(unittest.TestCase):
         compound._get_tl = lambda: (object(), self.tl, None)
         path = self._plan([_match(0, "SHOT_B", 86448, 24, self.drx_b)])
         out = compound._apply_trace_plan({"plan_path": path, "dry_run": True})
-        row = out["resolution"][0]
+        row = out["resolution"]["rows"][0]
         self.assertEqual(row["reason"], "ambiguous_live_item")
         self.assertEqual(len(row["live_candidates"]), 2)
 
@@ -151,7 +157,7 @@ class ApplyTracePlanTest(unittest.TestCase):
         path = self._plan([_match(0, "SHOT_A", 86400, 48, outside)])
         # file need not exist for the temp check to be the reason only if it exists; create-less path → drx_missing
         out = compound._apply_trace_plan({"plan_path": path, "dry_run": True})
-        self.assertEqual(out["resolution"][0]["reason"], "drx_missing")
+        self.assertEqual(out["resolution"]["rows"][0]["reason"], "drx_missing")
 
     def test_token_then_apply_with_version(self):
         path = self._plan([_match(0, "SHOT_A", 86400, 48, self.drx_a), _match(1, "SHOT_B", 86448, 24, self.drx_b)])
@@ -162,7 +168,12 @@ class ApplyTracePlanTest(unittest.TestCase):
         self.assertEqual(self.a.graph.calls, [])
         second = compound._apply_trace_plan({**params, "confirm_token": first["confirm_token"]})
         self.assertTrue(second["success"], second)
-        self.assertEqual(len(second["applied"]), 2)
+        self.assertEqual(second["applied"]["count"], 2)
+        self.assertEqual(len(second["applied"]["rows"]), 2)
+        self.assertTrue(os.path.isfile(second["report_path"]))
+        with open(second["report_path"], encoding="utf-8") as fh:
+            report = json.load(fh)
+        self.assertEqual(len(report["applied"]), 2)
         self.assertEqual(self.a.graph.calls, [(self.drx_a, 0)])
         self.assertEqual(self.b.graph.calls, [(self.drx_b, 0)])
         self.assertEqual(self.b2.graph.calls, [])
@@ -175,7 +186,7 @@ class ApplyTracePlanTest(unittest.TestCase):
         compound._confirm_token_required = lambda: False
         out = compound._apply_trace_plan({"plan_path": path})
         self.assertFalse(out["success"])
-        self.assertEqual(len(out["applied"]), 1)
+        self.assertEqual(out["applied"]["count"], 1)
         self.assertEqual(out["failed"][0]["target"]["name"], "SHOT_B")
         self.assertIn("returned False", out["failed"][0]["error"])
 
@@ -186,13 +197,25 @@ class ApplyTracePlanTest(unittest.TestCase):
         self.assertEqual(out["applied"], [])
         self.assertIn("nothing to apply", out["note"])
 
+    def test_max_rows_truncates_lists_but_never_failed(self):
+        path = self._plan([_match(i, "SHOT_C", 90000 + i, 10, self.drx_a) for i in range(5)])
+        out = compound._apply_trace_plan({"plan_path": path, "dry_run": True, "max_rows": 2})
+        self.assertEqual(out["resolution"]["count"], 5)
+        self.assertTrue(out["resolution"]["truncated"])
+        self.assertEqual(len(out["resolution"]["rows"]), 2)
+        with open(out["report_path"], encoding="utf-8") as fh:
+            self.assertEqual(len(json.load(fh)["resolution"]), 5)
+        full = compound._apply_trace_plan({"plan_path": path, "dry_run": True, "max_rows": 2, "verbose": True})
+        self.assertFalse(full["resolution"]["truncated"])
+        self.assertEqual(len(full["resolution"]["rows"]), 5)
+
     def test_dispatch_does_not_need_an_item(self):
         # Empty timeline: _get_item would fail; apply_trace_plan is timeline-scoped.
         compound._get_tl = lambda: (object(), _TimelineStub("REEL_01 v08", {}), None)
         path = self._plan([_match(0, "SHOT_A", 86400, 48, self.drx_a)])
         out = compound.timeline_item_color("apply_trace_plan", {"plan_path": path, "dry_run": True})
         self.assertTrue(out.get("success"), out)
-        self.assertEqual(out["resolution"][0]["reason"], "live_item_not_found")
+        self.assertEqual(out["resolution"]["rows"][0]["reason"], "live_item_not_found")
 
 
 if __name__ == "__main__":

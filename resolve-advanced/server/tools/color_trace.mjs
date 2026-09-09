@@ -32,12 +32,28 @@ import crypto from 'node:crypto';
 import { z } from 'zod';
 import { resolveDbPath } from '../db-patch.mjs';
 import { readTimelineClips } from './project_read.mjs';
+import { readTimelineClipsFromDrp } from '../drp-timeline-clips.mjs';
 
 const side = (name) => ({
   [`${name}ProjectDb`]: z.string().optional(),
   [`${name}ProjectName`]: z.string().optional(),
+  [`${name}Drp`]: z
+    .string()
+    .optional()
+    .describe(
+      `An exported .drp of the ${name} project (ProjectManager.ExportProject / project_manager safe_project_export). The DB-agnostic route: use it when the project lives in a Postgres / network / cloud library that has no Project.db to open.`,
+    ),
   [`${name}Timeline`]: z.string(),
 });
+
+/** One side of the plan: a .drp when given, else a Project.db (path or name). */
+function sideClips(p, name, includeGrade) {
+  const drp = p[`${name}Drp`];
+  const timeline = p[`${name}Timeline`];
+  if (drp) return { origin: { drp, timeline }, clips: readTimelineClipsFromDrp(drp, timeline, 'video', includeGrade) };
+  const db = resolveDbPath({ projectDb: p[`${name}ProjectDb`], projectName: p[`${name}ProjectName`] });
+  return { origin: { projectDb: db, timeline }, clips: readTimelineClips(db, timeline, 'video', includeGrade) };
+}
 const planSchema = z.object({
   ...side('source'),
   ...side('target'),
@@ -274,14 +290,14 @@ const clipRef = (c) => ({
 export const colorTraceTool = {
   name: 'color_trace',
   description:
-    'Better ColorTrace — match clips between a SOURCE and TARGET timeline (cross-project, from Project.db, read-only, no Resolve) on media identity (pool id / file path / reel / file name + source-range overlap), names last → a trace plan with a lossless .drx per graded match and a plan.json for timeline_item_color.apply_trace_plan on the live server. Action: plan.',
+    'Better ColorTrace — match clips between a SOURCE and TARGET timeline (cross-project, from Project.db OR an exported .drp — the .drp route covers Postgres/network/cloud libraries — read-only, no Resolve) on media identity (pool id / file path / reel / file name + source-range overlap), names last → a trace plan with a lossless .drx per graded match and a plan.json for timeline_item_color.apply_trace_plan on the live server. Action: plan.',
   async handler({ action, args }) {
     if (action === 'plan') {
       const p = planSchema.parse(args);
-      const srcDb = resolveDbPath({ projectDb: p.sourceProjectDb, projectName: p.sourceProjectName });
-      const tgtDb = resolveDbPath({ projectDb: p.targetProjectDb, projectName: p.targetProjectName });
-      const srcClips = readTimelineClips(srcDb, p.sourceTimeline, 'video', true); // includeGrade
-      const tgtClips = readTimelineClips(tgtDb, p.targetTimeline, 'video');
+      const src = sideClips(p, 'source', true); // includeGrade
+      const tgt = sideClips(p, 'target', false);
+      const srcClips = src.clips;
+      const tgtClips = tgt.clips;
       if (!srcClips.length) throw new Error(`source timeline "${p.sourceTimeline}" has no video clips`);
       if (!tgtClips.length) throw new Error(`target timeline "${p.targetTimeline}" has no video clips`);
       if (p.emitDir) fs.mkdirSync(p.emitDir, { recursive: true });
@@ -330,8 +346,8 @@ export const colorTraceTool = {
       });
       const matched = matches.filter((m) => m.source).length;
       const result = {
-        source: { projectDb: srcDb, timeline: p.sourceTimeline, clips: srcClips.length, graded: srcClips.filter((c) => c.gradeBody).length },
-        target: { projectDb: tgtDb, timeline: p.targetTimeline, clips: tgtClips.length },
+        source: { ...src.origin, clips: srcClips.length, graded: srcClips.filter((c) => c.gradeBody).length },
+        target: { ...tgt.origin, clips: tgtClips.length },
         summary: { matched, unmatched: tgtClips.length - matched, gradesReady, ambiguous, belowThreshold, byMethod },
         emitDir: p.emitDir || null,
         planPath: null,

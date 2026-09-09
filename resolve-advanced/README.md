@@ -86,9 +86,13 @@ Each dispatches on an `action`. Highlights:
   timeline (any two projects, from `Project.db`, read-only, no Resolve) on **media identity** —
   pool item id / file path / reel / file name plus source-range overlap, so a stringout cut into
   graded sections, a renamed clip, or relinked media still traces; clip names are the last resort.
-  Emits one lossless `.drx` per graded match plus a `plan.json`; the live server's
+  Either side is a `Project.db` (`…ProjectDb` / `…ProjectName`) **or an exported `.drp`**
+  (`sourceDrp` / `targetDrp`) — the `.drp` route is how a Postgres / network / cloud library
+  is read, since `ProjectManager.ExportProject` works on any project by name without loading
+  it. Emits one lossless `.drx` per graded match plus a `plan.json`; the live server's
   `timeline_item_color.apply_trace_plan` applies it (dry-run resolution table, one
-  confirm_token for the batch, timeline archived first).
+  confirm_token for the batch, timeline archived first, full per-clip report to a file).
+  Live-validated 2026-09-08: 878-clip conform, 254 grades carried, 0 failures.
 - **`project_read` / `project_db`** — read/patch the Resolve project DB (SQLite or Postgres).
   Includes `list_subtitle_styles` / `set_subtitle_style` — caption font family/size/weight/italic
   and normalised position, which the scripting API cannot touch at all. Whole-track (not

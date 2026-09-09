@@ -139,7 +139,8 @@ files and the project DB.
   compared clear of its transition windows, and Resolve's own FCP7 export
   ingests with its `-1` edges resolved and its missing ticks tolerated).
 - **`color_trace`** — cross-project clip matching on media identity (pool id /
-  file path / reel / file name + source-range overlap; names last) → a trace
+  file path / reel / file name + source-range overlap; names last), from a
+  `Project.db` or an exported `.drp` (the Postgres/network-library route) → a trace
   plan with a lossless `.drx` per graded match and a `plan.json`. The live half
   is `timeline_item_color.apply_trace_plan` (dry-run resolution table → one
   confirm_token → ApplyGradeFromDRX per resolved clip, timeline archived first).

@@ -2,6 +2,55 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.214.0 — color_trace reads exported .drp files, and the trace is live-validated
+
+### Added
+
+- **`color_trace plan` takes `sourceDrp` / `targetDrp`.** The v2.213.0 matcher
+  read both timelines from `Project.db`, which a Postgres, network or cloud
+  library does not have. `ProjectManager.ExportProject` works on any project by
+  name without loading it, and the `.drp` it writes carries every field the
+  matcher keys on — name, record start, duration, in-point, media path, reel,
+  media ref, and the active grade version's body inline — so either side of a
+  plan can now be an exported `.drp`. The reader
+  (`resolve-advanced/server/drp-timeline-clips.mjs`) resolves a timeline name
+  through `MediaPool/**/MpFolder.xml` to its sequence id and reads the
+  `SeqContainer/<uuid>.xml` whose tracks reference it; it returns the same row
+  shape as the DB reader, active-version-first.
+- **`apply_trace_plan` writes its full report to a file.** A real conform is
+  800+ plan rows, and the first live run's per-clip tables (290k characters)
+  blew past what a tool response can carry. The full tables now go to
+  `report_path` (default `dry-run-report.json` / `apply-report.json` next to
+  the plan); the response keeps the summary, an `attention` list (ties,
+  partial overlaps, every skip that is not bulk `unmatched` /
+  `no-source-grade`) and the first `max_rows` rows (default 40, `verbose:
+  true` for everything). `failed` is never truncated.
+
+### Live-validated (Resolve Studio 19.1.3.7, Postgres library)
+
+- Source: a 659-clip picture-lock turnover with 263 graded clips. Target: an
+  878-clip conform of the next version, media on a different volume, reels
+  mostly empty, clip names carrying an extension the source names lack.
+- Plan: 613 matched (583 by file name + source-range overlap, 3 by reel, 27 by
+  name only), 265 unmatched (reference masters, offline screeners, clips not
+  in the source), 266 with a grade to carry. The 12 name-only matches sat
+  below the default 0.8 gate and were skipped.
+- Apply: 254 of 254 resolved clips graded, 0 failures, timeline archived as
+  `_archived_v01` first, a local version `traced V07 Sizing` added per clip.
+  Six sampled clips read back with exactly the node count their `.drx`
+  decodes to (9, 9, 8, 9, 5, 1) and the source's tools (Reduce Noise, a film
+  LUT, Halation, Glow, HDR wheels, hue curves).
+- Reported for review, not hidden: 70 applied clips span more source range
+  than the graded section they matched (lowest overlap 14 percent), 2 applied
+  on a tie between identical candidates.
+
+### Notes
+
+- Reading the Postgres library directly was not attempted: Resolve keeps the
+  connection password in plain text in `dblist.conf`, and the `.drp` route
+  needs no credential at all. `resolve-advanced/README.md` still says
+  `project_read` handles "SQLite or Postgres"; only SQLite is implemented.
+
 ## What's New in v2.213.3 — the capture docstring says what is restored and what is only reset
 
 ### Documentation
