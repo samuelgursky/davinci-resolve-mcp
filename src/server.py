@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 375-tool granular server instead
 """
 
-VERSION = "2.221.0"
+VERSION = "2.222.0"
 
 import base64
 import os

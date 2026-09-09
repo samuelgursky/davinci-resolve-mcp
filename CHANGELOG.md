@@ -2,6 +2,48 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.222.0 — native Resolve 21.1 timecode and waveform alignment
+
+Contributed by @legionsound (#212), live-validated on Studio 21.1.0.14.
+
+### Added
+
+- **`timeline auto_align_clips`**, with the granular twin
+  `auto_align_timeline_clips`, calling native 21.1 `AutoAlignClips` on explicit
+  timeline item IDs, with the documented `SyncUsing` and `UseTrack` options
+  accepting either constant names or integral native values. Every ID resolves
+  before anything moves, order is preserved, malformed input is refused, and a
+  native `false` stays `false`. Tool count 374 → 375.
+- **The wrapper does not silently expand the selection.** On the measured
+  build, waveform alignment refused a video-only selection, and an audio-only
+  selection aligned the audio while leaving its linked video at the old
+  position. Rather than quietly adding the linked items — which would move
+  clips the caller never named — the tool documentation tells callers to
+  include both sides of a linked pair, and an incomplete selection gets an
+  honest refusal it can act on.
+
+### Validation
+
+- Full suite green: 3,465 passed, 1 skipped. `timeline.auto_align_clips`
+  probed directly: MEDIUM / destructive / recognised, and present in the
+  destructive registry.
+- Live evidence is @legionsound's on Studio 21.1.0.14, and the two modes carry
+  **different strengths of evidence**, kept distinct rather than averaged:
+  timecode alignment is a position result (sources one second apart, starts
+  0/48 moving to 0/24), while waveform/MIX was verified against rendered
+  output — identical speech starts 0/24 moving to 0/0, with complete decoded
+  video **and PCM audio** matching independently positioned manual reference
+  timelines exactly, for both wrappers. Not reproduced here; this machine is
+  Studio 19.1.3.7, below the 21.1 floor.
+- **Not claimed**: other microphones, drift, variable frame rates, other track
+  selections and long recordings. Smart Switch remains separate and unstarted.
+
+### Changed
+
+- Adapted on merge, as with #213 and #214: counts resolved to **375**,
+  confirmed by the agent-rule generator, generated files regenerated rather
+  than hand-merged. No behaviour changed in the adaptation.
+
 ## What's New in v2.221.0 — native Resolve 21.1 audio level normalization
 
 Contributed by @legionsound (#214), live-validated on Studio 21.1.0.14.
