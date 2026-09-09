@@ -130,6 +130,7 @@ def install() -> bool:
     server.resolve_is_running = offline_resolve_is_running
 
     _redirect_security_audit_log()
+    _redirect_operation_log()
     _redirect_media_analysis_preferences()
 
     setattr(server, _INSTALLED_FLAG, True)
@@ -175,6 +176,29 @@ def _redirect_security_audit_log() -> None:
         return handle.name
 
     destructive_hook._audit_log_path = audit_log_path_offline
+
+
+def _redirect_operation_log() -> None:
+    """Send synthetic mutating-operation records to a temp file during tests."""
+    try:
+        from src.utils import operation_log
+    except Exception:
+        return
+
+    original = operation_log.operation_log_path
+    _originals["operation_log_path"] = original
+    handle = tempfile.NamedTemporaryFile(
+        prefix="operation-log-test-", suffix=".jsonl", delete=False
+    )
+    handle.close()
+    _originals["operation_log_tempfile"] = handle.name
+
+    def operation_log_path_offline() -> str:
+        if operation_log._read_preference("destructive.operation_log_path", None):
+            return original()
+        return handle.name
+
+    operation_log.operation_log_path = operation_log_path_offline
 
 
 def _redirect_media_analysis_preferences() -> None:
@@ -233,6 +257,23 @@ def _restore_security_audit_log() -> None:
             pass
 
 
+def _restore_operation_log() -> None:
+    if "operation_log_path" not in _originals:
+        return
+    try:
+        from src.utils import operation_log
+
+        operation_log.operation_log_path = _originals.pop("operation_log_path")
+    except Exception:
+        _originals.pop("operation_log_path", None)
+    path = _originals.pop("operation_log_tempfile", None)
+    if path and os.path.exists(path):
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
 def uninstall() -> None:
     """Restore the originals. Safe to call when nothing was installed."""
     server = _import_server()
@@ -245,6 +286,7 @@ def uninstall() -> None:
     server.get_resolve = _originals["get_resolve"]
     server.resolve_is_running = _originals["resolve_is_running"]
     _restore_security_audit_log()
+    _restore_operation_log()
     _restore_media_analysis_preferences()
     setattr(server, _INSTALLED_FLAG, False)
 

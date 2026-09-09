@@ -24,6 +24,8 @@ import threading
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
+from src.utils import operation_log
+
 logger = logging.getLogger("resolve-mcp.execution-lifecycle")
 
 
@@ -542,6 +544,45 @@ class ProvenanceTraceHook(LifecycleHook):
         }
 
 
+class OperationLogHook(LifecycleHook):
+    """Writes a compact append-only record for each mutating operation."""
+    name = "operation_log"
+
+    def after_tool_call(
+        self, ctx: ToolCallContext, result: Any, duration_ms: int
+    ) -> Optional[Dict[str, Any]]:
+        if not ctx.risk.destructive:
+            return None
+        record = operation_log.build_record(
+            tool_name=ctx.tool_name,
+            action=ctx.action,
+            params=ctx.params,
+            result=result,
+            risk=ctx.risk.to_dict(),
+        )
+        operation_log.write_record(record)
+        return {
+            "logged": operation_log.operation_log_enabled(),
+            "operation_id": record["operation_id"],
+            "path": operation_log.operation_log_path(),
+        }
+
+    def on_error(
+        self, ctx: ToolCallContext, exc: Exception, duration_ms: int
+    ) -> None:
+        if not ctx.risk.destructive:
+            return
+        record = operation_log.build_exception_record(
+            tool_name=ctx.tool_name,
+            action=ctx.action,
+            params=ctx.params,
+            exc=exc,
+            risk=ctx.risk.to_dict(),
+            duration_ms=duration_ms,
+        )
+        operation_log.write_record(record)
+
+
 # ─── Pipeline Coordinator ───────────────────────────────────────────────────
 
 
@@ -577,6 +618,7 @@ class LifecyclePipeline:
         self._hooks.append(ReadbackVerificationHook())
         self._hooks.append(DriftDetectionHook())
         self._hooks.append(ProvenanceTraceHook())
+        self._hooks.append(OperationLogHook())
 
     def register_hook(self, hook: LifecycleHook) -> None:
         with self._lock:
@@ -711,4 +753,3 @@ def classify_operation_risk(
     tool_name: str, action: str, params: Optional[Dict[str, Any]] = None
 ) -> RiskAssessment:
     return RiskClassificationHook.classify(tool_name, action, params or {})
-

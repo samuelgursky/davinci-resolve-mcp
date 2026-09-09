@@ -61,6 +61,7 @@ from src.utils.page_lock import (
 from src.utils.proc import safe_run
 from src.utils.readback import verify_by_readback, verification_stats as _verification_stats
 from src.utils import operation_result as _operation_result
+from src.utils import operation_log as _operation_log
 from src.utils.operation_result import (
     build_operation_envelope as _build_operation_envelope,
     get_envelope_mode as _get_envelope_mode,
@@ -1289,6 +1290,7 @@ def _destructive_preference_provider(key: str) -> Any:
 
 
 _destructive_hook.register_preference_provider(_destructive_preference_provider)
+_operation_log.register_preference_provider(_destructive_preference_provider)
 
 
 # Gated (tool, action) pairs routed through the destructive_hook wrapper that
@@ -15560,6 +15562,8 @@ def _setup_destructive_defaults() -> Dict[str, Any]:
         "safe_mode": _setup_bool(destructive.get("safe_mode"), False),
         "audit_log": _setup_bool(destructive.get("audit_log"), True),
         "audit_log_path": destructive.get("audit_log_path") or os.path.join(project_dir, "logs", "security-audit.jsonl"),
+        "operation_log": _setup_bool(destructive.get("operation_log"), True),
+        "operation_log_path": destructive.get("operation_log_path") or os.path.join(project_dir, "logs", "operation-log.jsonl"),
         "preferences_path": _media_analysis_preferences_path(),
     }
 
@@ -15579,6 +15583,10 @@ def _setup_set_destructive_defaults(destructive_defaults: Dict[str, Any], dry_ru
         "auditlog": "audit_log",
         "audit_log_path": "audit_log_path",
         "auditlogpath": "audit_log_path",
+        "operation_log": "operation_log",
+        "operationlog": "operation_log",
+        "operation_log_path": "operation_log_path",
+        "operationlogpath": "operation_log_path",
     }
     requested: Dict[str, Any] = {}
     for key, value in destructive_defaults.items():
@@ -15607,11 +15615,11 @@ def _setup_set_destructive_defaults(destructive_defaults: Dict[str, Any], dry_ru
         if clear_requested(raw_value):
             destructive.pop(key, None)
             updates[key] = {"before": before.get(key), "after": _setup_destructive_defaults().get(key), "cleared": True}
-        elif key in {"require_confirm_token", "safe_mode", "audit_log"}:
+        elif key in {"require_confirm_token", "safe_mode", "audit_log", "operation_log"}:
             normalized = _setup_bool(raw_value, before.get(key, False))
             destructive[key] = normalized
             updates[key] = {"before": before.get(key), "after": normalized}
-        elif key == "audit_log_path":
+        elif key in {"audit_log_path", "operation_log_path"}:
             path = os.path.realpath(os.path.abspath(os.path.expanduser(str(raw_value))))
             destructive[key] = path
             updates[key] = {"before": before.get(key), "after": path}
@@ -16162,6 +16170,8 @@ def _setup_clear_defaults(keys: Any, dry_run: bool) -> Dict[str, Any]:
         "safe_mode": "destructive.safe_mode",
         "audit_log": "destructive.audit_log",
         "audit_log_path": "destructive.audit_log_path",
+        "operation_log": "destructive.operation_log",
+        "operation_log_path": "destructive.operation_log_path",
     }
     destructive_payload: Dict[str, Any] = {}
     if clear_all or "destructive" in normalized_keys:
@@ -16327,6 +16337,16 @@ def setup(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any
                     "values": "absolute or expandable path",
                     "storage": _media_analysis_preferences_path(),
                 },
+                "destructive.operation_log": {
+                    "description": "Write compact JSONL records for every recognised mutating operation.",
+                    "values": [True, False],
+                    "storage": _media_analysis_preferences_path(),
+                },
+                "destructive.operation_log_path": {
+                    "description": "Absolute path for the mutating-operation JSONL log.",
+                    "values": "absolute or expandable path",
+                    "storage": _media_analysis_preferences_path(),
+                },
             },
         }
 
@@ -16441,6 +16461,22 @@ def setup(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any
                     default=None,
                 )
             } if any(key in merged for key in ("audit_log_path", "auditLogPath")) else {}),
+            **({
+                "operation_log": _first_param(
+                    merged,
+                    "operation_log",
+                    "operationLog",
+                    default=None,
+                )
+            } if any(key in merged for key in ("operation_log", "operationLog")) else {}),
+            **({
+                "operation_log_path": _first_param(
+                    merged,
+                    "operation_log_path",
+                    "operationLogPath",
+                    default=None,
+                )
+            } if any(key in merged for key in ("operation_log_path", "operationLogPath")) else {}),
         }
 
         general_result = _setup_set_general_defaults(general_defaults, dry_run)
