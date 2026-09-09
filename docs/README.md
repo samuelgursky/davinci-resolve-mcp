@@ -22,6 +22,8 @@ ignored scratch folders such as `docs/_scratch/`.
   correction guidance and Resolve color API boundaries.
 - [Resolve Scripting API Reference](reference/resolve_scripting_api.txt) — bundled
   Resolve scripting API text used for parity checks.
+- [Resolve 21.1 Typed API](reference/resolve-211-typed-api.md) — vendor stub,
+  scripting changelog, provenance and an executable-reference inventory.
 - [Contributing and Project Layout](contributing.md) — contribution workflow,
   platform support, security notes, and repository structure.
 - [Release Process](process/release-process.md) — maintainer release checklist.
