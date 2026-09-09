@@ -225,6 +225,8 @@ _EVIDENCE_GATES: List[Dict[str, Any]] = [
 # disagree, which is what keeps the two from drifting apart again.
 
 CODE_FLOORS: Dict[str, str] = {
+    "TimelineItem.SetSpeed": "21.1",
+    "TimelineItem.SetFades": "21.1",
     # Documented in the shipped 21.1 scripting CHANGELOG; read-only contributor
     # validation on Studio 21.1.0.14. No claim of a live older-build bisect.
     "Resolve.GetKeyboardPresetList": "21.1",
