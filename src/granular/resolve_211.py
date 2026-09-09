@@ -1,5 +1,7 @@
 """Native Resolve 21.1 discovery and editing controls."""
 from src.utils.resolve211_multicam import create_multicam, resolve_constant, GRADES
+
+from src.utils.resolve211_normalization import normalize_audio
 from src.utils.resolve211_edits import validate_edit_options, validate_transition_options, transition_result
 from src.granular.common import (
     mcp, READ_ONLY_TOOL, WRITE_TOOL, DESTRUCTIVE_TOOL, get_resolve, get_current_project,
@@ -229,3 +231,15 @@ def flatten_timeline_item_multicam(grade_option: str = "FLATTEN_MULTICAM_COPY_GR
     if error:
         return {"error": error}
     return {"success": bool(item.FlattenMulticam(grade))}
+
+
+@mcp.tool(annotations=DESTRUCTIVE_TOOL)
+def normalize_timeline_audio_level(item_ids: list[str], options: dict | None = None) -> dict:
+    """Native 21.1 normalization of explicit audio timeline item IDs. Options normalizationMode, targetLevel (dBFS), targetLoudness (LKFS), setLevelMode; use get_normalize_audio_modes for names."""
+    _, timeline, error = _get_timeline()
+    if error:
+        return error
+    missing = _requires_method(timeline, "NormalizeAudioLevel", "21.1")
+    if missing:
+        return missing
+    return normalize_audio(get_resolve(), timeline, item_ids, {} if options is None else options)

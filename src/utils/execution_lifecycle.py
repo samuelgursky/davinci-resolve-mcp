@@ -276,6 +276,8 @@ class RiskClassificationHook(LifecycleHook):
         # how the clip's edges render. Existing content altered, not deleted.
         ("media_pool", "create_multicam_clip"),
         ("timeline_item", "flatten_multicam"),
+
+        ("timeline", "normalize_audio_level"),
         ("timeline_item", "add_transition"),
         ("timeline_item", "set_speed"),
         ("timeline_item", "set_fades"),

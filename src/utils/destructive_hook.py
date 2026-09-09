@@ -87,6 +87,7 @@ DESTRUCTIVE_ACTIONS_BY_TOOL: Dict[str, FrozenSet[str]] = {
         "execute_swap",
     }),
     "timeline": frozenset({
+        "normalize_audio_level",
         "delete_clips",
         "move_clips",
         "duplicate_clips",
