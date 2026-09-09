@@ -12,7 +12,7 @@ that none exists).
 
 **Verified on:** DaVinci Resolve Studio 21.0.2
 
-**Totals:** 41 missing capabilities, 51 bugs / unreliable behaviors.
+**Totals:** 41 missing capabilities, 52 bugs / unreliable behaviors.
 
 The authoritative source is the runtime-queryable `api_truth` ledger
 (`resolve_control api_truth "<query>"`); this document is generated from
@@ -760,3 +760,11 @@ values, or automation-hostile modal prompts.
 - **Behavior:** On Studio 19.1.3.7 the subtitle-delivery keys documented in the Resolve 21 API reference are accepted and fully inert: SetRenderSettings returns True for all three SubtitleFormat modes ('BurnIn', 'SeparateFile', 'EmbeddedCaptions'), and the renders carry no burned-in pixels (frame-extract verified), no sidecar subtitle file, and no embedded caption track (stream-probe verified) — with the subtitle cues readback-verified on the timeline and the subtitle track enabled. Quirk: ExportSubtitle alone returns False; the pair returns True. All three outputs are stream-identical to a no-subtitle render.
 - **Workaround / current handling:** Do not trust a True return for subtitle delivery on a pre-21 host — verify the output (extract a frame for burn-in, list the target directory for a sidecar, ffprobe streams for embedded captions). On 19.x subtitle export requires the UI render page. render.set_settings warns when these keys are set on a pre-21 host.
 - **Tags:** render, subtitle, burn-in, silent-failure, version-gated
+
+### Resolve.ValidateDCTL is sensitive to source layout
+
+- **Object:** `Resolve`
+- **Signature:** `(dctlSource) -> str | None  (21.1+)`
+- **Behavior:** Reported by @legionsound (issue #207) from Studio 21.1.0.14 on macOS; NOT reproduced here (no 21.1 install). The documented success result is None. A minimal identity transform written across several lines — `__DEVICE__ float3 transform(...)` with the body on its own lines — validates (None). The SAME function collapsed onto one line consistently returns 'DCTL Error: main DCTL function does not have return value.', which is false: the return statement is there. A genuinely invalid source returns 'cannot find main DCTL function.', so the validator does distinguish; it is the single-line layout it misreads. An earlier multi-line timeout did not reproduce after a Resolve restart with a 30-second limit. Nothing establishes a GPU compiler or render defect — this is the validator's parse, not the DCTL's execution. EncryptDCTL untested.
+- **Workaround / current handling:** Any wrapper around ValidateDCTL must pass the native diagnostic through verbatim and must not reflow or rewrite the user's source to dodge it; ship the multi-line identity fixture as the known-good control. A 'no return value' error on a one-line function is this quirk, not a missing return — re-run the validation with the function laid out across lines before believing it. This server's own `dctl validate` is a static, offline check (entry point, brace balance, float suffixes) and does not call ValidateDCTL at all.
+- **Tags:** dctl, validation, unreliable-return, version-gated, reported

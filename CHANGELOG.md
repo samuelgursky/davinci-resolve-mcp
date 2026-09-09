@@ -2,6 +2,30 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.216.1 — ValidateDCTL's layout sensitivity is in the API ledger
+
+### Documentation
+
+- **`Resolve.ValidateDCTL` (21.1+) misreads a one-line function.** Reported
+  by @legionsound on #207 from Studio 21.1.0.14: a minimal identity transform
+  laid out across lines validates (`None`, the documented success), while the
+  same function on a single line consistently returns "main DCTL function does
+  not have return value" — false, the return is there — and a truly invalid
+  source returns "cannot find main DCTL function", so the validator does
+  discriminate; it is the single-line layout it misparses. An earlier
+  multi-line timeout did not reproduce after a restart. Recorded as a reported
+  entry (not reproduced here, no 21.1 install) with the rule for any future
+  wrapper: pass the native diagnostic through verbatim, never reflow the
+  user's source to dodge it, and keep the multi-line identity fixture as the
+  control. This server's own `dctl validate` is a static offline check and
+  does not call `ValidateDCTL`. `docs/reference/api-limitations.md`
+  regenerated (52 bugs / unreliable behaviors).
+
+### Validation
+
+- Ledger and limitations-doc guards, full offline suite, drift guards and the
+  advanced Node suite. Documentation only; no Resolve behavior changed.
+
 ## What's New in v2.216.0 — twelve Resolve 21.1 read-only controls, in both server modes
 
 Contributed by @legionsound (#206), live-measured on Studio 21.1.0.14.

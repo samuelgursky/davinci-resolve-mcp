@@ -3207,6 +3207,37 @@ API_TRUTH: List[Dict[str, Any]] = [
         "submit": "bug",
         "mitigation": ["render.set_settings warnings"],
     },
+    {
+        "symbol": "Resolve.ValidateDCTL is sensitive to source layout",
+        "object": "Resolve",
+        "signature": "(dctlSource) -> str | None  (21.1+)",
+        "reality": "Reported by @legionsound (issue #207) from Studio 21.1.0.14 on "
+                   "macOS; NOT reproduced here (no 21.1 install). The documented "
+                   "success result is None. A minimal identity transform written "
+                   "across several lines — `__DEVICE__ float3 transform(...)` with "
+                   "the body on its own lines — validates (None). The SAME function "
+                   "collapsed onto one line consistently returns 'DCTL Error: main "
+                   "DCTL function does not have return value.', which is false: the "
+                   "return statement is there. A genuinely invalid source returns "
+                   "'cannot find main DCTL function.', so the validator does "
+                   "distinguish; it is the single-line layout it misreads. An "
+                   "earlier multi-line timeout did not reproduce after a Resolve "
+                   "restart with a 30-second limit. Nothing establishes a GPU "
+                   "compiler or render defect — this is the validator's parse, not "
+                   "the DCTL's execution. EncryptDCTL untested.",
+        "recommended": "Any wrapper around ValidateDCTL must pass the native "
+                       "diagnostic through verbatim and must not reflow or rewrite "
+                       "the user's source to dodge it; ship the multi-line identity "
+                       "fixture as the known-good control. A 'no return value' "
+                       "error on a one-line function is this quirk, not a missing "
+                       "return — re-run the validation with the function laid out "
+                       "across lines before believing it. This server's own "
+                       "`dctl validate` is a static, offline check (entry point, "
+                       "brace balance, float suffixes) and does not call "
+                       "ValidateDCTL at all.",
+        "tags": ["dctl", "validation", "unreliable-return", "version-gated", "reported"],
+        "submit": "bug",
+    },
 ]
 
 
