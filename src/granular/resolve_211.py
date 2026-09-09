@@ -1,8 +1,9 @@
 """Native Resolve 21.1 discovery and editing controls."""
+from src.utils.resolve211_multicam import create_multicam, resolve_constant, GRADES
 from src.utils.resolve211_edits import validate_edit_options, validate_transition_options, transition_result
 from src.granular.common import (
     mcp, READ_ONLY_TOOL, WRITE_TOOL, DESTRUCTIVE_TOOL, get_resolve, get_current_project,
-    _get_timeline, _get_timeline_item, _requires_method, has_method,
+    _get_timeline, _get_timeline_item, _find_clip_by_id, _requires_method, has_method,
 )
 
 
@@ -198,3 +199,33 @@ def add_timeline_item_transition(options: dict, track_type: str = "video", track
     if missing:
         return missing
     return transition_result(item.AddTransition(dict(options)))
+
+
+@mcp.tool(annotations=DESTRUCTIVE_TOOL)
+def create_multicam_clip(clip_ids: list[str], options: dict | None = None) -> dict:
+    """Create native 21.1 multicam clips. Options follow MulticamOptions; named Resolve constants or numeric values accepted. Resolves every ID before writing."""
+    _, p = get_current_project()
+    if p is None:
+        return {"error": "No project currently open"}
+    mp = p.GetMediaPool()
+    missing = _requires_method(mp, "CreateMulticamClip", "21.1")
+    if missing:
+        return missing
+    return create_multicam(get_resolve(), mp, clip_ids, {} if options is None else options, _find_clip_by_id)
+
+
+@mcp.tool(annotations=DESTRUCTIVE_TOOL)
+def flatten_timeline_item_multicam(grade_option: str = "FLATTEN_MULTICAM_COPY_GRADE", track_type: str = "video", track_index: int = 1, item_index: int = 0) -> dict:
+    """Flatten a native multicam item using COPY_GRADE or RETAIN_GRADE_FROM_ANGLE. Re-query items after replacement."""
+    if track_type not in ("video", "audio") or track_index < 1 or item_index < 0:
+        return {"error": "Use video/audio, a 1-based track index and a non-negative item index"}
+    item, error = _get_timeline_item(track_type, track_index, item_index)
+    if error:
+        return error
+    missing = _requires_method(item, "FlattenMulticam", "21.1")
+    if missing:
+        return missing
+    grade, error = resolve_constant(get_resolve(), grade_option, GRADES)
+    if error:
+        return {"error": error}
+    return {"success": bool(item.FlattenMulticam(grade))}

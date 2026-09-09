@@ -225,6 +225,8 @@ _EVIDENCE_GATES: List[Dict[str, Any]] = [
 # disagree, which is what keeps the two from drifting apart again.
 
 CODE_FLOORS: Dict[str, str] = {
+    "MediaPool.CreateMulticamClip": "21.1",
+    "TimelineItem.FlattenMulticam": "21.1",
     "TimelineItem.AddTransition": "21.1",
     "TimelineItem.SetSpeed": "21.1",
     "TimelineItem.SetFades": "21.1",

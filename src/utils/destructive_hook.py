@@ -74,6 +74,7 @@ DESTRUCTIVE_ACTIONS_BY_TOOL: Dict[str, FrozenSet[str]] = {
         "create_timeline_from_clips",
         "append_to_timeline",
         "setup_multicam_timeline",
+        "create_multicam_clip",
         "create_stereo_clip",
         "auto_sync_audio",
         "set_clip_marks",
@@ -151,6 +152,7 @@ DESTRUCTIVE_ACTIONS_BY_TOOL: Dict[str, FrozenSet[str]] = {
         # classifier did not recognise them, so safe mode, the dry-run refusal,
         # the audit log and the operation log all skipped a call that rewrites a
         # clip's speed — and, with RippleTimeline true, moves every clip after it.
+        "flatten_multicam",
         "add_transition",
         "set_speed",
         "set_fades",
