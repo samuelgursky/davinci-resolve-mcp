@@ -20,6 +20,117 @@ def _ps(stdout: str):
     return mock.Mock(returncode=0, stdout=stdout)
 
 
+def _ps_table(comm: str, args: str):
+    """A fake `ps` that answers the executable column and the argv column
+    separately, keyed by pid — the shape the real scan reads."""
+    def run(argv, **_kwargs):
+        columns = argv[-1] if argv and argv[0] == "ps" else ""
+        return mock.Mock(returncode=0, stdout=args if "args" in columns else comm)
+    return run
+
+
+class ProcessTableTests(unittest.TestCase):
+    """The scan counts an instance on its executable path OR its argv.
+
+    On 2026-09-08 `resolve_control runtime_mode` answered `running: false,
+    instances: 0` while Studio 19.1.3.7 was up at the stock path and answering
+    scripting calls in the same minute. That exact condition did not reproduce
+    afterwards (the same instance, restarted, matched), so the fix removes the
+    scan's single point of failure instead of guessing at the trigger: an
+    argv-only scan is blind whenever the kernel withholds the argument vector
+    (`ps` prints `(Resolve)`) and whenever a launch argument follows the path.
+    The executable column is readable whenever the process is.
+    """
+    EXE = "/Applications/DaVinci Resolve/DaVinci Resolve.app/Contents/MacOS/Resolve"
+    XPC = ("/Applications/DaVinci Resolve/DaVinci Resolve.app/Contents/XPCServices/"
+           "IOXPC.xpc/Contents/MacOS/IOXPC")
+
+    def test_the_stock_macos_table_is_one_gui_instance(self) -> None:
+        """The real table from the day of the report: pid 39560 at the stock path,
+        its IOXPC helper beside it, argv identical to the executable."""
+        comm = f"    1 /sbin/launchd\n39560 {self.EXE}\n39561 {self.XPC}\n"
+        args = f"    1 /sbin/launchd\n39560 {self.EXE}\n39561 {self.XPC}\n"
+        with mock.patch.object(rr.subprocess, "run", side_effect=_ps_table(comm, args)):
+            mode = rr.runtime_mode()
+        self.assertTrue(mode["running"])
+        self.assertEqual(mode["instances"], 1, "the XPC helper is not an instance")
+        self.assertIs(mode["headless"], False)
+        self.assertEqual(mode["command_lines"], [self.EXE])
+
+    def test_an_unreadable_argv_still_counts_by_executable_path(self) -> None:
+        """`ps` prints `(Resolve)` when it cannot read the argument vector. The
+        instance is real; only its mode is unknown — None, not False."""
+        comm = f"39560 {self.EXE}\n39561 {self.XPC}\n"
+        args = "39560 (Resolve)\n39561 (IOXPC)\n"
+        with mock.patch.object(rr.subprocess, "run", side_effect=_ps_table(comm, args)):
+            mode = rr.runtime_mode()
+        self.assertTrue(mode["running"])
+        self.assertEqual(mode["instances"], 1)
+        self.assertIsNone(mode["headless"], "mode cannot be read from an unreadable argv")
+        self.assertEqual(mode["command_lines"], [self.EXE])
+
+    def test_a_launch_argument_after_the_path_does_not_hide_the_instance(self) -> None:
+        """A project file handed to the binary on the command line is not a
+        flag, so the flag-stripping suffix test used to leave it attached."""
+        args = f"39560 {self.EXE} /Users/sam/Projects/Show.drp\n"
+        comm = f"39560 {self.EXE}\n"
+        with mock.patch.object(rr.subprocess, "run", side_effect=_ps_table(comm, args)):
+            mode = rr.runtime_mode()
+        self.assertTrue(mode["running"])
+        self.assertEqual(mode["instances"], 1)
+        # And the same line with only argv readable — the executable extraction
+        # itself must handle it, not just the comm fallback.
+        self.assertTrue(rr._is_resolve_command(f"{self.EXE} /Users/sam/Projects/Show.drp"))
+        self.assertTrue(rr._is_resolve_command(f"{self.EXE} /Users/sam/Projects/Show.drp -nogui"))
+        self.assertEqual(rr._executable_from_line(f"{self.EXE} /Users/sam/Projects/Show.drp"),
+                         self.EXE)
+
+    def test_a_flag_after_a_launch_argument_still_reads_as_headless(self) -> None:
+        args = f"39560 {self.EXE} /Users/sam/Projects/Show.drp -nogui\n"
+        comm = f"39560 {self.EXE}\n"
+        with mock.patch.object(rr.subprocess, "run", side_effect=_ps_table(comm, args)):
+            self.assertTrue(rr.runtime_mode()["headless"])
+
+    def test_an_unquoted_shell_line_naming_the_binary_is_still_not_an_instance(self) -> None:
+        """`/bin/sh -c /opt/resolve/bin/resolve -nogui` contains the pattern at a
+        token boundary; the flag token before it is what marks it as a shell."""
+        args = "4242 /bin/sh -c /opt/resolve/bin/resolve -nogui\n"
+        comm = "4242 /bin/sh\n"
+        with mock.patch.object(rr.subprocess, "run", side_effect=_ps_table(comm, args)):
+            mode = rr.runtime_mode()
+        self.assertFalse(mode["running"])
+        self.assertEqual(mode["instances"], 0)
+
+    def test_ps_is_asked_for_wide_output(self) -> None:
+        """Without -ww BSD ps may cut a long command line to the terminal width,
+        and a cut line no longer ends in the executable."""
+        seen = []
+
+        def run(argv, **_kwargs):
+            seen.append(argv)
+            return mock.Mock(returncode=0, stdout="")
+        with mock.patch.object(rr.platform, "system", return_value="Darwin"), \
+                mock.patch.object(rr.subprocess, "run", side_effect=run):
+            rr.runtime_mode()
+        self.assertTrue(seen, "ps was not run")
+        for argv in seen:
+            self.assertEqual(argv[0], "ps")
+            self.assertIn("-Awwo", argv, argv)
+
+    def test_one_column_failing_does_not_make_the_answer_unknown(self) -> None:
+        """If the argv column cannot be read at all but the executable column
+        can, the instance is still counted; only both failing is undeterminable."""
+        def run(argv, **_kwargs):
+            if "args" in argv[-1]:
+                raise OSError("no argv for you")
+            return mock.Mock(returncode=0, stdout=f"39560 {self.EXE}\n")
+        with mock.patch.object(rr.subprocess, "run", side_effect=run):
+            mode = rr.runtime_mode()
+        self.assertTrue(mode["determinable"])
+        self.assertTrue(mode["running"])
+        self.assertIsNone(mode["headless"])
+
+
 class RuntimeModeTests(unittest.TestCase):
     GUI = "/Applications/DaVinci Resolve/DaVinci Resolve.app/Contents/MacOS/Resolve"
     HEADLESS = GUI + " -nogui"
