@@ -1,4 +1,5 @@
 """Native Resolve 21.1 discovery and editing controls."""
+from src.utils.resolve211_normalization import normalize_audio
 from src.utils.resolve211_blanking import validate_blanking
 from src.utils.resolve211_multicam import create_multicam, resolve_constant, GRADES
 from src.utils.resolve211_edits import validate_edit_options, validate_transition_options, transition_result
@@ -278,3 +279,15 @@ def set_timeline_item_use_timeline_for_output_blanking(use_timeline: bool, track
     if missing:
         return missing
     return {"success": bool(item.SetUseTimelineForOutputBlanking(use_timeline))}
+
+
+@mcp.tool(annotations=DESTRUCTIVE_TOOL)
+def normalize_timeline_audio_level(item_ids: list[str], options: dict | None = None) -> dict:
+    """Native 21.1 normalization of explicit audio timeline item IDs. Options normalizationMode, targetLevel (dBFS), targetLoudness (LKFS), setLevelMode; use get_normalize_audio_modes for names."""
+    _, timeline, error = _get_timeline()
+    if error:
+        return error
+    missing = _requires_method(timeline, "NormalizeAudioLevel", "21.1")
+    if missing:
+        return missing
+    return normalize_audio(get_resolve(), timeline, item_ids, {} if options is None else options)

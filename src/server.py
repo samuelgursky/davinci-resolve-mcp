@@ -8,7 +8,7 @@ Each tool groups related operations via an 'action' parameter.
 
 Usage:
     python src/server.py              # Start the MCP server
-    python src/server.py --full       # Start the 373-tool granular server instead
+    python src/server.py --full       # Start the 374-tool granular server instead
 """
 
 VERSION = "2.220.0"
@@ -44,6 +44,7 @@ for p in [current_dir, project_dir]:
 
 from src.utils.resolve211_multicam import create_multicam, resolve_constant, GRADES
 from src.utils.resolve211_blanking import validate_blanking
+from src.utils.resolve211_normalization import normalize_audio
 from src.utils.resolve211_edits import validate_edit_options, validate_transition_options, transition_result
 
 # Platform-specific Resolve paths
@@ -25053,7 +25054,7 @@ def edit_engine(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
 
 
 _TIMELINE_ACTIONS = [
-    "set_output_blanking", "get_normalize_audio_modes", "get_output_blanking",
+    "set_output_blanking", "normalize_audio_level", "get_normalize_audio_modes", "get_output_blanking",
     # Offline authoring — served without a Resolve connection, above the _check() gate.
     "author_offline", "offline_fallback_capabilities",
     "list", "get_current", "set_current", "get_name", "set_name", "get_start_frame",
@@ -25103,6 +25104,7 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
 
     Actions:
       set_output_blanking(options) -> {success} — native 21.1 pixel coordinates.
+      normalize_audio_level(item_ids, options?) -> {success} — native 21.1 normalization; audio timeline item IDs.
       get_normalize_audio_modes() -> {modes} — documented on Resolve 21.1+.
       get_output_blanking() -> {blanking} — documented on Resolve 21.1+. Pixel coordinates; empty on a clip inheriting timeline blanking.
       list() -> {timelines}
@@ -25420,6 +25422,12 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
     tl = proj.GetCurrentTimeline()
     if not tl:
         return _err("No current timeline")
+
+    if action == "normalize_audio_level":
+        missing = _requires_method(tl, "NormalizeAudioLevel", "21.1")
+        if missing:
+            return missing
+        return normalize_audio(get_resolve(), tl, p.get("item_ids"), {} if p.get("options") is None else p["options"])
 
     if action == "set_output_blanking":
         error = validate_blanking(p.get("options"))
@@ -32721,9 +32729,9 @@ if __name__ == "__main__":
     start_background_update_check(VERSION, project_dir, logger, env=_setup_update_env())
     _install_threaded_tool_dispatch(mcp)
 
-    # Support --full flag to run the 373-tool granular server instead
+    # Support --full flag to run the 374-tool granular server instead
     if "--full" in sys.argv:
-        logger.info("Starting full 373-tool granular server...")
+        logger.info("Starting full 374-tool granular server...")
         sys.argv = [arg for arg in sys.argv if arg != "--full"]
         from src.granular import mcp as granular_mcp
 

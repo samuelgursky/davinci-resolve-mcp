@@ -279,6 +279,8 @@ class RiskClassificationHook(LifecycleHook):
         ("timeline", "set_output_blanking"),
         ("timeline_item", "set_output_blanking"),
         ("timeline_item", "set_use_timeline_for_output_blanking"),
+
+        ("timeline", "normalize_audio_level"),
         ("timeline_item", "add_transition"),
         ("timeline_item", "set_speed"),
         ("timeline_item", "set_fades"),

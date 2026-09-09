@@ -230,6 +230,8 @@ CODE_FLOORS: Dict[str, str] = {
     "Timeline.SetOutputBlanking": "21.1",
     "TimelineItem.SetOutputBlanking": "21.1",
     "TimelineItem.SetUseTimelineForOutputBlanking": "21.1",
+
+    "Timeline.NormalizeAudioLevel": "21.1",
     "TimelineItem.AddTransition": "21.1",
     "TimelineItem.SetSpeed": "21.1",
     "TimelineItem.SetFades": "21.1",
