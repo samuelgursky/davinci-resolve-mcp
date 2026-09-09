@@ -227,6 +227,9 @@ _EVIDENCE_GATES: List[Dict[str, Any]] = [
 CODE_FLOORS: Dict[str, str] = {
     "MediaPool.CreateMulticamClip": "21.1",
     "TimelineItem.FlattenMulticam": "21.1",
+    "Timeline.SetOutputBlanking": "21.1",
+    "TimelineItem.SetOutputBlanking": "21.1",
+    "TimelineItem.SetUseTimelineForOutputBlanking": "21.1",
     "TimelineItem.AddTransition": "21.1",
     "TimelineItem.SetSpeed": "21.1",
     "TimelineItem.SetFades": "21.1",

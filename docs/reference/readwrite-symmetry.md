@@ -2,8 +2,8 @@
 
 # Read/Write Symmetry Audit
 
-- write-style action occurrences scanned: **121**
-- write-style action occurrences with a matching read: **73**
+- write-style action occurrences scanned: **124**
+- write-style action occurrences with a matching read: **76**
 - distinct high-signal `set_` actions without a direct/known readback: **4**
 
 ## High-signal gaps — `set_` with no direct/known readback
