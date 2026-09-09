@@ -63,6 +63,7 @@ SAFE_MODE_BLOCKED_RISK_LEVELS: FrozenSet[str] = frozenset({
 # replace_clip/link_*). The test_destructive_registry_drift guard asserts every
 # string here is a real handler so this can't regress.
 DESTRUCTIVE_ACTIONS_BY_TOOL: Dict[str, FrozenSet[str]] = {
+    "dctl": frozenset({"encrypt_native"}),
     "media_pool": frozenset({
         "delete_clips",
         "delete_folders",

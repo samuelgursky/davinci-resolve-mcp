@@ -227,6 +227,8 @@ _EVIDENCE_GATES: List[Dict[str, Any]] = [
 CODE_FLOORS: Dict[str, str] = {
     "Timeline.AutoAlignClips": "21.1",
     "Resolve.ValidateDCTL": "21.1",
+
+    "Resolve.EncryptDCTL": "21.1",
     "MediaPool.CreateMulticamClip": "21.1",
     "TimelineItem.FlattenMulticam": "21.1",
     "Timeline.SetOutputBlanking": "21.1",

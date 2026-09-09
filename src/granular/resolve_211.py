@@ -3,11 +3,12 @@ from src.utils.resolve211_dctl import native_dctl_result
 from src.utils.resolve211_alignment import auto_align
 from src.utils.resolve211_normalization import normalize_audio
 from src.utils.resolve211_blanking import validate_blanking
+from src.utils.resolve211_encryption import encrypt_dctl
 from src.utils.resolve211_multicam import create_multicam, resolve_constant, GRADES
 from src.utils.resolve211_edits import validate_edit_options, validate_transition_options, transition_result
 from src.granular.common import (
     mcp, READ_ONLY_TOOL, WRITE_TOOL, DESTRUCTIVE_TOOL, get_resolve, get_current_project,
-    _get_timeline, _get_timeline_item, _find_clip_by_id, _requires_method, has_method,
+    _get_timeline, _get_timeline_item, _resolve_safe_dir, _find_clip_by_id, _requires_method, has_method,
 )
 
 
@@ -319,3 +320,14 @@ def validate_dctl_native(source: str) -> dict:
     if missing:
         return missing
     return native_dctl_result(r, source)
+
+@mcp.tool(annotations=WRITE_TOOL)
+def encrypt_dctl_native(input_path: str, output_path: str, expiry: str | None = None) -> dict:
+    """Encrypt a .dctl to a new .dctle using Resolve 21.1. Never overwrites. Empty/null expiry means no expiry; ISO 8601 strings pass to Resolve. Source is unchanged."""
+    r = get_resolve()
+    if r is None:
+        return {"error": "Not connected to DaVinci Resolve"}
+    missing = _requires_method(r, "EncryptDCTL", "21.1")
+    if missing:
+        return missing
+    return encrypt_dctl(r, input_path, output_path, expiry, _resolve_safe_dir)
