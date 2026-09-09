@@ -8,7 +8,7 @@ Each tool groups related operations via an 'action' parameter.
 
 Usage:
     python src/server.py              # Start the MCP server
-    python src/server.py --full       # Start the 370-tool granular server instead
+    python src/server.py --full       # Start the 371-tool granular server instead
 """
 
 VERSION = "2.219.0"
@@ -42,6 +42,7 @@ for p in [current_dir, project_dir]:
     if p not in sys.path:
         sys.path.insert(0, p)
 
+from src.utils.resolve211_alignment import auto_align
 from src.utils.resolve211_multicam import create_multicam, resolve_constant, GRADES
 from src.utils.resolve211_edits import validate_edit_options, validate_transition_options, transition_result
 
@@ -25052,7 +25053,7 @@ def edit_engine(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
 
 
 _TIMELINE_ACTIONS = [
-    "get_normalize_audio_modes", "get_output_blanking",
+    "auto_align_clips", "get_normalize_audio_modes", "get_output_blanking",
     # Offline authoring — served without a Resolve connection, above the _check() gate.
     "author_offline", "offline_fallback_capabilities",
     "list", "get_current", "set_current", "get_name", "set_name", "get_start_frame",
@@ -25101,6 +25102,7 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
     (resolve_control api_truth "GetSourceStartFrame").
 
     Actions:
+      auto_align_clips(item_ids, options?) -> {success} — native 21.1 timecode/waveform alignment; include both video/audio IDs to move linked pairs.
       get_normalize_audio_modes() -> {modes} — documented on Resolve 21.1+.
       get_output_blanking() -> {blanking} — documented on Resolve 21.1+. Pixel coordinates; empty on a clip inheriting timeline blanking.
       list() -> {timelines}
@@ -25418,6 +25420,12 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
     tl = proj.GetCurrentTimeline()
     if not tl:
         return _err("No current timeline")
+
+    if action == "auto_align_clips":
+        missing = _requires_method(tl, "AutoAlignClips", "21.1")
+        if missing:
+            return missing
+        return auto_align(get_resolve(), tl, p.get("item_ids"), {} if p.get("options") is None else p["options"])
 
     if action == "get_normalize_audio_modes":
         missing = _requires_method(tl, "GetNormalizeAudioModes", "21.1")
@@ -32691,9 +32699,9 @@ if __name__ == "__main__":
     start_background_update_check(VERSION, project_dir, logger, env=_setup_update_env())
     _install_threaded_tool_dispatch(mcp)
 
-    # Support --full flag to run the 370-tool granular server instead
+    # Support --full flag to run the 371-tool granular server instead
     if "--full" in sys.argv:
-        logger.info("Starting full 370-tool granular server...")
+        logger.info("Starting full 371-tool granular server...")
         sys.argv = [arg for arg in sys.argv if arg != "--full"]
         from src.granular import mcp as granular_mcp
 

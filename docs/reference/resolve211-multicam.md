@@ -48,11 +48,11 @@ Use the synthetic FFmpeg fixture commands in resolve211-native-transitions.md;
 never run the fixture against production media. Compare complete decoded frames
 from compound-before/compound-flattened/granular-before/granular-flattened.mov.
 
-Smart Switch and AutoAlignClips remain separate work. Native timecode alignment
-has positive position-readback evidence, but rendered/waveform acceptance remains
-open. Silent color-card Smart Switch returned false and is not a meaningful
-positive speaking-camera test. This contribution does not claim the entire
-multicam family completed.
+Smart Switch remains separate work. Native timecode and waveform alignment now
+have dedicated wrappers and rendered video/audio comparisons documented in
+[alignment controls](resolve211-alignment.md). Silent color-card Smart Switch
+returned false and is not a meaningful positive speaking-camera test. This
+does not claim the entire multicam family completed.
 
 Do not infer angle order from clip_ids order. The wrapper forwards the requested
 source order, but this measurement establishes the selected angle and its

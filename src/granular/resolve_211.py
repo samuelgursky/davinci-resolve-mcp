@@ -1,4 +1,5 @@
 """Native Resolve 21.1 discovery and editing controls."""
+from src.utils.resolve211_alignment import auto_align
 from src.utils.resolve211_multicam import create_multicam, resolve_constant, GRADES
 from src.utils.resolve211_edits import validate_edit_options, validate_transition_options, transition_result
 from src.granular.common import (
@@ -229,3 +230,15 @@ def flatten_timeline_item_multicam(grade_option: str = "FLATTEN_MULTICAM_COPY_GR
     if error:
         return {"error": error}
     return {"success": bool(item.FlattenMulticam(grade))}
+
+
+@mcp.tool(annotations=DESTRUCTIVE_TOOL)
+def auto_align_timeline_clips(item_ids: list[str], options: dict | None = None) -> dict:
+    """Native 21.1 alignment of current video/audio items by unique ID. Include linked audio AND video IDs to move both; selection is not expanded. Options SyncUsing and UseTrack accept documented constant names or integral native values."""
+    _, timeline, error = _get_timeline()
+    if error:
+        return error
+    missing = _requires_method(timeline, "AutoAlignClips", "21.1")
+    if missing:
+        return missing
+    return auto_align(get_resolve(), timeline, item_ids, {} if options is None else options)
