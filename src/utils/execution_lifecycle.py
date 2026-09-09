@@ -274,6 +274,8 @@ class RiskClassificationHook(LifecycleHook):
         # Native 21.1 setters (#208): `set_speed` changes duration and, with
         # RippleTimeline true, moves every clip after it; `set_fades` rewrites
         # how the clip's edges render. Existing content altered, not deleted.
+        ("media_pool", "create_multicam_clip"),
+        ("timeline_item", "flatten_multicam"),
         ("timeline_item", "add_transition"),
         ("timeline_item", "set_speed"),
         ("timeline_item", "set_fades"),

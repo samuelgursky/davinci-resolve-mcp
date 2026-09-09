@@ -8,7 +8,7 @@ Each tool groups related operations via an 'action' parameter.
 
 Usage:
     python src/server.py              # Start the MCP server
-    python src/server.py --full       # Start the 368-tool granular server instead
+    python src/server.py --full       # Start the 370-tool granular server instead
 """
 
 VERSION = "2.218.2"
@@ -42,6 +42,7 @@ for p in [current_dir, project_dir]:
     if p not in sys.path:
         sys.path.insert(0, p)
 
+from src.utils.resolve211_multicam import create_multicam, resolve_constant, GRADES
 from src.utils.resolve211_edits import validate_edit_options, validate_transition_options, transition_result
 
 # Platform-specific Resolve paths
@@ -20826,6 +20827,7 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
     exist. Raw mutators below do not validate paths, support dry_run, or normalize errors.
 
     Actions:
+      create_multicam_clip(clip_ids, options?) -> {success, clips} — native 21.1 multicam creation.
       get_root_folder() -> {name, id}
       get_current_folder() -> {name, id}
       set_current_folder(path) -> {success}  — path like "Master/SubFolder"
@@ -21036,6 +21038,11 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
             created_new=True,
             versioned_name=bool(existing and create_name != p.get("name")),
         ) if tl else _err("Failed to create timeline")
+    elif action == "create_multicam_clip":
+        missing = _requires_method(mp, "CreateMulticamClip", "21.1")
+        if missing:
+            return missing
+        return create_multicam(get_resolve(), mp, p.get("clip_ids"), {} if p.get("options") is None else p["options"], _find_clip)
     elif action == "setup_multicam_timeline":
         return _setup_multicam_timeline(proj, mp, p)
     elif action == "import_timeline":
@@ -21298,7 +21305,7 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
         return _copy_clip_annotations(root, p)
     elif action == "media_pool_boundary_report":
         return _media_pool_boundary_report(mp, p)
-    return _unknown(action, ["get_root_folder","get_current_folder","set_current_folder","add_subfolder","delete_folders","move_folders","refresh","create_timeline","create_timeline_from_clips","import_timeline","delete_timelines","append_to_timeline","import_media","delete_clips","move_clips","relink","unlink","export_metadata","get_unique_id","create_stereo_clip","auto_sync_audio","get_selected","set_selected","get_clip_mattes","get_timeline_mattes","delete_clip_mattes","import_folder",*_MEDIA_POOL_KERNEL_ACTIONS])
+    return _unknown(action, ["create_multicam_clip","get_root_folder","get_current_folder","set_current_folder","add_subfolder","delete_folders","move_folders","refresh","create_timeline","create_timeline_from_clips","import_timeline","delete_timelines","append_to_timeline","import_media","delete_clips","move_clips","relink","unlink","export_metadata","get_unique_id","create_stereo_clip","auto_sync_audio","get_selected","set_selected","get_clip_mattes","get_timeline_mattes","delete_clip_mattes","import_folder",*_MEDIA_POOL_KERNEL_ACTIONS])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -26274,6 +26281,7 @@ def timeline_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
     Identify by track_type, track_index, item_index (item_index is 0-BASED: 0 = first clip; track_index is 1-based).
 
     Actions:
+      flatten_multicam(grade_option?, ...) -> {success} — native 21.1, replaces multicam with its current angle.
       add_transition(options, ...) -> {success, transition?} — native 21.1 transition; reports actual span.
       set_speed(options, ...) -> {success} — native 21.1 speed options; RippleTimeline defaults false.
       set_fades(options, ...) -> {success} — native 21.1 FadeIn/FadeOut integer frames.
@@ -26330,6 +26338,15 @@ def timeline_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
     tl, item, err = _get_item(p)
     if err:
         return err
+
+    if action == "flatten_multicam":
+        missing = _requires_method(item, "FlattenMulticam", "21.1")
+        if missing:
+            return missing
+        grade, error = resolve_constant(get_resolve(), p.get("grade_option", "FLATTEN_MULTICAM_COPY_GRADE"), GRADES)
+        if error:
+            return _err(error)
+        return {"success": bool(item.FlattenMulticam(grade))}
 
     if action == "add_transition":
         options = p.get("options")
@@ -26552,7 +26569,7 @@ def timeline_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
             return _err(f"Invalid interpolation. Must be one of: {', '.join(valid)}")
         return {"success": bool(item.SetKeyframeInterpolation(p["property"], p["frame"], p["interpolation"]))}
 
-    return _unknown(action, ["add_transition","set_speed","set_fades","get_speed","get_fades","get_output_blanking","get_use_timeline_for_output_blanking","get_name","get_property","set_property","get_duration","get_start","get_end","get_source_start_frame","get_source_end_frame","get_source_start_time","get_source_end_time","get_left_offset","get_right_offset","set_clip_enabled","get_clip_enabled","update_sidecar","get_unique_id","get_media_pool_item","get_stereo_convergence","get_stereo_left_window","get_stereo_right_window","get_linked_items","get_track_type_and_index","get_source_audio_mapping","load_burnin_preset","set_name","get_voice_isolation_state","set_voice_isolation_state","get_retime","set_retime","get_transform","set_transform","get_crop","set_crop","get_composite","set_composite","get_audio","set_audio","get_keyframes","add_keyframe","modify_keyframe","delete_keyframe","set_keyframe_interpolation"])
+    return _unknown(action, ["flatten_multicam","add_transition","set_speed","set_fades","get_speed","get_fades","get_output_blanking","get_use_timeline_for_output_blanking","get_name","get_property","set_property","get_duration","get_start","get_end","get_source_start_frame","get_source_end_frame","get_source_start_time","get_source_end_time","get_left_offset","get_right_offset","set_clip_enabled","get_clip_enabled","update_sidecar","get_unique_id","get_media_pool_item","get_stereo_convergence","get_stereo_left_window","get_stereo_right_window","get_linked_items","get_track_type_and_index","get_source_audio_mapping","load_burnin_preset","set_name","get_voice_isolation_state","set_voice_isolation_state","get_retime","set_retime","get_transform","set_transform","get_crop","set_crop","get_composite","set_composite","get_audio","set_audio","get_keyframes","add_keyframe","modify_keyframe","delete_keyframe","set_keyframe_interpolation"])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -32674,9 +32691,9 @@ if __name__ == "__main__":
     start_background_update_check(VERSION, project_dir, logger, env=_setup_update_env())
     _install_threaded_tool_dispatch(mcp)
 
-    # Support --full flag to run the 368-tool granular server instead
+    # Support --full flag to run the 370-tool granular server instead
     if "--full" in sys.argv:
-        logger.info("Starting full 368-tool granular server...")
+        logger.info("Starting full 370-tool granular server...")
         sys.argv = [arg for arg in sys.argv if arg != "--full"]
         from src.granular import mcp as granular_mcp
 
