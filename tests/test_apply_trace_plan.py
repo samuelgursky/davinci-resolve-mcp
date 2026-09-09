@@ -73,6 +73,23 @@ def _match(index, name, start, duration, drx, source="SRC", method="media-overla
     }
 
 
+class _ResolveStub:
+    def __init__(self, page="edit", can_switch=True):
+        self.page = page
+        self.can_switch = can_switch
+        self.opened = []
+
+    def GetCurrentPage(self):
+        return self.page
+
+    def OpenPage(self, page):
+        self.opened.append(page)
+        if not self.can_switch:
+            return False
+        self.page = page
+        return True
+
+
 class ApplyTracePlanTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="trace-test-")
@@ -89,10 +106,14 @@ class ApplyTracePlanTest(unittest.TestCase):
         compound._get_tl = lambda: (object(), self.tl, None)
         self._orig_required = compound._confirm_token_required
         compound._confirm_token_required = lambda: True
+        self.resolve = _ResolveStub(page="edit")
+        self._orig_get_resolve = compound.get_resolve
+        compound.get_resolve = lambda: self.resolve
 
     def tearDown(self):
         compound._get_tl = self._orig_get_tl
         compound._confirm_token_required = self._orig_required
+        compound.get_resolve = self._orig_get_resolve
 
     def _plan(self, matches, timeline="REEL_01 v08"):
         plan = {"kind": "color_trace.plan", "target": {"timeline": timeline}, "source": {"timeline": "REEL_01 v07"},
@@ -179,6 +200,28 @@ class ApplyTracePlanTest(unittest.TestCase):
         self.assertEqual(self.b2.graph.calls, [])
         self.assertEqual(self.a.versions, [("traced v07", 0)])
         self.assertEqual(second["summary"]["applied"], 2)
+        # Grade calls return False off the color page (19.1.3.7): the batch runs
+        # on the color page and the user's page comes back afterwards.
+        self.assertEqual(self.resolve.opened, ["color", "edit"])
+        self.assertEqual(second["page"], {"before": "edit", "switched": True, "restored": True})
+
+    def test_already_on_color_page_does_not_switch(self):
+        self.resolve.page = "color"
+        compound._confirm_token_required = lambda: False
+        path = self._plan([_match(0, "SHOT_A", 86400, 48, self.drx_a)])
+        out = compound._apply_trace_plan({"plan_path": path})
+        self.assertTrue(out["success"])
+        self.assertEqual(self.resolve.opened, [])
+        self.assertEqual(out["page"], {"before": "color", "switched": False, "restored": None})
+
+    def test_page_switch_failure_refuses_before_touching_clips(self):
+        self.resolve.can_switch = False
+        compound._confirm_token_required = lambda: False
+        path = self._plan([_match(0, "SHOT_A", 86400, 48, self.drx_a)])
+        out = compound._apply_trace_plan({"plan_path": path})
+        self.assertEqual(out["error"]["code"], "PAGE_SWITCH_FAILED")
+        self.assertEqual(self.a.graph.calls, [])
+        self.assertEqual(self.a.versions, [])
 
     def test_partial_failure_is_reported_not_hidden(self):
         self.b.graph.ok = False

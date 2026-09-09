@@ -1917,6 +1917,26 @@ API_TRUTH: List[Dict[str, Any]] = [
         "tags": ["silent-failure", "color", "node-graph", "layout", "drx"],
     },
     {
+        "symbol": "TimelineItem.AddVersion / Graph.ApplyGradeFromDRX (page-dependent)",
+        "object": "TimelineItem / Graph",
+        "signature": "AddVersion(name, type) -> bool; ApplyGradeFromDRX(path, gradeMode) -> bool",
+        "reality": "Both return False for every clip while the GUI sits on the "
+                   "EDIT page, with no exception and no other signal. Measured on "
+                   "Studio 19.1.3.7 (2026-09-08) on a live conform: 12 of 12 "
+                   "clips failed from the edit page, then 12 of 12 applied after "
+                   "OpenPage('color') with nothing else changed; an earlier "
+                   "254-clip batch on the same timeline had succeeded while the "
+                   "page was color. Read-side calls (GetNodeGraph, GetNumNodes, "
+                   "GetVersionNameList) answer normally from the edit page, so "
+                   "the False cannot be told apart from a bad .drx or a locked "
+                   "clip without checking the page.",
+        "recommended": "Read GetCurrentPage() before any grade mutation; OpenPage"
+                       "('color') for the batch and restore the page afterwards. "
+                       "timeline_item_color.apply_trace_plan does this itself and "
+                       "reports {page: {before, switched, restored}}.",
+        "tags": ["silent-failure", "color", "grade", "page", "drx", "version"],
+    },
+    {
         "symbol": "MediaPool.AppendToTimeline clipInfo endFrame (exclusive bound)",
         "object": "MediaPool",
         "signature": "([{mediaPoolItem, startFrame, endFrame, recordFrame, "

@@ -2,6 +2,31 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.214.1 — grade calls fail silently off the Color page; apply_trace_plan switches for you
+
+### Fixed
+
+- **`apply_trace_plan` grades on the Color page and restores your page after.**
+  Measured on Studio 19.1.3.7 during the second live pass of the conform trace:
+  with the GUI on the Edit page, `TimelineItem.AddVersion` and
+  `Graph.ApplyGradeFromDRX` returned False for all 12 clips of a batch, with no
+  exception and no other signal; `OpenPage("color")` and nothing else, then 12
+  of 12 applied. The earlier 254-clip batch had succeeded only because the page
+  happened to be Color. The driver now reads `GetCurrentPage()` before the
+  batch, switches to Color, puts the page back afterwards, and reports
+  `page: {before, switched, restored}`; if the switch fails it refuses with
+  `PAGE_SWITCH_FAILED` before touching a clip.
+- **api_truth records the page dependence** ("TimelineItem.AddVersion /
+  Graph.ApplyGradeFromDRX (page-dependent)"), so the False can be told apart
+  from a bad `.drx` or a locked clip.
+
+### Live-validated
+
+- The 12 name-only matches from the v2.214.0 run (same files, sections the
+  source never graded) applied with `min_confidence: 0.6`: 12 of 12, version
+  `traced V07 Sizing` added per clip, node graphs read back with the source's
+  tools.
+
 ## What's New in v2.214.0 — color_trace reads exported .drp files, and the trace is live-validated
 
 ### Added

@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 353-tool granular server instead
 """
 
-VERSION = "2.214.0"
+VERSION = "2.214.1"
 
 import base64
 import os
@@ -27194,28 +27194,62 @@ def _apply_trace_plan(p: Dict[str, Any]) -> Dict[str, Any]:
     if blocked:
         return blocked
 
+    # Measured on Studio 19.1.3.7 (2026-09-08): with the GUI on the EDIT page,
+    # TimelineItem.AddVersion and Graph.ApplyGradeFromDRX both return False for
+    # every clip — 12/12 failed, then 12/12 applied after OpenPage("color") with
+    # nothing else changed. Grade the batch on the color page and put the page
+    # back afterwards; refuse up front rather than hand back 254 "returned
+    # False" rows.
+    page: Dict[str, Any] = {"before": None, "switched": False, "restored": None}
+    resolve = get_resolve()
+    try:
+        page["before"] = resolve.GetCurrentPage() if resolve else None
+    except Exception as exc:
+        page["read_error"] = str(exc)
+    if page["before"] and page["before"] != "color":
+        try:
+            page["switched"] = bool(resolve.OpenPage("color"))
+        except Exception as exc:
+            page["switch_error"] = str(exc)
+        if not page["switched"]:
+            err = _err(
+                f"Resolve is on the {page['before']!r} page and could not switch to the color page; "
+                "AddVersion and ApplyGradeFromDRX return False from any other page (19.1.3.7).",
+                code="PAGE_SWITCH_FAILED", category="resolve_api_failed", retryable=True,
+                remediation="resolve_control(action='open_page', params={'page': 'color'}) then re-call.",
+            )
+            err["page"] = page
+            return err
+
     applied: List[Dict[str, Any]] = []
     failed: List[Dict[str, Any]] = []
-    for r in to_apply:
-        item = r["_item"]
-        rec = {k: v for k, v in r.items() if not k.startswith("_")}
-        ok = False
-        try:
-            if version_name:
-                # AddVersion switches the item to the NEW version, so the apply
-                # lands there and the previous version stays intact.
-                rec["version_added"] = bool(item.AddVersion(version_name, 0))
-            graph = item.GetNodeGraph()
-            if not _has_method(graph, "ApplyGradeFromDRX"):
-                rec["error"] = "item graph does not expose ApplyGradeFromDRX"
-            else:
-                ok = bool(graph.ApplyGradeFromDRX(r["drx_path"], grade_mode))
-                if not ok:
-                    rec["error"] = "ApplyGradeFromDRX returned False"
-        except Exception as exc:
-            rec["error"] = str(exc)
-        rec["status"] = "applied" if ok else "failed"
-        (applied if ok else failed).append(rec)
+    try:
+        for r in to_apply:
+            item = r["_item"]
+            rec = {k: v for k, v in r.items() if not k.startswith("_")}
+            ok = False
+            try:
+                if version_name:
+                    # AddVersion switches the item to the NEW version, so the apply
+                    # lands there and the previous version stays intact.
+                    rec["version_added"] = bool(item.AddVersion(version_name, 0))
+                graph = item.GetNodeGraph()
+                if not _has_method(graph, "ApplyGradeFromDRX"):
+                    rec["error"] = "item graph does not expose ApplyGradeFromDRX"
+                else:
+                    ok = bool(graph.ApplyGradeFromDRX(r["drx_path"], grade_mode))
+                    if not ok:
+                        rec["error"] = "ApplyGradeFromDRX returned False"
+            except Exception as exc:
+                rec["error"] = str(exc)
+            rec["status"] = "applied" if ok else "failed"
+            (applied if ok else failed).append(rec)
+    finally:
+        if page["switched"]:
+            try:
+                page["restored"] = bool(resolve.OpenPage(page["before"]))
+            except Exception as exc:
+                page["restore_error"] = str(exc)
     summary.update({"applied": len(applied), "failed": len(failed)})
     skipped = [r for r in public if r["status"] != "apply"]
     report_path = _trace_report(p, plan, "apply", {"summary": summary, "applied": applied, "failed": failed, "skipped": skipped})
@@ -27224,6 +27258,7 @@ def _apply_trace_plan(p: Dict[str, Any]) -> Dict[str, Any]:
         "timeline": live_name,
         "plan_source": plan.get("source"),
         "report_path": report_path,
+        "page": page,
         "applied": _trace_compact(applied, max_rows),
         "failed": failed,  # never truncated: every failure is actionable
         "skipped": _trace_compact(skipped, max_rows),
