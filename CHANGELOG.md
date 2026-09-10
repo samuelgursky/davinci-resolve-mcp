@@ -2,6 +2,64 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.224.1 — the bridge installer explains the outcome it was built to detect
+
+Reported by @hemna (#219). No behaviour changed; the installer writes exactly
+what it wrote before and says considerably more about it.
+
+### Fixed
+
+- **The canary-only outcome had no printed guidance at all.** Seeing
+  `resolve_bridge_canary` in Workspace ▸ Scripts while `resolve_bridge_probe`
+  is absent is not a failed install — it is the single most informative thing
+  the installer can tell you, and the exact signal the Lua canary exists to
+  produce. But the printed steps were a fixed four-line list that assumed the
+  Python probe had listed, so a user in this case followed step 3 to a menu
+  entry that cannot exist. The explanation was written down the whole time —
+  inside the canary's own Lua comments, which nobody has any reason to open.
+  There is now a real branch for it that says the install worked, says not to
+  re-run it, and explains what the missing probe means.
+- **Duplicate canary entries are now expected rather than alarming.** The
+  installer writes into every Scripts/Utility folder Resolve scans, giving the
+  canary the same filename in each, so Resolve lists it once per folder with no
+  way to tell them apart. The reporter saw two and reasonably read it as a
+  broken install; a real run on the maintainer's machine produces **four**. The
+  guidance now names the number and says running any one of them is the same as
+  running any other. The count is derived from what was actually installed, and
+  the filename now has a single definition shared by the writer and the
+  counter — those two disagreeing would produce guidance promising entries that
+  are not there.
+- **The Console is named.** The canary reports through `print()`, which lands in
+  Workspace ▸ Console and nowhere else. The installer had never mentioned the
+  Console — the string does not appear in it — so running the canary with no
+  Console open looks exactly like nothing happening, which is what was
+  reported.
+
+### Changed
+
+- The canary-only explanation is **split by edition instead of asserting a
+  single cause**. The canary's own text predates Resolve 21.1 and blames Python
+  discovery — `PYTHON3HOME`, then `/usr/local/bin/python3`, and nowhere else.
+  That is still right on Studio and on 21.0.x and earlier, but on **free 21.1
+  it is wrong**: Python scripting moved to the Studio edition (#203), so `.py`
+  files do not list there whatever Python is installed, and the older advice
+  would send a user chasing a setting that cannot fix their problem. Both
+  branches are now stated, newer cause first.
+
+### Validation
+
+- Full suite green: 3,484 passed, 1 skipped. Six new tests cover the duplicate
+  count and its wording, the absence of that wording for a single canary, the
+  canary-only branch, the Console pointer, both edition branches with the
+  newer one ordered first, and the single-definition guarantee on the canary
+  filename.
+- Verified by running the installer for real on this machine, which is where
+  the four-entry figure comes from.
+- **Still open in #219**: the canary's own embedded remediation text carries
+  the pre-21.1 single-cause diagnosis. Correcting what it says to a specific
+  user needs their edition, which has been asked for; the printed guidance
+  above no longer depends on that answer.
+
 ## What's New in v2.224.0 — native Resolve 21.1 DCTL encryption
 
 Contributed by @legionsound (#216), live-validated on Studio 21.1.0.14.
