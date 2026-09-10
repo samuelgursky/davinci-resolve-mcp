@@ -27626,6 +27626,7 @@ _TIMELINE_ACTIONS = [
     "set_output_blanking", "normalize_audio_level", "auto_align_clips", "get_normalize_audio_modes", "get_output_blanking",
     # Offline authoring — served without a Resolve connection, above the _check() gate.
     "author_offline", "offline_fallback_capabilities",
+    "film_stems_return", "film_preflight", "film_snapshot",
     "list", "get_current", "set_current", "get_name", "set_name", "get_start_frame",
     "get_end_frame", "get_start_timecode", "set_start_timecode", "get_track_count",
     "add_track", "delete_track", "get_track_sub_type", "set_track_enable",
@@ -27679,6 +27680,9 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
       get_output_blanking() -> {blanking} — documented on Resolve 21.1+. Pixel coordinates; empty on a clip inheriting timeline blanking.
       list() -> {timelines}
       get_current() -> {name, id, start_frame, end_frame, start_timecode}
+      film_stems_return(delivery_dir, preview?, expected_timeline_id?, expected_fingerprint?) -> verified new-track film stem import; preview defaults true
+      film_snapshot() -> cue_sheet, structural snapshot and picture_fingerprint for later picture-change comparison; read-only
+      film_preflight(delivery_dir?, expected_picture_fingerprint?, tempo_evidence?, calibration_evidence?, capture_profile?, loudness_path?, target_lufs?, true_peak_max?) -> read-only film handoff checks; missing evidence stays unknown
       set_current(index|id|name) -> {success}  — id/name are stable across archives; index is 1-based
       get_name() -> {name}
       set_name(name) -> {success}
@@ -27947,6 +27951,35 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
     pm, proj, err = _check()
     if err:
         return err
+
+    if action == "film_stems_return":
+        from src.utils.film_stem_return import prepare_return
+        try:
+            return prepare_return(proj, p["delivery_dir"], preview=p.get("preview", True),
+                                  expected_timeline_id=p.get("expected_timeline_id"),
+                                  expected_fingerprint=p.get("expected_fingerprint"))
+        except (ValueError, TypeError, OSError) as exc:
+            return _err(str(exc))
+
+    if action in ("film_preflight", "film_snapshot"):
+        from src.utils.film_preflight import preflight
+        tl = proj.GetCurrentTimeline()
+        if not tl:
+            return _err("No current timeline")
+        try:
+            snapshot = _timeline_conform_snapshot(tl)
+            sheet = _export_film_cue_sheet(tl)
+            report = preflight(sheet, snapshot,
+                             _detect_missing_media_from_snapshot(snapshot),
+                             **{key: p[key] for key in ("delivery_dir", "expected_picture_fingerprint",
+                                "tempo_evidence", "calibration_evidence", "capture_profile",
+                                "loudness_path", "target_lufs", "true_peak_max") if key in p})
+            if action == "film_snapshot":
+                return {"schema": "film-snapshot/v1", "cue_sheet": sheet, "snapshot": snapshot,
+                        "picture_fingerprint": report["picture_fingerprint"], "mutations": 0}
+            return report
+        except (ValueError, TypeError, OSError, KeyError) as exc:
+            return _err(str(exc))
 
     # Actions that don't need a current timeline
     if action == "list":
@@ -28647,6 +28680,7 @@ def timeline_markers(action: str, params: Optional[Dict[str, Any]] = None) -> An
         If frame/timecode is omitted, add uses the current playhead timecode.
       get_all() -> {markers}
       export_cue_sheet(color?) -> film-cues/v1 JSON; read-only picture-to-score handoff
+      compare_cue_sheets(before, after, identity_map?, before_snapshot?, after_snapshot?) -> offline film-picture-changes/v1 with optional structural picture impact; no automatic reconform
       get_by_custom_data(custom_data) -> {markers}
       update_custom_data(frame|frame_id|frameId|timecode, custom_data) -> {success}
       get_custom_data(frame|frame_id|frameId|timecode) -> {data}
@@ -28669,6 +28703,35 @@ def timeline_markers(action: str, params: Optional[Dict[str, Any]] = None) -> An
       annotation_boundary_report(scope?) -> {capabilities, annotations}
     """
     p = _params(params)
+    if action == "compare_cue_sheets":
+        from src.utils.film_picture_changes import compare_film_cues, compare_picture_impact
+        try:
+            report = compare_film_cues(p["before"], p["after"], p.get("identity_map"))
+            if "before_snapshot" in p or "after_snapshot" in p:
+                before_snapshot, after_snapshot = p["before_snapshot"], p["after_snapshot"]
+                if not isinstance(before_snapshot, dict) or not isinstance(after_snapshot, dict):
+                    return _err("Both structural snapshots must be objects")
+                impact = compare_picture_impact(p["before"], p["after"], before_snapshot, after_snapshot,
+                                               {})
+                try:
+                    impact["editorial_comparison"] = _compare_timeline_snapshots(before_snapshot, after_snapshot)
+                except (AttributeError, TypeError, KeyError) as exc:
+                    # Impact validation retains unreadable spans as unknown. The
+                    # older comparator requires complete enumeration; its failure
+                    # must not discard that conservative evidence or imply a match.
+                    impact["editorial_comparison"] = {
+                        "status": "unknown", "reason": "Structural comparison unavailable: " + str(exc)}
+                    impact["requires_human_review"] = True
+                report["picture_impact"] = impact
+                report["requires_human_review"] |= impact["requires_human_review"]
+            else:
+                report["picture_impact"] = {"status": "unknown", "reason": "Supply both structural snapshots to assess picture edits beneath unchanged cues"}
+                report["requires_human_review"] = True
+            return report
+        except _MissingParam as exc:
+            return _missing_param_error(exc, action)
+        except (ValueError, TypeError, OverflowError, KeyError) as exc:
+            return _err(str(exc))
     _, tl, err = _get_tl()
     if err:
         return err
@@ -28775,7 +28838,7 @@ def timeline_markers(action: str, params: Optional[Dict[str, Any]] = None) -> An
         return _export_review_report(tl, p)
     elif action == "annotation_boundary_report":
         return _annotation_boundary_report(tl, p)
-    return _unknown(action, ["add","get_all","export_cue_sheet","get_by_custom_data","update_custom_data","get_custom_data","delete_by_color","delete_at_frame","delete_by_custom_data","get_current_timecode","set_current_timecode","get_current_video_item","get_thumbnail","get_thumbnail_image",*_ANNOTATION_KERNEL_ACTIONS])
+    return _unknown(action, ["add","get_all","export_cue_sheet","compare_cue_sheets","get_by_custom_data","update_custom_data","get_custom_data","delete_by_color","delete_at_frame","delete_by_custom_data","get_current_timecode","set_current_timecode","get_current_video_item","get_thumbnail","get_thumbnail_image",*_ANNOTATION_KERNEL_ACTIONS])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

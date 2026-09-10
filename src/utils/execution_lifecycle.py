@@ -658,6 +658,8 @@ class DriftDetectionHook(LifecycleHook):
                 and post_dur is not None
                 and pre_dur != post_dur
                 and ctx.action not in self._DURATION_ALTERING_ACTIONS
+                and not (ctx.tool_name == "timeline" and ctx.action == "film_stems_return"
+                         and ctx.params.get("preview", True) is False)
             ):
                 warning = (
                     f"Timeline duration drifted unexpectedly from {pre_dur} to {post_dur} frames "
