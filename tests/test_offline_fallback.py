@@ -247,6 +247,30 @@ class TestBridgeScript(unittest.TestCase):
         self.assertIn("aaf", result["error"])
 
 
+class TestDynamicImportsTakeFileUrls(unittest.TestCase):
+    """A path handed to import() works on macOS and Linux and fails on Windows.
+
+    Node reads `C:\\...` as a URL whose scheme is `c:` and throws
+    ERR_UNSUPPORTED_ESM_URL_SCHEME, so every offline authoring call errored on Windows
+    while CI, which only runs Linux, stayed green. The launcher hit this first (06d5bd6);
+    the authoring bridge repeated it. Checked statically because no Linux run can see it.
+    """
+
+    def test_no_dynamic_import_is_given_a_bare_path(self):
+        import re
+
+        call = re.compile(r"\bimport\(\s*([^'\"`\s])")
+        offenders = []
+        for folder in ("scripts", "bin"):
+            for script in sorted((REPO_ROOT / folder).glob("*.mjs")):
+                text = script.read_text(encoding="utf-8")
+                for match in call.finditer(text):
+                    if not text[match.start(1):].startswith("pathToFileURL("):
+                        line = text.count("\n", 0, match.start()) + 1
+                        offenders.append(f"{folder}/{script.name}:{line}")
+        self.assertEqual(offenders, [], "wrap the path in pathToFileURL(...).href")
+
+
 class TestOffer(unittest.TestCase):
     def test_offer_names_what_it_does_not_do(self):
         offer = offline_fallback.offline_alternative(action="create_timeline")
