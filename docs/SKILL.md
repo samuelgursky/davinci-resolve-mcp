@@ -345,7 +345,7 @@ to the user as verified.
 | Mode | Entry point | Tool count | Use when |
 |---|---|---|---|
 | Compound (default) | `src/server.py` | 36 tools | Most workflows — keeps context lean |
-| Granular (full) | `src/server.py --full` | 376 tools | Power users needing one tool per API method |
+| Granular (full) | `src/server.py --full` | 377 tools | Power users needing one tool per API method |
 
 Resolve 21.1 adds [twelve read-only discovery controls](reference/resolve211-read-controls.md)
 for edition, presets, audio formats/codecs, normalization modes, speed, fades
@@ -2492,3 +2492,5 @@ Native audio normalization: [21.1 controls](reference/resolve211-normalization.m
 Native timecode/waveform alignment: [21.1 controls](reference/resolve211-alignment.md), including linked-item selection semantics and rendered video/audio evidence.
 
 Resolve-native DCTL validation: [21.1 controls](reference/resolve211-dctl-validation.md), separate from static validation and shader rendering.
+
+Native DCTL encryption: [21.1 controls](reference/resolve211-encryption.md), with explicit destination handling and export-evidence limits.

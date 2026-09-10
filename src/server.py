@@ -8,7 +8,7 @@ Each tool groups related operations via an 'action' parameter.
 
 Usage:
     python src/server.py              # Start the MCP server
-    python src/server.py --full       # Start the 376-tool granular server instead
+    python src/server.py --full       # Start the 377-tool granular server instead
 """
 
 VERSION = "2.223.0"
@@ -42,6 +42,7 @@ for p in [current_dir, project_dir]:
     if p not in sys.path:
         sys.path.insert(0, p)
 
+from src.utils.resolve211_encryption import encrypt_dctl
 from src.utils.resolve211_multicam import create_multicam, resolve_constant, GRADES
 from src.utils.resolve211_blanking import validate_blanking
 from src.utils.resolve211_alignment import auto_align
@@ -31114,6 +31115,7 @@ _DCTL_VALID_CATEGORIES = ("lut", "aces_idt", "aces_odt")
 
 @mcp.tool()
 @_guard_missing_params
+@_destructive_op("dctl")
 def dctl(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Author and install DCTL files (Color page custom shaders + ACES transforms).
 
@@ -31142,6 +31144,7 @@ def dctl(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]
         — ext: '.dctl' (default) or '.dctle' (encrypted)
       remove(name, category?, subdir?, ext?) -> {success}
       read(name, category?, subdir?, ext?) -> {source, encrypted}
+      encrypt_native(input_path, output_path, expiry?) -> {success, path?, bytes?, sha256?} — native 21.1; never overwrites.
       validate(source) -> {valid, errors, warnings, checker}
       validate_native(source) -> {valid, diagnostic, checker} — Resolve 21.1 validation; source and diagnostic unchanged.
       template(kind, name, options?) -> {source, kind, name, suggested_category}
@@ -31309,6 +31312,15 @@ def dctl(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]
             return missing
         return native_dctl_result(r, source)
 
+    if action == "encrypt_native":
+        r = get_resolve()
+        if r is None:
+            return _not_connected_error()
+        missing = _requires_method(r, "EncryptDCTL", "21.1")
+        if missing:
+            return missing
+        return encrypt_dctl(r, p.get("input_path"), p.get("output_path"), p.get("expiry"), _resolve_safe_dir)
+
     if action == "validate":
         source = p.get("source")
         if not isinstance(source, str):
@@ -31335,7 +31347,7 @@ def dctl(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]
         }
 
     return _unknown(action, ["path", "list", "install", "remove", "read",
-                             "validate_native", "validate", "template", "list_templates"])
+                             "encrypt_native", "validate_native", "validate", "template", "list_templates"])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -32751,9 +32763,9 @@ if __name__ == "__main__":
     start_background_update_check(VERSION, project_dir, logger, env=_setup_update_env())
     _install_threaded_tool_dispatch(mcp)
 
-    # Support --full flag to run the 376-tool granular server instead
+    # Support --full flag to run the 377-tool granular server instead
     if "--full" in sys.argv:
-        logger.info("Starting full 376-tool granular server...")
+        logger.info("Starting full 377-tool granular server...")
         sys.argv = [arg for arg in sys.argv if arg != "--full"]
         from src.granular import mcp as granular_mcp
 

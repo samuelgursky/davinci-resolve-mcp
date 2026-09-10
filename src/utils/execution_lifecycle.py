@@ -193,6 +193,7 @@ class RiskClassificationHook(LifecycleHook):
     #: them unrecognised, i.e. it warns that the risk is unestablished for the
     #: actions whose risk is the best established of any we dispatch.
     _LOW_RISK_ACTIONS: Set[Tuple[str, str]] = {
+        ("dctl", "encrypt_native"),  # Creates a new file; never replaces existing content.
         ("timeline_markers", "add"),
         ("timeline_markers", "update_custom_data"),
         ("timeline_item_markers", "add"),
