@@ -58,6 +58,7 @@ from src.utils.title_library import list_title_presets as _list_installed_title_
 from src.utils.title_controls import title_text_targets as _title_text_targets
 from src.utils.title_controls import title_text_keys as _title_text_keys
 from src.utils.resolve211_edits import validate_edit_options, validate_transition_options, transition_result
+from src.utils.film_cues import export_cue_sheet as _export_film_cue_sheet
 
 # Platform-specific Resolve paths
 from src.utils.cdl import normalize_cdl_payload
@@ -28645,6 +28646,7 @@ def timeline_markers(action: str, params: Optional[Dict[str, Any]] = None) -> An
       add(frame|frame_id|frameId|timecode?, color?, name?, note?, duration?, custom_data?, dry_run?/dryRun?) -> {success, frame} or dry-run preview
         If frame/timecode is omitted, add uses the current playhead timecode.
       get_all() -> {markers}
+      export_cue_sheet(color?) -> film-cues/v1 JSON; read-only picture-to-score handoff
       get_by_custom_data(custom_data) -> {markers}
       update_custom_data(frame|frame_id|frameId|timecode, custom_data) -> {success}
       get_custom_data(frame|frame_id|frameId|timecode) -> {data}
@@ -28693,6 +28695,11 @@ def timeline_markers(action: str, params: Optional[Dict[str, Any]] = None) -> An
         return _add_marker(tl, marker)
     elif action == "get_all":
         return {"markers": _ser(tl.GetMarkers())}
+    elif action == "export_cue_sheet":
+        try:
+            return _export_film_cue_sheet(tl, color=p.get("color"))
+        except (ValueError, TypeError, OverflowError) as exc:
+            return _err(str(exc))
     elif action == "get_by_custom_data":
         return {"markers": _ser(tl.GetMarkerByCustomData(_first_param(p, "custom_data", "customData", default="")))}
     elif action == "update_custom_data":
@@ -28768,7 +28775,7 @@ def timeline_markers(action: str, params: Optional[Dict[str, Any]] = None) -> An
         return _export_review_report(tl, p)
     elif action == "annotation_boundary_report":
         return _annotation_boundary_report(tl, p)
-    return _unknown(action, ["add","get_all","get_by_custom_data","update_custom_data","get_custom_data","delete_by_color","delete_at_frame","delete_by_custom_data","get_current_timecode","set_current_timecode","get_current_video_item","get_thumbnail","get_thumbnail_image",*_ANNOTATION_KERNEL_ACTIONS])
+    return _unknown(action, ["add","get_all","export_cue_sheet","get_by_custom_data","update_custom_data","get_custom_data","delete_by_color","delete_at_frame","delete_by_custom_data","get_current_timecode","set_current_timecode","get_current_video_item","get_thumbnail","get_thumbnail_image",*_ANNOTATION_KERNEL_ACTIONS])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

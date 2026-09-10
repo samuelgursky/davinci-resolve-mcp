@@ -1887,6 +1887,11 @@ helpers:
 
 **`timeline_markers`** — Markers and playhead on the current timeline.
 
+`export_cue_sheet(color?)` returns read-only `film-cues/v1` picture cues with
+relative integer frames, rational frame rate, seconds and production metadata.
+Use it for Ableton scoring handoff; never add the timeline's absolute start frame
+to the cue offsets. See `docs/guides/film-cues.md` for the interchange contract.
+
 Key actions: `add(frame|frame_id|timecode?, color?, name?, note?, duration?)`, `get_all`,
 `get_current_timecode`, `set_current_timecode(timecode)`,
 `get_current_video_item`, `get_thumbnail`, `get_thumbnail_image`
