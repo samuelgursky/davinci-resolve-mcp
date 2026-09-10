@@ -2,6 +2,55 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.224.0 — native Resolve 21.1 DCTL encryption
+
+Contributed by @legionsound (#216), live-validated on Studio 21.1.0.14.
+
+### Added
+
+- **`dctl encrypt_native`**, with the granular twin `encrypt_dctl_native`,
+  calling native 21.1 DCTL encryption. The caller supplies an existing `.dctl`
+  input, a new `.dctle` output path and an optional expiry; the wrapper reports
+  the actual final path, size and hash. Tool count 376 → 377.
+- **A destination is never replaced.** Resolve writes into isolated staging and
+  only a verified non-empty regular file is published. The publish uses
+  `O_EXCL` creation at `0o600`, so a file that appears *during* encryption
+  cannot be clobbered, and the existence check uses `lexists` so a **dangling
+  symlink** counts as an occupied destination rather than a free one — the case
+  a plain existence test silently gets wrong. The cross-volume fallback removes
+  its own partial output if the copy fails.
+- Source bytes are preserved, and the action neither installs nor applies the
+  shader.
+
+### Changed
+
+- Classified **LOW** risk rather than MEDIUM, with a destructive-action hook
+  entry and dry-run refusal coverage. LOW is the honest rating here: the action
+  only ever creates a new file and is incapable of overwriting one, so grouping
+  it with operations that rewrite existing work would make the rating mean
+  less. Verified: `dctl.encrypt_native` classifies LOW / destructive /
+  recognised, and is in the destructive registry.
+- Two native boundaries handled explicitly rather than papered over: Resolve
+  appends `.dctle` itself, so a fixed staging stem prevents a doubled suffix on
+  a user-supplied name; and an empty expiry string is normalized to null,
+  because an isolated probe measured the native call returning false for `""`
+  and true for null or omission. Other expiry strings pass through untouched.
+
+### Validation
+
+- Full suite green: 3,478 passed, 1 skipped. Drift guards, api-parity and read/write
+  symmetry all clean with the 377 count.
+- Live evidence is @legionsound's on Studio 21.1.0.14, through both interfaces
+  with synthetic identity code: each exported a non-empty file, reported
+  correct size and hash, preserved the source bytes, produced owner-only
+  permissions, and refused a repeat export without altering the destination.
+  Not reproduced here; this machine is Studio 19.1.3.7, below the 21.1 floor.
+- **Not claimed**: that an encrypted shader is accepted by a render, and
+  nothing at all about cipher strength. Observed file sizes are recorded as
+  observations, not format guarantees.
+- This PR was branched from current `main` and merged **without adaptation** —
+  the first in the 21.1 series to need none.
+
 ## What's New in v2.223.0 — native Resolve 21.1 DCTL validation
 
 Contributed by @legionsound (#215), live-validated on Studio 21.1.0.14.
