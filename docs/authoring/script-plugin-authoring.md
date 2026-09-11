@@ -19,7 +19,7 @@ automation.
 | Custom workflow you want as a permanent menu item | `script_plugin('install', ...)`, then the user runs it from Workspace → Scripts |
 | Image-processing node for the Fusion page | `fuse_plugin` |
 | Color-page programmable transform | `dctl` |
-| Anything the existing 28 wrapped Resolve API tools already cover | The wrapped tool — no scripting needed |
+| Anything the wrapped Resolve API tools already cover | The wrapped tool — no scripting needed |
 
 ## Two template kinds
 

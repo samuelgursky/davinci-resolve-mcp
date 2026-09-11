@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 377-tool granular server instead
 """
 
-VERSION = "3.0.0"
+VERSION = "3.0.1"
 
 import base64
 import os
@@ -16575,6 +16575,7 @@ def setup(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any
 
 @mcp.tool()
 @_guard_missing_params
+@_destructive_op("resolve_control")
 def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """App-level DaVinci Resolve operations.
 
@@ -18072,6 +18073,7 @@ def layout_presets(action: str, params: Optional[Dict[str, Any]] = None) -> Dict
 
 @mcp.tool()
 @_guard_missing_params
+@_destructive_op("render_presets")
 def render_presets(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Import/export render and burn-in presets.
 
@@ -19030,6 +19032,7 @@ def _project_lint_live(r, pm) -> Dict[str, Any]:
 
 @mcp.tool()
 @_guard_missing_params
+@_destructive_op("project_manager")
 def project_manager(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Manage DaVinci Resolve projects.
 
@@ -19047,7 +19050,7 @@ def project_manager(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         render and wedges Resolve's pipeline until restart (stuck
         IsRenderingInProgress, 0% jobs, refused Quit). stop_render=true stops
         the render, waits for the flag to clear, then closes.
-      delete(name) -> {success}
+      delete(name, close_current?) -> {success}
       import_project(path, name?) -> {success}
       export_project(name, path, with_stills_and_luts?) -> {success}
       archive(name, path, src_media?, render_cache?, proxy_media?) -> {success}
@@ -19180,6 +19183,18 @@ def project_manager(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
     elif action == "delete":
         if not p.get("name"):
             return _err("delete requires name")
+        # Refuse the open project unless the caller says so, as
+        # safe_project_delete does. delete_project_safely closes and deletes the
+        # current project without asking — the call that loses a project someone
+        # is working in. If the current project cannot be read, DeleteProject on
+        # an open project fails anyway (the session holds its lock).
+        try:
+            _open = pm.GetCurrentProject()
+            _open_name = _open.GetName() if _open else None
+        except Exception:
+            _open_name = None
+        if _open_name == p["name"] and not p.get("close_current", False):
+            return _err("Refusing to delete the currently open project; pass close_current=True")
         from src.utils.project_cleanup import delete_project_safely
         deleted = delete_project_safely(pm, p["name"])
         return {"success": bool(deleted.get("success")), "delete_detail": deleted}
@@ -19364,6 +19379,7 @@ def _setting_limitation(name: Any, obj: str = "Project") -> Optional[Dict[str, A
 
 @mcp.tool()
 @_guard_missing_params
+@_destructive_op("project_settings")
 def project_settings(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Project metadata, settings, and color groups.
 
@@ -20340,6 +20356,7 @@ def _export_render_boundary_report(proj, p: Dict[str, Any]):
 
 @mcp.tool()
 @_guard_missing_params
+@_destructive_op("render")
 def render(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Render pipeline: jobs, presets, formats, codecs, and rendering.
 
@@ -21319,6 +21336,7 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
 
 @mcp.tool()
 @_guard_missing_params
+@_destructive_op("folder")
 def folder(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Operations on Media Pool folders.
 
@@ -21491,6 +21509,7 @@ def _keyed_get(getter, key):
 
 @mcp.tool()
 @_guard_missing_params
+@_destructive_op("media_pool_item")
 def media_pool_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Operations on a media pool clip. Identify clip by clip_id.
 
@@ -21955,6 +21974,7 @@ def media_pool_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
 
 @mcp.tool()
 @_guard_missing_params
+@_destructive_op("media_pool_item_markers")
 def media_pool_item_markers(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Markers and flags on media pool clips. Identify clip by clip_id.
 
@@ -28805,6 +28825,7 @@ def gallery(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, A
 
 @mcp.tool()
 @_guard_missing_params
+@_destructive_op("gallery_stills")
 def gallery_stills(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Manage stills in gallery albums (best results on Color page).
 
@@ -30261,6 +30282,7 @@ def _fusion_get_text_plus(comp, p: Dict[str, Any]) -> Dict[str, Any]:
 
 @mcp.tool()
 @_guard_missing_params
+@_destructive_op("fusion_comp")
 def fusion_comp(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Fusion composition node graph operations.
 

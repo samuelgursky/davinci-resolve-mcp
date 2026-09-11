@@ -2,6 +2,100 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v3.0.1 — project deletion is gated, and the open project is refused by default
+
+A security fix, published as [GHSA-gmp7-qjp9-m7gm](https://github.com/samuelgursky/davinci-resolve-mcp/security/advisories/GHSA-gmp7-qjp9-m7gm).
+One behaviour change existing callers may notice is called out below.
+
+### Security
+
+- **`project_manager delete` permanently deleted any named project — including
+  the one open in Resolve — without confirmation, and no gate saw it.** It runs
+  through `delete_project_safely`, a *reliability* helper that works around
+  DeleteProject's flakiness and session lock by closing the open project and
+  then deleting it. The `project_manager` tool carried no `@_destructive_op`,
+  `delete` was not registered, and the CRITICAL risk rule written for project
+  deletion named `delete_project`, an action no tool dispatches. So it matched
+  nothing: safe mode, dry-run refusal and the security audit log never saw a
+  project deletion.
+- **Thirteen further deletes that the classifier already rated HIGH were not
+  enforced, for the same reason.** They are the three `render` deletes,
+  `render_presets.delete_burnin`, `gallery_stills.delete_stills`, `fusion_comp`
+  `delete_tool` and `delete_keyframe`, `timeline_item.delete_keyframe`, the three
+  `media_pool_item_markers` deletes, `project_settings.delete_color_group` and
+  `resolve_control.delete_user_preferences_preset`. Safe mode is enforced only
+  by the decorator, and only for registered actions, so these ratings were a
+  promise nothing kept.
+
+### Changed
+
+- **The raw `delete` now refuses the currently open project unless
+  `close_current=True`**, matching `safe_project_delete`. This is the one change
+  existing callers may notice: a call that used to close and delete the open
+  project now returns an error, until it passes `close_current=True`.
+- All of the actions above are registered and their tools decorated. The project
+  delete is CRITICAL, and `safe_project_delete` and the thirteen others are HIGH,
+  so all are blocked while safe mode is on. An explicit dry run is refused
+  unless the action honours it natively; only `safe_project_delete` does, and
+  keeps working. Every call is audited. None of them archives the timeline,
+  except the keyframe deletes on `fusion_comp` and `timeline_item`, which change
+  timeline items and so still do.
+- **`remove_motion_blur`** (on `folder` and `media_pool_item`) is **re-rated
+  MEDIUM**. It renders new media and never touches the source, and was already
+  confirm-gated for exactly that reason, but the `remove_` name-prefix rule had
+  rated it HIGH on its name alone. It is now audited, and not blocked by safe
+  mode.
+- **The name-prefix rule is now a fallback for unlisted actions**: an explicit
+  lower rating wins. Before, it fired ahead of the LOW and MEDIUM tables and
+  could not be overridden. No existing rating changed except `remove_motion_blur`
+  — no LOW, MEDIUM or graph-LUT entry started with `delete_` or `remove_`.
+
+### Fixed
+
+- **Nine risk rules named actions that no tool dispatches, and so protected
+  nothing.** On `project_manager`: `delete_project`, now repointed at the real
+  `delete`, plus `close_project_without_saving` and `save_project_as`. On
+  `edit_engine`: `auto_cut_silence` and `ripple_trim`. On `timeline`: `cut_clip`,
+  `delete_clip_by_id`, `delete_markers` and `ripple_delete` — which is a CutList
+  entry kind inside `apply_cuts`, not an action. The rest were removed; since
+  they never matched, removing them changes nothing at runtime. An existing test
+  even asserted that the dead `delete_project` rule classified as CRITICAL — true
+  of a name no tool uses, and part of how it survived. It now tests the real
+  `delete`.
+- **The bridge installer's Lua canary gave only the pre-21.1 diagnosis** — that
+  Resolve cannot find a Python 3. On free 21.1 that is wrong, because Python
+  scripting moved to Studio (#203). Its comments and printed output now give both
+  causes, the newer first (#219). The printed post-install guidance was already
+  corrected in v2.224.1.
+
+### Added
+
+- **`tests/test_write_enforcement_ratchet.py`** fails the suite in three cases:
+  - an action is rated destructive but not enforced;
+  - a risk rule names an action no tool dispatches;
+  - a new write-style action appears with neither a rating nor a registry entry.
+
+  The 144 unrated write-style actions that exist today are frozen as a backlog.
+  Rating one forces its removal from the list, so it can only shrink. This is
+  the second instance of this gap in two days, and the first time it cannot
+  come back unnoticed.
+- `tests/test_project_delete_guard.py` pins the delete guard, its rating and its
+  enforcement.
+
+### Documentation
+
+- Removed a stale tool count from `docs/authoring/script-plugin-authoring.md`.
+
+### Validation
+
+- Full suite green: 3,482 passed, 1 skipped. Every static and drift gate is clean, including
+  the native-dry-run scan. That scan requires the native-dry-run list to match,
+  exactly, the registered actions whose handlers read `dry_run`, which is how
+  `safe_project_delete` was confirmed as the only one.
+- No live Resolve run. The gating is decorator-level and verified offline. The
+  delete guard is tested against a fake project manager, deliberately:
+  exercising it live means deleting a real project.
+
 ## What's New in v3.0.0 — the server no longer executes caller-supplied code, and every plugin write is gated
 
 **A breaking release.** Two public actions are removed. The rest of the change

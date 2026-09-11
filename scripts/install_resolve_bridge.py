@@ -288,7 +288,9 @@ _CANARY_NAME = "resolve_bridge_canary.lua"
 
 _LUA_CANARY = """-- Installed by davinci-resolve-mcp as an enumeration canary.
 -- If THIS appears under Workspace > Scripts but resolve_bridge_probe does not,
--- Resolve is listing Lua and silently skipping Python: it cannot find a Python 3.
+-- Resolve is listing Lua and silently skipping Python. On Resolve 21.1+ FREE
+-- that is expected: Python scripting moved to Studio (issue #203), and nothing
+-- below will change it. On Studio, or 21.0.x and earlier, it cannot find a Python 3.
 -- It looks at PYTHON3HOME, then /usr/local/bin/python3 -- and nowhere else, which
 -- is why Homebrew, pyenv, uv and conda interpreters go unseen. Either point it at
 -- the one you have (no sudo, but does NOT survive a reboot):
@@ -299,9 +301,12 @@ _LUA_CANARY = """-- Installed by davinci-resolve-mcp as an enumeration canary.
 -- already looks, which persists:
 --   sudo ln -s "$(command -v python3)" /usr/local/bin/python3
 -- A python.org build creates that symlink for you. Restart Resolve after.
-print("Resolve is enumerating scripts. If the Python probe is missing, Resolve")
-print("cannot find a Python 3: set PYTHON3HOME with launchctl setenv, or install")
-print("a python.org build. Homebrew/pyenv/uv/conda are not looked at directly.")
+print("Resolve is enumerating scripts. If the Python probe is missing:")
+print("- Resolve 21.1+ FREE: Python scripting moved to Studio, so .py scripts")
+print("  no longer list at all (issue #203). No Python setting changes that.")
+print("- Studio, or 21.0.x and earlier: Resolve cannot find a Python 3. Set")
+print("  PYTHON3HOME with launchctl setenv, or install a python.org build.")
+print("  Homebrew/pyenv/uv/conda are not looked at directly.")
 """
 
 

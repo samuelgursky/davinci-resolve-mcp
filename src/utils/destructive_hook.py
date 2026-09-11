@@ -77,6 +77,24 @@ DESTRUCTIVE_ACTIONS_BY_TOOL: Dict[str, FrozenSet[str]] = {
         "safe_install_extension",
         "safe_remove_extension",
     }),
+    # Deletes the classifier already rated HIGH (CRITICAL for the raw project
+    # delete) on tools that carried no @_destructive_op, so safe mode never saw
+    # them. Plus the 21.0 AI deblur, rated MEDIUM: it creates media, and is
+    # registered so it is audited and its dry run is honest.
+    "folder": frozenset({"remove_motion_blur"}),
+    "fusion_comp": frozenset({"delete_keyframe", "delete_tool"}),
+    "gallery_stills": frozenset({"delete_stills"}),
+    "media_pool_item": frozenset({"remove_motion_blur"}),
+    "media_pool_item_markers": frozenset({
+        "delete_at_frame",
+        "delete_by_color",
+        "delete_by_custom_data",
+    }),
+    "project_manager": frozenset({"delete", "safe_project_delete"}),
+    "project_settings": frozenset({"delete_color_group"}),
+    "render": frozenset({"delete_all_jobs", "delete_job", "delete_preset"}),
+    "render_presets": frozenset({"delete_burnin"}),
+    "resolve_control": frozenset({"delete_user_preferences_preset"}),
     "media_pool": frozenset({
         "delete_clips",
         "delete_folders",
@@ -155,6 +173,7 @@ DESTRUCTIVE_ACTIONS_BY_TOOL: Dict[str, FrozenSet[str]] = {
         "create_subtitles",
     }),
     "timeline_item": frozenset({
+        "delete_keyframe",
         "set_output_blanking",
         "set_use_timeline_for_output_blanking",
         "set_clip_enabled",
@@ -250,7 +269,9 @@ NO_ARCHIVE_ON_KEYS: Dict[Tuple[str, str], frozenset] = {
 
 # ── Non-timeline write tools ────────────────────────────────────────────────
 #
-# Tools whose registered actions write the filesystem, not the timeline. Every
+# Tools whose registered actions do not mutate the working timeline: they write
+# plugin folders, or act on projects, the render queue, presets, the gallery,
+# pool items or app preferences. Every
 # gate applies to them — safe mode, dry-run refusal, the audit log — but they
 # skip version-on-mutate archiving, and skip resolving the versioning context
 # at all: that goes through the project-root provider, which reaches Resolve,
@@ -258,7 +279,12 @@ NO_ARCHIVE_ON_KEYS: Dict[Tuple[str, str], frozenset] = {
 # Resolve. `media_pool` has its own branch for the same reason; these differ in
 # that there is no project state to log.
 
-NON_TIMELINE_WRITE_TOOLS: frozenset = frozenset({"dctl", "fuse_plugin", "script_plugin"})
+NON_TIMELINE_WRITE_TOOLS: frozenset = frozenset({
+    "dctl", "fuse_plugin", "script_plugin",
+    "folder", "gallery_stills", "media_pool_item", "media_pool_item_markers",
+    "project_manager", "project_settings", "render", "render_presets",
+    "resolve_control",
+})
 
 
 # ── Strict-mode allowlist ───────────────────────────────────────────────────
@@ -327,6 +353,7 @@ NATIVE_DRY_RUN_ACTIONS: frozenset = frozenset({
     ("timeline_ai", "create_subtitles"),
     ("script_plugin", "safe_install_extension"),
     ("script_plugin", "safe_remove_extension"),
+    ("project_manager", "safe_project_delete"),
 })
 
 

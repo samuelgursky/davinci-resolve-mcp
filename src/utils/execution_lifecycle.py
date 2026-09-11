@@ -125,8 +125,10 @@ class RiskClassificationHook(LifecycleHook):
     name = "risk_classification"
 
     _CRITICAL_ACTIONS: Set[Tuple[str, str]] = {
-        ("project_manager", "delete_project"),
-        ("project_manager", "close_project_without_saving"),
+        # Raw project delete. This rule used to name `delete_project`, which
+        # no tool dispatches, so it matched nothing and deleting a project
+        # passed every gate.
+        ("project_manager", "delete"),
         ("media_pool", "delete_timelines"),
         ("media_pool", "delete_clips"),
     }
@@ -140,15 +142,11 @@ class RiskClassificationHook(LifecycleHook):
         ("fuse_plugin", "remove"),
         ("script_plugin", "remove"),
         ("script_plugin", "safe_remove_extension"),
+        # Guarded delete: disposable `_mcp_` projects only, and the open one
+        # only with close_current=True — but still permanent.
+        ("project_manager", "safe_project_delete"),
         ("timeline", "delete_clips"),
-        ("timeline", "delete_clip_by_id"),
-        ("timeline", "delete_markers"),
-        ("timeline", "ripple_delete"),
-        ("timeline", "cut_clip"),
         ("edit_engine", "execute_selects"),
-        ("edit_engine", "auto_cut_silence"),
-        ("edit_engine", "ripple_trim"),
-        ("project_manager", "save_project_as"),
         ("media_pool", "delete_folders"),
         ("timeline", "delete_track"),
         ("timeline", "lift_range"),
@@ -264,6 +262,11 @@ class RiskClassificationHook(LifecycleHook):
         ("fuse_plugin", "install"),
         ("script_plugin", "install"),
         ("script_plugin", "safe_install_extension"),
+        # 21.0 AI deblur renders NEW media and never touches the source (it is
+        # confirm-token gated for that reason). The `remove_` prefix rule rated
+        # it HIGH on its name alone, which would make safe mode block a create.
+        ("folder", "remove_motion_blur"),
+        ("media_pool_item", "remove_motion_blur"),
         # Additive edits that place content into an existing timeline. Nothing
         # is deleted (`overwrite_range`, which does delete, is HIGH), but the
         # timeline is no longer what it was.
@@ -378,7 +381,16 @@ class RiskClassificationHook(LifecycleHook):
             radius = BlastRadius.PROJECT if "project" in tool_name else BlastRadius.TIMELINE
             conf_required = True
             reasons.append(f"Action '{action}' is permanently destructive across {radius.value}")
-        elif pair in cls._HIGH_RISK_ACTIONS or action.startswith("delete_") or action.startswith("remove_"):
+        elif pair in cls._HIGH_RISK_ACTIONS or (
+            # The name-prefix rule is a fallback for UNLISTED actions: an
+            # explicit lower rating wins. It used to fire first and so could
+            # not be overridden — `remove_motion_blur` creates media, yet read
+            # HIGH on its name.
+            pair not in cls._LOW_RISK_ACTIONS
+            and pair not in cls._MEDIUM_RISK_ACTIONS
+            and pair not in cls._GRAPH_LUT_ACTIONS
+            and (action.startswith("delete_") or action.startswith("remove_"))
+        ):
             level = RiskLevel.HIGH
             destructive = True
             if params.get("ripple", False):
