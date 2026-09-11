@@ -70,6 +70,10 @@ DESTRUCTIVE_ACTIONS_BY_TOOL: Dict[str, FrozenSet[str]] = {
     # real. They never mutate the timeline, so NON_TIMELINE_WRITE_TOOLS keeps
     # them out of timeline archiving while every gate still sees them.
     "dctl": frozenset({"encrypt_native", "install", "remove"}),
+    # LUT files under Resolve's master LUT root. Writes are confined to the
+    # namespaced MCP/ subfolder by src/utils/lut_files.py; these entries make
+    # every gate see them as the writes they are.
+    "lut": frozenset({"attenuate", "install", "remove"}),
     "fuse_plugin": frozenset({"install", "remove"}),
     "script_plugin": frozenset({
         "install",
@@ -280,7 +284,7 @@ NO_ARCHIVE_ON_KEYS: Dict[Tuple[str, str], frozenset] = {
 # that there is no project state to log.
 
 NON_TIMELINE_WRITE_TOOLS: frozenset = frozenset({
-    "dctl", "fuse_plugin", "script_plugin",
+    "dctl", "fuse_plugin", "lut", "script_plugin",
     "folder", "gallery_stills", "media_pool_item", "media_pool_item_markers",
     "project_manager", "project_settings", "render", "render_presets",
     "resolve_control",
@@ -354,6 +358,9 @@ NATIVE_DRY_RUN_ACTIONS: frozenset = frozenset({
     ("script_plugin", "safe_install_extension"),
     ("script_plugin", "safe_remove_extension"),
     ("project_manager", "safe_project_delete"),
+    ("lut", "attenuate"),
+    ("lut", "install"),
+    ("lut", "remove"),
 })
 
 

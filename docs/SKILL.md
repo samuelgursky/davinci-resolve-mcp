@@ -352,8 +352,8 @@ to the user as verified.
 
 | Mode | Entry point | Tool count | Use when |
 |---|---|---|---|
-| Compound (default) | `src/server.py` | 36 tools | Most workflows — keeps context lean |
-| Granular (full) | `src/server.py --full` | 377 tools | Power users needing one tool per API method |
+| Compound (default) | `src/server.py` | 37 tools | Most workflows — keeps context lean |
+| Granular (full) | `src/server.py --full` | 384 tools | Power users needing one tool per API method |
 
 Resolve 21.1 adds [twelve read-only discovery controls](reference/resolve211-read-controls.md)
 for edition, presets, audio formats/codecs, normalization modes, speed, fades
