@@ -2,6 +2,50 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.224.2 — offline authoring works on Windows
+
+Contributed by @Dev-next-gen (#221), found and verified on Windows.
+
+### Fixed
+
+- **`timeline(action="author_offline")` failed for every target on Windows
+  before writing anything.** The authoring bridge,
+  `scripts/author_interchange.mjs`, handed a filesystem path straight to a
+  dynamic `import()`. On macOS and Linux that is harmless; on Windows the path
+  is `C:\...`, and Node's ESM loader reads the drive letter as a URL scheme
+  `c:` and refuses it with `ERR_UNSUPPORTED_ESM_URL_SCHEME`. Because the import
+  runs before target validation, even the bridge's own error for an unknown
+  target never appeared. The path is now wrapped in `pathToFileURL(...).href`.
+  Nothing changes on macOS or Linux.
+- This is the second time the same bug has shipped: the launcher hit it first
+  and was fixed the same way in 06d5bd6 (2026-07-15), and the authoring bridge,
+  added later, repeated it. CI runs only on Linux, which cannot see it, so it
+  stayed green both times.
+
+### Added
+
+- **A static guard so it cannot ship a third time.** A new test fails if any
+  dynamic `import()` in `scripts/*.mjs` or `bin/*.mjs` is given anything other
+  than a string literal or `pathToFileURL(...)`. Checked statically precisely
+  because no Linux run can observe the failure. Verified here that it earns its
+  place: run against the unfixed bridge it fails naming exactly
+  `scripts/author_interchange.mjs:45`, and passes with the fix.
+
+### Validation
+
+- Full suite green: 3,485 passed, 1 skipped.
+- A repo-wide scan for non-literal dynamic imports, including
+  `resolve-advanced/server/` which the new guard does not cover, found only the
+  two launcher imports already fixed in 06d5bd6 and the one fixed here — so the
+  fix is complete, not a first instance of several.
+- **Not verified on Windows hardware by this project — there is none here.**
+  The Windows failure and the fix were measured by @Dev-next-gen on Python 3.12
+  and Node 25: two failures and four errors on main, all eight passing with the
+  change. The `.drt` authoring cases additionally need `jszip` from the
+  `resolve-advanced` install, which that machine did not have; they now get
+  past the import — the only part this touches — and stop at the missing
+  module instead.
+
 ## What's New in v2.224.1 — the bridge installer explains the outcome it was built to detect
 
 Reported by @hemna (#219). No behaviour changed; the installer writes exactly
