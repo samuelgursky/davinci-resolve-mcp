@@ -142,6 +142,9 @@ class RiskClassificationHook(LifecycleHook):
         ("fuse_plugin", "remove"),
         ("script_plugin", "remove"),
         ("script_plugin", "safe_remove_extension"),
+        # LUT deletes. Confined to the MCP/ subfolder, but permanent, and the
+        # file may be applied on a node in some open project.
+        ("lut", "remove"),
         # Guarded delete: disposable `_mcp_` projects only, and the open one
         # only with close_current=True — but still permanent.
         ("project_manager", "safe_project_delete"),
@@ -262,6 +265,11 @@ class RiskClassificationHook(LifecycleHook):
         ("fuse_plugin", "install"),
         ("script_plugin", "install"),
         ("script_plugin", "safe_install_extension"),
+        # LUT installs write into the folder Resolve loads LUTs from, like the
+        # plugin installs above. `install` can replace with overwrite=true;
+        # `attenuate` refuses an existing destination but writes the same tree.
+        ("lut", "install"),
+        ("lut", "attenuate"),
         # 21.0 AI deblur renders NEW media and never touches the source (it is
         # confirm-token gated for that reason). The `remove_` prefix rule rated
         # it HIGH on its name alone, which would make safe mode block a create.

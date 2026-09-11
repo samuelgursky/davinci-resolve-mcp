@@ -2,7 +2,7 @@
 """
 DaVinci Resolve MCP Server (Compound Tools)
 
-36 compound tools covering 100% of the DaVinci Resolve Scripting API (336 methods)
+37 compound tools covering 100% of the DaVinci Resolve Scripting API (336 methods)
 plus Fusion Fuse, DCTL, and Resolve-page Script authoring tools.
 Each tool groups related operations via an 'action' parameter.
 
@@ -52,6 +52,7 @@ from src.utils.resolve211_edits import validate_edit_options, validate_transitio
 
 # Platform-specific Resolve paths
 from src.utils.cdl import normalize_cdl_payload
+from src.utils import lut_files
 from src.utils import resolve_writes as _resolve_writes
 from src.utils.mcp_stdio import run_fastmcp_stdio
 from src.utils.api_truth import lookup_api_truth, VERIFIED_ON as _API_TRUTH_VERIFIED_ON
@@ -384,7 +385,7 @@ def davinci_resolve_workflow() -> str:
     return """Use this DaVinci Resolve MCP server as a guarded post-production control surface.
 
 Core pattern:
-- Prefer the 36 compound tools and their action names over raw scripting.
+- Prefer the 37 compound tools and their action names over raw scripting.
 - Start by probing state: resolve_control.get_version/get_page, project_manager.get_current, timeline.get_current, and media_pool.probe_media_pool.
 - Before mutating timelines, media pools, render settings, grades, projects, databases, or extensions, prefer the matching probe, capabilities, boundary_report, safe_*, or dry_run action when one exists.
 - Preserve source media integrity. Never transcode, proxy, rewrite, move, rename, or create derivatives of source media unless the user explicitly asks. Analysis output belongs in sidecars or analysis directories.
@@ -31201,6 +31202,101 @@ _DCTL_VALID_CATEGORIES = ("lut", "aces_idt", "aces_odt")
 
 @mcp.tool()
 @_guard_missing_params
+@_destructive_op("lut")
+def lut(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Discover, install and remove LUT files under Resolve's master LUT root.
+
+    `graph set_lut` could already put a LUT on a node, but nothing answered the
+    question it raises — which LUTs exist? These actions do, and they report
+    each LUT's master-relative `set_lut_path`, which is the exact form
+    `set_lut` resolves.
+
+    Reads roam, writes do not. `list` and `read` walk the whole master LUT root
+    so stock, vendor and hand-installed LUTs are discoverable. `install`,
+    `remove` and `attenuate` write only inside the namespaced `MCP/` subfolder,
+    so stock and vendor LUTs are never modified or removed here.
+
+    Installs land in the MASTER root, not the per-user LUT dir the `dctl` tool
+    uses: Graph.SetLUT() resolves names only against the master root (measured;
+    see utils/lut_paths.py). After installing, call
+    project_settings(action='refresh_luts') before applying.
+
+    Actions:
+      path() -> {lut_dir, writable_dir}
+      list(subdir?) -> {luts, count, lut_dir, writable_dir}
+        — each entry: {name, set_lut_path, bytes, writable}
+      read(name) -> {size, title, domain_min, domain_max, entries, ...}
+        — 3D .cube only; reports shape and header, never the whole table.
+      install(name, source | source_path, overwrite?) -> {success, set_lut_path}
+        — source: .cube text. source_path: a file to copy in. Exactly one.
+      remove(name) -> {success, removed}
+        — MCP/ only.
+      attenuate(source, strength, name) -> {success, set_lut_path, ...}
+        — blend an existing .cube toward identity, 0..1, and install the result.
+      capabilities() -> {numpy_available, supported, refused, size_range}
+
+    Not provided: the official MCP's generate_lut executes a caller-supplied
+    Python function body per lattice point. This server does not accept
+    caller-supplied code, so authoring here is limited to writing a provided
+    .cube and attenuating an existing one.
+    """
+    p = _params(params)
+    try:
+        if action == "path":
+            return {"lut_dir": lut_files.master_lut_dir(),
+                    "writable_dir": lut_files.writable_dir()}
+        if action == "list":
+            return lut_files.list_luts(p.get("subdir"))
+        if action == "read":
+            if not p.get("name"):
+                return _err("read requires name")
+            return lut_files.read_lut_summary(p["name"])
+        if action == "capabilities":
+            from src.utils import cube_lut
+            caps = dict(cube_lut.capabilities())
+            caps["writable_dir"] = lut_files.writable_dir()
+            caps["extensions"] = list(lut_files.LUT_EXTENSIONS)
+            caps["generate_from_code"] = False
+            caps["generate_from_code_reason"] = (
+                "This server does not execute caller-supplied Python. Use install "
+                "with .cube text, or attenuate an existing LUT.")
+            return caps
+        if action == "install":
+            if not p.get("name"):
+                return _err("install requires name")
+            if p.get("dry_run"):
+                return _ok(would_install=p["name"], writable_dir=lut_files.writable_dir())
+            return lut_files.install_lut(
+                p["name"], source=p.get("source"), source_path=p.get("source_path"),
+                overwrite=bool(p.get("overwrite", False)))
+        if action == "remove":
+            if not p.get("name"):
+                return _err("remove requires name")
+            if p.get("dry_run"):
+                return _ok(would_remove=p["name"], writable_dir=lut_files.writable_dir())
+            return lut_files.remove_lut(p["name"])
+        if action == "attenuate":
+            for required in ("source", "strength", "name"):
+                if p.get(required) is None:
+                    return _err(f"attenuate requires {required}")
+            if p.get("dry_run"):
+                return _ok(would_write=p["name"], source=p["source"], strength=p["strength"])
+            return lut_files.attenuate_lut(p["source"], p["strength"], p["name"])
+    except lut_files.LutPathError as exc:
+        return _err(str(exc), code="INVALID_LUT_PATH", category="invalid_input")
+    except FileNotFoundError as exc:
+        return _err(str(exc), code="LUT_NOT_FOUND", category="invalid_input")
+    except OSError as exc:
+        return _err(f"{type(exc).__name__}: {exc}", code="LUT_IO_ERROR",
+                    category="filesystem")
+    except Exception as exc:
+        return _err(f"{type(exc).__name__}: {exc}", code="LUT_ERROR")
+    return _unknown(action, ["path", "list", "read", "install", "remove",
+                             "attenuate", "capabilities"])
+
+
+@mcp.tool()
+@_guard_missing_params
 @_destructive_op("dctl")
 def dctl(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Author and install DCTL files (Color page custom shaders + ACES transforms).
@@ -32605,5 +32701,5 @@ if __name__ == "__main__":
         logger.error(f"Unknown --transport {transport!r}; use stdio|sse|streamable-http")
         sys.exit(2)
 
-    logger.info("Starting DaVinci Resolve MCP Server (36 compound tools)")
+    logger.info("Starting DaVinci Resolve MCP Server (37 compound tools)")
     run_fastmcp_stdio(mcp)

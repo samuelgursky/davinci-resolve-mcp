@@ -224,7 +224,7 @@ def test_utils_syntax():
 
 def test_compound_tool_count():
     # 35 = 33 baseline + edit_engine (Phase E) + timeline_frame (#146).
-    assert _count_mcp_tools(PROJECT_ROOT / "src" / "server.py") == 36
+    assert _count_mcp_tools(PROJECT_ROOT / "src" / "server.py") == 37
 
 
 def test_prompt_registrations():
@@ -262,7 +262,7 @@ def test_prompt_registrations():
 
 def test_granular_tool_count():
     total = sum(_count_mcp_tools(py_file) for py_file in GRANULAR_DIR.glob("*.py"))
-    assert total == 377
+    assert total == 384
 
 
 def test_reported_granular_tools_have_explicit_annotations():
