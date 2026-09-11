@@ -4,7 +4,10 @@ The action must never file anything, never connect to Resolve, and never let a
 local path, username or secret into a link that is about to be pasted into a
 public issue tracker.
 """
+import json
 import re
+import shutil
+import subprocess
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -213,6 +216,76 @@ class ReportIssueActionTest(unittest.TestCase):
 
     def test_server_instructions_point_at_the_action(self):
         self.assertIn("report_issue", s.mcp.instructions)
+
+
+LABEL_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "label-mcp-issues.yml"
+
+_NODE_HARNESS = """
+const input = JSON.parse(require("fs").readFileSync(0, "utf8"));
+const calls = [];
+const context = {payload: {issue: {number: 7, body: input.body}}, repo: {owner: "o", repo: "r"}};
+const github = {rest: {issues: {addLabels: async (args) => { calls.push(args.labels); }}}};
+const core = {info: () => {}};
+(async () => {
+%s
+})().then(() => console.log(JSON.stringify(calls)));
+"""
+
+
+def _workflow_script():
+    """The github-script body, de-indented, exactly as the runner receives it."""
+    lines = LABEL_WORKFLOW.read_text(encoding="utf-8").splitlines()
+    start = next(n for n, line in enumerate(lines) if line.strip() == "script: |")
+    indent, out = None, []
+    for line in lines[start + 1:]:
+        if not line.strip():
+            out.append("")
+            continue
+        depth = len(line) - len(line.lstrip())
+        indent = depth if indent is None else indent
+        if depth < indent:
+            break
+        out.append(line[indent:])
+    return "\n".join(out)
+
+
+@unittest.skipIf(shutil.which("node") is None, "node not installed")
+class LabelWorkflowTest(unittest.TestCase):
+    """The labeling workflow keys on strings build_issue writes. If either side
+    changes, outside reporters' issues silently stop being labelled — so run
+    the workflow's own script against real drafts."""
+
+    def labels_for(self, body):
+        proc = subprocess.run(
+            ["node", "-e", _NODE_HARNESS % _workflow_script()],
+            input=json.dumps({"body": body}), capture_output=True, text=True,
+            encoding="utf-8", timeout=30,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        return json.loads(proc.stdout)
+
+    def test_bug_draft(self):
+        body = ir.build_issue("bug", "t", "s", identity=POSIX_ID)["body"]
+        self.assertEqual(self.labels_for(body), [["via-mcp", "bug"]])
+
+    def test_feature_draft(self):
+        body = ir.build_issue("feature", "t", "s", identity=POSIX_ID)["body"]
+        self.assertEqual(self.labels_for(body), [["via-mcp", "enhancement"]])
+
+    def test_crlf_body_from_the_web_form(self):
+        body = ir.build_issue("bug", "t", "s", identity=POSIX_ID)["body"].replace("\n", "\r\n")
+        self.assertEqual(self.labels_for(body), [["via-mcp", "bug"]])
+
+    def test_truncated_draft_still_carries_the_marker(self):
+        draft = ir.build_issue("bug", "t", "x " * 1500, error="y " * 1900, identity=POSIX_ID)
+        self.assertTrue(draft["url_truncated"])
+        self.assertEqual(self.labels_for(_query(draft["url"])["body"]), [["via-mcp", "bug"]])
+
+    def test_issues_not_drafted_by_report_issue_are_left_alone(self):
+        template = (REPO_ROOT / ".github" / "ISSUE_TEMPLATE" / "bug_report.md").read_text(encoding="utf-8")
+        self.assertEqual(self.labels_for(template), [])
+        self.assertEqual(self.labels_for("### What happened\n\nhand-written"), [])
+        self.assertEqual(self.labels_for(""), [])
 
 
 class IssueTemplatesTest(unittest.TestCase):
