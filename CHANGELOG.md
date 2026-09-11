@@ -2,6 +2,34 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v2.224.3 — the Windows import guard covers the advanced server
+
+Contributed by @Dev-next-gen (#222). Test-only; no behaviour changed.
+
+### Changed
+
+- The static guard added in v2.224.2 fails if a dynamic `import()` is given a
+  bare filesystem path — the pattern Node's ESM loader rejects on Windows. It
+  covered only `scripts/*.mjs` and `bin/*.mjs`, so a bare-path import added
+  under `resolve-advanced/server/` would have passed it, and with CI running
+  only on Linux the Windows failure would have stayed invisible there too. It
+  now also walks `resolve-advanced/server/` recursively, since the advanced
+  server loads modules from its `tools/` subfolder as well.
+- Offenders are reported by their path from the repository root, so a hit in a
+  nested file names that file. `node_modules` is skipped.
+
+### Validation
+
+- There is nothing under `resolve-advanced/server/` to catch today — every
+  dynamic import there passes a string literal — so the widened guard was
+  verified against a planted file, reproduced independently here: a probe at
+  `resolve-advanced/server/tools/zz_bare_import_probe.mjs` containing
+  `await import(path.join(...))` fails it, naming that file and line; with the
+  probe removed it passes. Per the contributor, the original
+  `scripts/author_interchange.mjs:45` case is still caught against the
+  pre-v2.224.2 bridge.
+- Full suite green: 3,485 passed, 1 skipped.
+
 ## What's New in v2.224.2 — offline authoring works on Windows
 
 Contributed by @Dev-next-gen (#221), found and verified on Windows.
