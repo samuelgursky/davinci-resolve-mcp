@@ -2,6 +2,34 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v3.1.1 — chat-drafted issues are labelled for every reporter
+
+A repository workflow change. Nothing in the server or the npm package behaves
+differently.
+
+### Added
+
+- **A GitHub Actions workflow labels issues drafted by `report_issue`.** The
+  prefilled link asks GitHub for the `bug` or `enhancement` label, but GitHub
+  applies `labels=` only for people with triage rights, so an outside
+  reporter's issue could arrive unlabelled. On `issues.opened` the workflow
+  now looks for the draft's hidden `filed-via` marker and adds `via-mcp`, plus
+  `bug` or `enhancement` from the draft's first heading. `label:via-mcp` now
+  lists every report that came in through chat.
+- The issue body is untrusted input handled under a write token. It is read
+  only inside `github-script`, never passed through a shell, and the only
+  effect is adding those fixed labels. The workflow's only permission is
+  `issues: write`.
+
+### Validation
+
+- 5 new tests run the workflow's own script under Node against real drafts:
+  bug, feature, CRLF line endings (as GitHub's web form submits), a truncated
+  link body, and issues `report_issue` did not draft. A change to the marker
+  or the headings on either side now fails the suite. The full suite passes:
+  3514 passed, 0 failed.
+- No Resolve behaviour changed, so no live Resolve run was needed.
+
 ## What's New in v3.1.0 — "send this as a bug": issues drafted from chat
 
 A new `resolve_control` action, `report_issue`. While working in any MCP client,
