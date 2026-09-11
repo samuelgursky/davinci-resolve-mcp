@@ -93,10 +93,6 @@ ALLOWED: dict[tuple[str, str, str], str] = {
         "measured on a live build to return None whether or not it removed anything; "
         "verified by re-reading the keyframe list (v2.98.3)"
     ),
-    ("server.py", "_run_inline_lua", "SetData"): (
-        NIL + "; the completion sentinel is verified by reading __mcp_done__ back, "
-        "because a stale value hands the previous run's output back as this run's"
-    ),
 
     # --- teardown ----------------------------------------------------------
     ("server.py", "_playhead_frame_render", "DeleteRenderJob"): TEARDOWN,

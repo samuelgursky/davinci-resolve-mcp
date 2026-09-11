@@ -118,14 +118,26 @@ directories. They are *authoring* tools — every other tool in this server wrap
 Resolve's scripting API, while these three emit and install plugin/script
 source. Status: lifecycle-verified in DaVinci Resolve Studio 20.3.2.9 for
 MCP-marked install/read/list/remove, regular DCTL `refresh_luts`, ACES/Fuse
-restart-required classification, Python installed-script execution, and
-Python/Lua `run_inline`. Use `docs/kernels/extension-authoring-kernel.md` for the
+restart-required classification. Script execution — `execute` and `run_inline` —
+was removed in v3.0.0: this server does not run caller-supplied code. Use
+`docs/kernels/extension-authoring-kernel.md` for the
 kernel boundary map, `docs/authoring/fuse-dctl-authoring.md` for the Fuse + DCTL coverage
 matrix, and `docs/authoring/script-plugin-authoring.md` for the script DSL spec and the
-conversational-execution model. For hand-authoring `.setting` template files
+install paths. For hand-authoring `.setting` template files
 (Edit effects/transitions/titles/generators and Fusion macros) — the format,
 control catalog, thumbnail conventions, install paths, and gotchas, plus copyable
 starter templates — see `docs/authoring/setting-files/`.
+
+**Plugin writes are gated like every other write.** `install` and `remove` on all
+three tools, and `script_plugin`'s `safe_install_extension` / `safe_remove_extension`,
+are registered destructive actions. An explicit `dry_run=true` on `install` or
+`remove` is refused with `DRY_RUN_UNAVAILABLE` rather than executed — for a real
+preview use `safe_install_extension` / `safe_remove_extension`, which honour
+`dry_run` themselves. `remove` is rated HIGH and is blocked while safe mode is on
+(`allow_risky_operation: true` overrides a single call); `install` is MEDIUM.
+Every call is recorded in the security audit log, and none of them archives the
+timeline — they write plugin folders, not the project. The `probe_*_lifecycle`
+actions route their installs and cleanup deletes through the same gate.
 
 Extension Authoring kernel actions (v2.16.0+) are exposed through
 `script_plugin`:
@@ -133,24 +145,20 @@ Extension Authoring kernel actions (v2.16.0+) are exposed through
 - `extension_capabilities`
 - `probe_fuse_lifecycle(name?, kind?, install?, cleanup?)`
 - `probe_dctl_lifecycle(name?, kind?, category?, install?, refresh_luts?, cleanup?)`
-- `probe_script_lifecycle(name?, language?, category?, install?, execute?, cleanup?)`
+- `probe_script_lifecycle(name?, language?, category?, install?, cleanup?)`
 - `safe_install_extension(extension_type, name, source?|kind?, dry_run?)`
 - `safe_remove_extension(extension_type, name, dry_run?)`
 - `refresh_or_restart_required(extension_type, category?)`
 - `extension_boundary_report(include_template_matrix?)`
 
 Key behavioral notes for `script_plugin`:
-- `run_inline(source, language)` runs ad-hoc Lua/Python in Resolve and returns
-  stdout + result — use this for one-off conversational queries against the
-  Resolve API instead of building+installing a script.
+- **No script execution.** `run_inline` and `execute` were removed in v3.0.0:
+  this server does not run caller-supplied code, in any form. `install` puts a
+  script in Resolve's Workspace › Scripts menu; running it is the user's action
+  inside Resolve. For conversational queries against the Resolve API, use the
+  typed tools rather than a script.
 - `language` accepts `lua`, `py`, or the human-facing aliases `python` and
   `python3`.
-- `execute(name, category, language)` runs an installed script; Python stdout
-  and stderr are captured, while installed Lua execution can return false from
-  the Python bridge even when install/read/list/remove worked.
-- Lua scripts: `fusion.Execute()` from the Python bridge is a no-op in
-  Resolve 20.x — `_run_inline_lua` works around this with `RunScript` against
-  a temp file plus completion-sentinel polling on `app:SetData/GetData`.
 - Fuse install path on macOS is `…/DaVinci Resolve/Fusion/Fuses/` (NOT
   `Support/Fusion/Fuses/` as the SDK doc lists). The MCP path helpers handle
   this; if you're staging files manually, use the path the implementation

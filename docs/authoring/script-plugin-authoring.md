@@ -1,10 +1,10 @@
-# Script Plugin Authoring & Conversational Resolve Scripting
+# Script Plugin Authoring
 
-The `script_plugin` compound tool (introduced in v2.5.0) generates, installs,
-and **executes** Resolve-page Lua/Python scripts. It closes the conversational
-loop: an LLM with access to the MCP can describe a workflow, generate the
-script, install it as a Resolve menu item, and execute it — all in one turn —
-with the script's stdout streamed back into the conversation.
+The `script_plugin` compound tool (introduced in v2.5.0) generates, validates
+and installs Resolve-page Lua/Python scripts. **It does not run them.** Script
+execution — `run_inline` and `execute` — was removed in v3.0.0, because this
+server does not execute caller-supplied code. An installed script appears as a
+Resolve menu item, and running it is the user's action, inside Resolve.
 
 Unlike `fuse_plugin` (which authors Fusion image-processing tools) and `dctl`
 (which authors color-page shaders), `script_plugin` targets the
@@ -15,8 +15,8 @@ automation.
 
 | Goal | Use |
 |---|---|
-| One-off conversational query against Resolve | `script_plugin('run_inline', ...)` |
-| Custom workflow you want as a permanent menu item | `script_plugin('install', ...)` then `('execute', ...)` |
+| One-off query or change against Resolve | The typed Resolve API tools — no script, no execution |
+| Custom workflow you want as a permanent menu item | `script_plugin('install', ...)`, then the user runs it from Workspace → Scripts |
 | Image-processing node for the Fusion page | `fuse_plugin` |
 | Color-page programmable transform | `dctl` |
 | Anything the existing 28 wrapped Resolve API tools already cover | The wrapped tool — no scripting needed |
@@ -93,43 +93,24 @@ Real-world example: a script supervisor's CSV with Filename, Scene, Take,
 Camera, Lens columns. Single rule maps each clip to its row and populates
 all metadata fields plus organizes into Scene bins. Six lines of RULES.
 
-## Conversational execution: `run_inline` and `execute`
+## Running an installed script
 
-The two actions that close the loop:
+`script_plugin` installs scripts; it does not run them. v3.0.0 removed the two
+actions that did:
 
-### `run_inline(source, language, timeout?)`
-Run an ad-hoc Lua or Python snippet inside Resolve, get stdout + return
-value back. No file persistence.
+- `run_inline` ran a caller's source directly — Python as a subprocess on the
+  host, with a live Resolve handle, or Lua inside Resolve's Fusion engine with
+  `os` and `io` in scope.
+- `execute` ran an installed script, which `install` could have just written
+  from caller-supplied source.
 
-**Python**: writes source to a temp file with `resolve`/`project`/`mp`/
-`timeline` pre-bound, runs as subprocess, captures stdout/stderr.
+Neither passed any of the server's safety gates, and the maintainer policy is
+that the server never executes caller-supplied code. Calling either now returns
+an error that says so and points here.
 
-**Lua**: wraps source so `print()` is intercepted into a buffer, runs via
-`fusion.RunScript()`, polls a completion sentinel, reads stdout + return
-value back via `app:SetData()`/`fusion.GetData()`. (Note: `fusion.Execute()`
-from the Python bridge is a no-op in Resolve 20.x — `RunScript()` against a
-file is the only working path. The implementation handles this.)
-
-Example:
-```python
-script_plugin('run_inline', {
-    'source': '''
-print(f"Project: {project.GetName()}")
-print(f"Bins: {len(mp.GetRootFolder().GetSubFolderList() or [])}")
-''',
-    'language': 'py',
-})
-# → {success: True, stdout: "Project: My Show\nBins: 12\n", exit_code: 0}
-```
-
-### `execute(name, category, language, args?, timeout?)`
-Run an installed script. Same return shape as `run_inline`.
-
-**Python**: subprocess captures full stdout/stderr.
-**Lua**: `fusion.RunScript()`; print() output goes to Resolve Console
-(can't capture). For Lua scripts that need to return data, have them write
-to `app:SetData()` and the caller reads via the existing `fusion_comp`
-tooling.
+After `install`, the user runs the script from **Workspace → Scripts →
+\<category\>** inside Resolve; Python output appears in Resolve's Console. For
+queries and edits in conversation, use the typed tools.
 
 ## Install paths
 
@@ -158,32 +139,19 @@ familiar for data-heavy workflows. The same RULES table syntax works in both
 Verified on DaVinci Resolve Studio 20.3.2.9, macOS:
 
 - ✅ Scripts appear in Workspace → Scripts → \<category\> after install (no restart needed)
-- ⚠️ Installed Lua script execution via `fusion.RunScript(path)` can return
-  `False` from the Python bridge even when install/read/list/remove work. Use
-  `run_inline(language="lua")` when captured output or return values matter.
-- ✅ Python scripts execute via subprocess with full stdout/stderr capture
-- ✅ `run_inline` Lua: stdout captured (with tabs), return value captured, errors trapped with line numbers
-- ✅ `run_inline` Python: full Resolve API access, project + media-pool + timeline pre-bound
 - ✅ Both engines (Lua and Python) compile without errors
 - ✅ DSL coverage tests confirm every documented source/action/target/transform/strategy is present in both engines
 
-## Implementation notes (for maintainers)
+## Resolve's Lua bridge — reference
 
-Two non-obvious behaviors of Resolve's Lua bridge surfaced during live
-testing and are encoded in the implementation:
+Two measured facts about Resolve itself, found while building the now-removed
+`run_inline`, stay true of Resolve and are kept here for reference:
 
-1. **`fusion.Execute(luaSource)` is a no-op** when called from the Python
-   `DaVinciResolveScript` bridge in Resolve 20.x. It returns `None` and has
-   no observable side effects. Don't use it. Use `fusion.RunScript(filepath)`
-   against a temp file instead.
-
-2. **`fusion.RunScript()` is asynchronous.** It returns before the script
-   finishes. Reading `fusion.GetData()` immediately gives stale values. The
-   implementation polls a completion-sentinel slot (`__mcp_done__`) until
-   the wrapped Lua sets it to `"1"`, then reads results.
-
-These constraints are unique to the Lua side; Python's subprocess approach
-is straightforwardly synchronous.
+1. **`fusion.Execute(luaSource)` is a no-op** from the Python
+   `DaVinciResolveScript` bridge in Resolve 20.x: it returns `None` with no
+   observable side effects.
+2. **`fusion.RunScript(filepath)` is asynchronous**: it returns before the
+   script finishes, so an immediate `fusion.GetData()` reads stale values.
 
 ## Source media integrity
 

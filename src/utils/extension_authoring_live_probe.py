@@ -191,7 +191,6 @@ def run_probe(server, output_dir: Path, keep_open: bool = False) -> Dict[str, An
             "language": "py",
             "category": "Utility",
             "install": True,
-            "execute": True,
             "cleanup": True,
             "overwrite": True,
             "timeout": 120,
@@ -199,9 +198,9 @@ def run_probe(server, output_dir: Path, keep_open: bool = False) -> Dict[str, An
         _record_nested_success(
             recorder,
             "script",
-            "probe_script_python_lifecycle_install_execute_remove",
+            "probe_script_python_lifecycle_install_remove",
             script_py_probe,
-            ["install", "read", "list", "execute", "remove"],
+            ["install", "read", "list", "remove"],
         )
 
         script_lua_probe = server.script_plugin("probe_script_lifecycle", {
@@ -210,7 +209,6 @@ def run_probe(server, output_dir: Path, keep_open: bool = False) -> Dict[str, An
             "language": "lua",
             "category": "Utility",
             "install": True,
-            "execute": True,
             "cleanup": True,
             "overwrite": True,
             "timeout": 120,
@@ -218,23 +216,11 @@ def run_probe(server, output_dir: Path, keep_open: bool = False) -> Dict[str, An
         _record_nested_success(
             recorder,
             "script",
-            "probe_script_lua_lifecycle_install_execute_remove",
+            "probe_script_lua_lifecycle_install_remove",
             script_lua_probe,
-            ["install", "read", "list", "execute", "remove"],
+            ["install", "read", "list", "remove"],
         )
 
-        _record_tool_result(
-            recorder,
-            "script",
-            "run_inline_python_stdout",
-            server.script_plugin("run_inline", {"language": "py", "source": "print('extension inline py ok')", "timeout": 60}),
-        )
-        _record_tool_result(
-            recorder,
-            "script",
-            "run_inline_lua_stdout_result",
-            server.script_plugin("run_inline", {"language": "lua", "source": "print('extension inline lua ok')\nreturn 'lua-result'", "timeout": 60}),
-        )
         _record_tool_result(
             recorder,
             "guards",

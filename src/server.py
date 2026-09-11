@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 377-tool granular server instead
 """
 
-VERSION = "2.224.3"
+VERSION = "3.0.0"
 
 import base64
 import os
@@ -411,8 +411,8 @@ Editorial improvements + versioning (C6 — always on for destructive timeline o
 - Read-only inspection (list, get_current, get_property, etc.) bypasses versioning entirely — no setup needed.
 - Inspect history via `timeline_versioning(action="get_history", timeline_name=…)`, `list_versions`, `diff_versions(from_version, to_version)`, or `list_runs`. Roll back via `timeline_versioning(action="rollback", timeline_name=…, version=…)`.
 
-For one-off scripting:
-- Prefer script_plugin(action="run_inline") over arbitrary persistent code changes. Use it to inspect Resolve state, then move durable behavior into guarded compound actions when it proves valuable.
+For one-off queries:
+- Do not reach for scripts to inspect or change Resolve state: this server does not execute caller-supplied code (script_plugin execution was removed in v3.0.0). Use the typed tools, and move durable behavior into guarded compound actions.
 """
 
 
@@ -30871,6 +30871,7 @@ def _validate_glsl_minimal(source: str) -> Dict[str, Any]:
 
 @mcp.tool()
 @_guard_missing_params
+@_destructive_op("fuse_plugin")
 def fuse_plugin(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Author and install Fusion Fuse plugins (.fuse files).
 
@@ -31413,244 +31414,6 @@ def _validate_script_source(source: str, language: str) -> Dict[str, Any]:
     return _validate_lua_syntax(source)
 
 
-# ─── Script execution ─────────────────────────────────────────────────────────
-
-def _python_env_for_resolve() -> Dict[str, str]:
-    """Build env vars so a Python subprocess can import DaVinciResolveScript."""
-    env = os.environ.copy()
-    env["RESOLVE_SCRIPT_API"] = RESOLVE_API_PATH
-    env["RESOLVE_SCRIPT_LIB"] = RESOLVE_LIB_PATH
-    # The child writes its stdout into a pipe, so Python picks the locale
-    # codepage rather than the console's — cp1252 on a default Windows install.
-    # A script that prints a non-Latin-1 character then dies with
-    # UnicodeEncodeError instead of returning its output, and the failure is
-    # attributed to the script rather than to the pipe it was handed (#153).
-    env["PYTHONIOENCODING"] = "utf-8"
-    pp = env.get("PYTHONPATH", "")
-    if RESOLVE_MODULES_PATH not in pp:
-        env["PYTHONPATH"] = (RESOLVE_MODULES_PATH +
-                             (os.pathsep + pp if pp else ""))
-    return env
-
-
-# fusionscript's RemoteApp thread keeps dispatching packets from Resolve while
-# the interpreter tears down at exit, and can SIGSEGV *after* the script has
-# finished — turning a successful run into exit code -11 / success:false.
-# Run the script via runpy and hard-exit before teardown so the exit code is
-# truthful. SystemExit must be caught here: uncaught, a plain sys.exit(0) at
-# the end of a script would take the normal teardown path and reopen the
-# segfault window. sys.path[0] is pointed at the script's directory to mimic
-# `python script.py` (under -c it points at the server's cwd, which both
-# breaks sibling imports and lets stray files there shadow real modules).
-# Cost of os._exit: atexit handlers never run and non-daemon threads are not
-# joined — documented in script_plugin's execute action.
-_PY_SCRIPT_EXIT_GUARD = (
-    "import os, runpy, sys, traceback\n"
-    "sys.argv = sys.argv[1:]\n"
-    "sys.path[0] = os.path.dirname(os.path.abspath(sys.argv[0]))\n"
-    "code = 0\n"
-    "try:\n"
-    "    runpy.run_path(sys.argv[0], run_name='__main__')\n"
-    "except SystemExit as e:\n"
-    "    if isinstance(e.code, int):\n"
-    "        code = e.code\n"
-    "    elif e.code is not None:\n"
-    "        print(e.code, file=sys.stderr)\n"
-    "        code = 1\n"
-    "except BaseException:\n"
-    "    traceback.print_exc()\n"
-    "    code = 1\n"
-    "sys.stdout.flush()\n"
-    "sys.stderr.flush()\n"
-    "os._exit(code)\n"
-)
-
-
-def _execute_python_script(path: str, args: List[str],
-                            timeout: int) -> Dict[str, Any]:
-    # Ensure Resolve is running so the script can connect.
-    get_resolve()
-    cmd = [sys.executable, "-c", _PY_SCRIPT_EXIT_GUARD, path] + [str(a) for a in args]
-    try:
-        result = safe_run(cmd, env=_python_env_for_resolve(),
-                          capture_output=True, text=True, encoding="utf-8",
-                          errors="replace", timeout=timeout)
-    except subprocess.TimeoutExpired as e:
-        return _err(f"Script timed out after {timeout}s. "
-                    f"Partial stdout: {(e.stdout or '')[:1000]}")
-    except OSError as e:
-        return _err(f"Failed to launch Python subprocess: {e}")
-    return {
-        "success": result.returncode == 0,
-        "stdout": result.stdout,
-        "stderr": result.stderr,
-        "exit_code": result.returncode,
-        "language": "py",
-    }
-
-
-def _execute_lua_script(path: str) -> Dict[str, Any]:
-    r = get_resolve()
-    if r is None:
-        return _not_connected_error()
-    fusion = r.Fusion()
-    if fusion is None:
-        return _err("handle.Fusion() returned None — cannot run Lua scripts.")
-    try:
-        success = bool(fusion.RunScript(path))
-    except Exception as e:
-        return _err(f"Lua RunScript failed: {e}")
-    return {
-        "success": success,
-        "language": "lua",
-        "output_note": ("Lua print() output goes to Resolve's "
-                        "Workspace → Console → Lua tab. The MCP cannot capture "
-                        "Lua stdout. Use the Console to see what the script printed."),
-    }
-
-
-def _run_inline_python(source: str, timeout: int) -> Dict[str, Any]:
-    """Write source to a temp file, run it, return captured output.
-
-    Prepends a boilerplate header that connects to Resolve and exposes
-    `resolve`, `project`, `mp`, `timeline` as globals — same shape as the
-    scaffold template, so inline snippets feel like a REPL.
-    """
-    boilerplate = (
-        "import sys\n"
-        "import DaVinciResolveScript as dvr_script\n"
-        "resolve = dvr_script.scriptapp('Resolve')\n"
-        "project = (resolve.GetProjectManager().GetCurrentProject()\n"
-        "           if resolve else None)\n"
-        "mp = project.GetMediaPool() if project else None\n"
-        "timeline = project.GetCurrentTimeline() if project else None\n"
-        "\n"
-    )
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.py',
-                                      delete=False, encoding='utf-8') as f:
-        f.write(boilerplate)
-        f.write(source)
-        tmp = f.name
-    try:
-        return _execute_python_script(tmp, [], timeout)
-    finally:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-
-
-def _run_inline_lua(source: str) -> Dict[str, Any]:
-    """Run a Lua snippet inside Resolve's Fusion engine.
-
-    Implementation note: Fusion's `Execute()` is effectively a no-op from the
-    Python bridge in Resolve 20.x — it runs without propagating return values
-    or side effects observable from Python. `RunScript()` against a file path
-    DOES work and gives the script full access to the standard Lua context
-    (`fu`, `fusion`, `app`, `bmd`, `io`, `os`, ...). We bridge results back
-    via `app:SetData(key, value)` which IS visible from Python's
-    `fusion.GetData(key)`.
-
-    The wrapper captures `print()` output into a string and stores stdout,
-    return value, and any pcall error in three Fusion-app SetData slots that
-    the Python side reads after RunScript returns.
-    """
-    r = get_resolve()
-    if r is None:
-        return _not_connected_error()
-    fusion = r.Fusion()
-    if fusion is None:
-        return _err("handle.Fusion() returned None — cannot run inline Lua.")
-
-    wrapped = (
-        'local _mcp_stdout = {}\n'
-        'local _mcp_orig_print = print\n'
-        'print = function(...)\n'
-        '    local args = {...}\n'
-        '    local parts = {}\n'
-        '    for i, v in ipairs(args) do parts[i] = tostring(v) end\n'
-        '    table.insert(_mcp_stdout, table.concat(parts, "\\t"))\n'
-        'end\n'
-        'local _mcp_ok, _mcp_result = pcall(function()\n'
-        + source + '\n'
-        'end)\n'
-        'print = _mcp_orig_print\n'
-        'local _mcp_app = fu or fusion or app\n'
-        'if _mcp_app then\n'
-        '    _mcp_app:SetData("__mcp_stdout__", table.concat(_mcp_stdout, "\\n"))\n'
-        '    if _mcp_ok then\n'
-        '        _mcp_app:SetData("__mcp_result__",\n'
-        '            _mcp_result ~= nil and tostring(_mcp_result) or "")\n'
-        '        _mcp_app:SetData("__mcp_error__", "")\n'
-        '    else\n'
-        '        _mcp_app:SetData("__mcp_result__", "")\n'
-        '        _mcp_app:SetData("__mcp_error__", tostring(_mcp_result))\n'
-        '    end\n'
-        '    _mcp_app:SetData("__mcp_done__", "1")\n'  # completion sentinel
-        'end\n'
-    )
-
-    # Clear prior slots so we can detect if RunScript silently did nothing.
-    # SetData goes through the Lua bridge and returns nil whether or not it
-    # took, so the return is not evidence -- but GetData is. The __mcp_done__
-    # slot is the one that matters: a stale "1" left by the previous run makes
-    # the poll below exit immediately and return the PREVIOUS run's stdout,
-    # result and error as this run's.
-    for slot in ("__mcp_done__", "__mcp_stdout__", "__mcp_result__", "__mcp_error__"):
-        fusion.SetData(slot, "")
-    stale = fusion.GetData("__mcp_done__")
-    if stale not in ("", None):
-        return _err(
-            "Could not clear the Fusion completion sentinel before running.",
-            code="FUSION_SENTINEL_NOT_CLEARED", category="api_error", retryable=True,
-            reason=f"__mcp_done__ still reads {stale!r} after SetData. The poll would "
-                   "exit immediately and hand back the previous run's output as this "
-                   "run's.",
-            remediation="Retry; if it persists, restart Resolve to clear the Fusion "
-                        "app's data slots.",
-        )
-
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.lua',
-                                      prefix='mcp-lua-inline-',
-                                      delete=False, encoding='utf-8') as tf:
-        tf.write(wrapped)
-        tmp = tf.name
-
-    try:
-        try:
-            fusion.RunScript(tmp)
-        except Exception as e:
-            return _err(f"Lua RunScript failed: {e}")
-
-        # RunScript is async — poll the completion sentinel until set.
-        deadline = time.time() + 60
-        while fusion.GetData("__mcp_done__") != "1":
-            if time.time() > deadline:
-                return _err("Lua run_inline timed out after 60s waiting for "
-                            "the script to complete.")
-            time.sleep(0.1)
-    finally:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-
-    stdout = fusion.GetData("__mcp_stdout__") or ""
-    result = fusion.GetData("__mcp_result__") or ""
-    error = fusion.GetData("__mcp_error__") or ""
-
-    response: Dict[str, Any] = {
-        "success": not error,
-        "stdout": stdout + ("\n" if stdout and not stdout.endswith("\n") else ""),
-        "language": "lua",
-    }
-    if result:
-        response["result"] = result
-    if error:
-        response["error"] = error
-    return response
-
-
 _EXTENSION_KERNEL_ACTIONS = [
     "extension_capabilities",
     "probe_fuse_lifecycle",
@@ -31989,7 +31752,7 @@ def _probe_fuse_lifecycle(p: Dict[str, Any]) -> Dict[str, Any]:
     if p.get("include_template_matrix"):
         out["template_matrix"] = _extension_template_matrix()["fuse"]
     if p.get("install"):
-        install = _safe_install_extension({
+        install = script_plugin("safe_install_extension", {
             "extension_type": "fuse",
             "name": name,
             "source": source,
@@ -31999,7 +31762,7 @@ def _probe_fuse_lifecycle(p: Dict[str, Any]) -> Dict[str, Any]:
         out["read"] = fuse_plugin("read", {"name": name}) if install.get("success") else None
         out["list"] = fuse_plugin("list")
         if p.get("cleanup", True):
-            out["remove"] = _safe_remove_extension({"extension_type": "fuse", "name": name})
+            out["remove"] = script_plugin("safe_remove_extension", {"extension_type": "fuse", "name": name})
     return out
 
 
@@ -32026,7 +31789,7 @@ def _probe_dctl_lifecycle(p: Dict[str, Any]) -> Dict[str, Any]:
     if p.get("include_template_matrix"):
         out["template_matrix"] = _extension_template_matrix()["dctl"]
     if p.get("install"):
-        install = _safe_install_extension({
+        install = script_plugin("safe_install_extension", {
             "extension_type": "dctl",
             "name": name,
             "source": source,
@@ -32040,11 +31803,19 @@ def _probe_dctl_lifecycle(p: Dict[str, Any]) -> Dict[str, Any]:
         if p.get("refresh_luts") and category == "lut":
             out["refresh_luts"] = project_settings("refresh_luts")
         if p.get("cleanup", True):
-            out["remove"] = _safe_remove_extension({"extension_type": "dctl", "name": name, "category": category, "subdir": subdir})
+            out["remove"] = script_plugin("safe_remove_extension", {"extension_type": "dctl", "name": name, "category": category, "subdir": subdir})
     return out
 
 
 def _probe_script_lifecycle(p: Dict[str, Any]) -> Dict[str, Any]:
+    if p.get("execute"):
+        # Refused rather than ignored: silently skipping it would report a
+        # lifecycle probe as complete for a step it never ran.
+        return _err(
+            "probe_script_lifecycle no longer executes scripts: script execution was "
+            "removed in v3.0.0. Drop `execute`; the probe still generates, validates, "
+            "installs, reads, lists and removes."
+        )
     name = p.get("name", "_mcp_script_lifecycle_probe")
     kind = p.get("kind", "scaffold")
     language = _normalize_script_language(p.get("language", "py"))
@@ -32070,7 +31841,7 @@ def _probe_script_lifecycle(p: Dict[str, Any]) -> Dict[str, Any]:
     if p.get("include_template_matrix"):
         out["template_matrix"] = _extension_template_matrix()["script"]
     if p.get("install"):
-        install = _safe_install_extension({
+        install = script_plugin("safe_install_extension", {
             "extension_type": "script",
             "name": name,
             "source": source,
@@ -32081,15 +31852,8 @@ def _probe_script_lifecycle(p: Dict[str, Any]) -> Dict[str, Any]:
         out["install"] = install
         out["read"] = script_plugin("read", {"name": name, "category": category, "language": language}) if install.get("success") else None
         out["list"] = script_plugin("list", {"category": category, "language": language})
-        if p.get("execute") and install.get("success"):
-            out["execute"] = script_plugin("execute", {
-                "name": name,
-                "category": category,
-                "language": language,
-                "timeout": p.get("timeout", 120),
-            })
         if p.get("cleanup", True):
-            out["remove"] = _safe_remove_extension({
+            out["remove"] = script_plugin("safe_remove_extension", {
                 "extension_type": "script",
                 "name": name,
                 "category": category,
@@ -32120,8 +31884,19 @@ def _extension_boundary_report(p: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+#: Removed in v3.0.0 (maintainer policy: the server does not execute
+#: caller-supplied code). `run_inline` ran a caller's Python as a subprocess on
+#: the host, or Lua inside Resolve's Fusion engine with `os` and `io` in scope;
+#: `execute` ran an installed script. Neither passed any gate. Kept as a named
+#: set so a stale caller gets a migration pointer rather than "unknown action",
+#: and so the action-list drift guard, which reads literal comparisons, does not
+#: count them as live actions.
+_REMOVED_SCRIPT_ACTIONS = frozenset({"execute", "run_inline"})
+
+
 @mcp.tool()
 @_guard_missing_params
+@_destructive_op("script_plugin")
 def script_plugin(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Author and install Resolve-page Lua/Python scripts (Workspace → Scripts menu).
 
@@ -32157,25 +31932,12 @@ def script_plugin(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
         — kind: 'scaffold' | 'media_rules'
         — options: {language: 'lua'|'py', ...kind-specific}
       list_templates() -> {kinds}
-      execute(name, category, language, args?, timeout?) -> {success, stdout?, stderr?, exit_code?}
-        — Python: subprocess with stdout/stderr captured.
-        — Lua: fusion.RunScript(); print() output goes to Resolve Console.
-        — args: list of CLI args for the Python subprocess (Python only).
-        — timeout: seconds (default 120 for execute, 60 for run_inline).
-        — Auto-launches Resolve if not running.
-        — Python scripts hard-exit after the script body (guards against
-          fusionscript's segfault-at-exit race), so atexit handlers do not
-          run and non-daemon threads are not joined. Do cleanup inline or
-          in try/finally, not in atexit.
-      run_inline(source, language, timeout?) -> {success, stdout?, stderr?, result?}
-        — Python: writes to temp file with `resolve`/`project`/`mp`/`timeline`
-          pre-bound, runs as subprocess, captures stdout/stderr.
-        — Lua: fusion.Execute(source); return value comes back as `result`.
-        — Use this for ad-hoc one-shot queries without persisting a file.
+      execute / run_inline — REMOVED in v3.0.0. This server does not execute
+        caller-supplied code; install a script and run it from Workspace > Scripts.
       extension_capabilities() -> {paths, templates, lifecycle, safe_guards}
       probe_fuse_lifecycle(name?, kind?, install?, cleanup?) -> {template, validation, install?, remove?}
       probe_dctl_lifecycle(name?, kind?, category?, install?, refresh_luts?, cleanup?) -> {template, validation, install?, remove?}
-      probe_script_lifecycle(name?, language?, category?, install?, execute?, cleanup?) -> {template, validation, install?, execute?, remove?}
+      probe_script_lifecycle(name?, language?, category?, install?, cleanup?) -> {template, validation, install?, remove?}
       safe_install_extension(extension_type, name, source?|kind?, dry_run?) -> {success}
       safe_remove_extension(extension_type, name, dry_run?) -> {success}
       refresh_or_restart_required(extension_type, category?) -> {refresh_luts, restart_required}
@@ -32377,49 +32139,16 @@ def script_plugin(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
         return {"source": source, "kind": kind, "name": name,
                 "language": language}
 
-    if action == "execute":
-        name = p.get("name", "")
-        invalid = _validate_script_name(name)
-        if invalid:
-            return invalid
-        category = p.get("category")
-        if not category:
-            return _err("execute requires a 'category'.")
-        language = _normalize_script_language(p.get("language", "lua"))
-        invalid = _validate_script_language(language)
-        if invalid:
-            return invalid
-        timeout = int(p.get("timeout", 120))
-        try:
-            target = _script_path(name, category, language)
-        except ValueError as e:
-            return _err(str(e))
-        if not os.path.isfile(target):
-            return _err(f"No script named '{name}{_SCRIPT_LANG_EXT[language]}' "
-                        f"at {target}")
-        if language == "py":
-            args = p.get("args", [])
-            if not isinstance(args, list):
-                return _err("'args' must be a list of strings.")
-            return _execute_python_script(target, args, timeout)
-        return _execute_lua_script(target)
-
-    if action == "run_inline":
-        source = p.get("source")
-        if not isinstance(source, str) or not source.strip():
-            return _err("run_inline requires a non-empty 'source' string.")
-        language = _normalize_script_language(p.get("language", "lua"))
-        invalid = _validate_script_language(language)
-        if invalid:
-            return invalid
-        timeout = int(p.get("timeout", 60))
-        if language == "py":
-            return _run_inline_python(source, timeout)
-        return _run_inline_lua(source)
+    if action in _REMOVED_SCRIPT_ACTIONS:
+        return _err(
+            f"script_plugin.{action} was removed in v3.0.0: this server does not "
+            "execute caller-supplied code. Install the script with `install`, then "
+            "run it yourself from Resolve's Workspace > Scripts menu."
+        )
 
     return _unknown(action, ["path", "categories", "list", "install", "remove",
                              "read", "validate", "template", "list_templates",
-                             "execute", "run_inline", *_EXTENSION_KERNEL_ACTIONS])
+                             *_EXTENSION_KERNEL_ACTIONS])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

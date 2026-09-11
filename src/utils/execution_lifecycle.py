@@ -132,6 +132,14 @@ class RiskClassificationHook(LifecycleHook):
     }
 
     _HIGH_RISK_ACTIONS: Set[Tuple[str, str]] = {
+        # Plugin-folder deletes. A bare `remove` misses the `remove_` prefix
+        # rule below, so these were unrecognised and every gate read them as
+        # reads. `safe_remove_extension` unlinks directly rather than through
+        # the per-tool `remove`, so it needs its own entry.
+        ("dctl", "remove"),
+        ("fuse_plugin", "remove"),
+        ("script_plugin", "remove"),
+        ("script_plugin", "safe_remove_extension"),
         ("timeline", "delete_clips"),
         ("timeline", "delete_clip_by_id"),
         ("timeline", "delete_markers"),
@@ -248,6 +256,14 @@ class RiskClassificationHook(LifecycleHook):
     #: MEDIUM was overwhelmingly the `else` fallthrough, which made an assessed
     #: MEDIUM and an unrated action indistinguishable by level alone.
     _MEDIUM_RISK_ACTIONS: Set[Tuple[str, str]] = {
+        # Plugin-folder installs: a new file, or a replaced one with
+        # overwrite=true, that Resolve or Fusion will later load and run.
+        # MEDIUM, not HIGH: audited and dry-run-honest, but not blocked by
+        # safe mode, in line with the other create-style writes.
+        ("dctl", "install"),
+        ("fuse_plugin", "install"),
+        ("script_plugin", "install"),
+        ("script_plugin", "safe_install_extension"),
         # Additive edits that place content into an existing timeline. Nothing
         # is deleted (`overwrite_range`, which does delete, is HIGH), but the
         # timeline is no longer what it was.

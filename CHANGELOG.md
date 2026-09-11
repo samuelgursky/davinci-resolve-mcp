@@ -2,6 +2,109 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v3.0.0 — the server no longer executes caller-supplied code, and every plugin write is gated
+
+**A breaking release.** Two public actions are removed. The rest of the change
+is a security fix, published as [GHSA-vh75-g46q-hgcw](https://github.com/samuelgursky/davinci-resolve-mcp/security/advisories/GHSA-vh75-g46q-hgcw).
+
+### Removed (breaking)
+
+- **`script_plugin run_inline`** ran a caller's source directly. Python ran as a
+  subprocess on the host, with the user's privileges and a live Resolve handle.
+  Lua ran inside Resolve's Fusion engine with `os` and `io` in scope, so
+  `os.execute` reached the shell.
+- **`script_plugin execute`** ran an installed script. `install` accepts
+  caller-supplied source, so the two together did the same thing in two steps.
+- **`probe_script_lifecycle`'s `execute` option.** The probe now **refuses**
+  `execute=true` up front, before generating or installing anything. Skipping it
+  silently would have reported a probe as complete for a step it never ran.
+
+Both actions shipped in v2.5.0 as documented features, and the agent guidance
+recommended `run_inline` for conversational queries. They are removed under the
+maintainer's policy that this server does not execute caller-supplied code, in
+any form. Calling either now returns an error that names the removal and points
+to the replacement, rather than a bare "unknown action".
+
+### Migration
+
+- Install the script with `script_plugin install`, then run it yourself from
+  **Workspace → Scripts** inside Resolve. Python output appears in Resolve's
+  Console.
+- For queries and edits in conversation, use the typed tools.
+
+### Security
+
+- **Plugin-folder writes passed every gate as reads.** `install` and `remove`
+  on `dctl`, `fuse_plugin` and `script_plugin`, plus `safe_install_extension`
+  and `safe_remove_extension`, were in neither write table. The risk classifier
+  returned `recognised=False` — a bare `remove` misses the `remove_*` prefix
+  rule — the destructive registry had no entry, and `fuse_plugin` and
+  `script_plugin` carried no `@_destructive_op` at all. So safe mode, dry-run
+  refusal and the security audit log treated them as reads. These are the
+  actions that put files into folders Resolve and Fusion later load and run: a
+  Fuse registers on the next restart, a script runs when clicked.
+- **`run_inline` and `execute` were in the same state.** With safe mode on, the
+  setting whose whole purpose is to block dangerous operations let arbitrary
+  code execution through as a read.
+- All of this is fixed here, for every version from v2.5.0 onward, and published
+  as the advisory linked above. A read-only audit confirmed `script_plugin` was
+  the only path in the repository that ran caller-supplied code: the Node
+  advanced server spawns fixed binaries only, never with `shell: true`.
+
+### Fixed
+
+- **A dry run of `install` or `remove` wrote or deleted the file for real.**
+  Dry-run refusal only applies to registered actions, so `dry_run=true` was
+  silently ignored. It is now refused with `DRY_RUN_UNAVAILABLE`. For a genuine
+  preview, use `safe_install_extension` / `safe_remove_extension`, which honour
+  `dry_run` themselves.
+- **The lifecycle probes skipped the gate.** They called the raw `_safe_*`
+  helpers directly, and `safe_remove_extension` unlinks the file itself, so
+  their installs and cleanup deletes reached disk ungated. They now go through
+  `script_plugin(...)`, and an AST guard keeps it that way.
+- **Plugin writes would have snapshotted the open timeline.** Once registered,
+  every write falls into version-on-mutate archiving — and `dctl encrypt_native`,
+  registered in v2.224.0, already archived a timeline version on every call. A
+  new non-timeline exemption keeps these writes gated and audited but skips the
+  archive. It also never resolves the versioning context, which reaches Resolve:
+  installing a shader must neither touch the project nor launch Resolve.
+
+### Changed — risk ratings
+
+- `install` and `safe_install_extension`: **MEDIUM** — audited and dry-run-honest,
+  not blocked by safe mode, like the other create-style writes.
+- `remove` and `safe_remove_extension`: **HIGH** — blocked while safe mode is on.
+  `allow_risky_operation: true` overrides a single call.
+- Safe mode is off by default, and `confirmation_required` is informational, not
+  a token demand. So for most users the visible change is that these calls are
+  now audited, and a dry run means a dry run.
+
+### Documentation
+
+- `docs/SKILL.md`, `docs/authoring/script-plugin-authoring.md` (retitled; its
+  execution section replaced by how to run an installed script) and the
+  extension-authoring kernel map describe the gated, execution-free surface.
+  So does the agent-facing prompt guidance, which had told agents to prefer
+  `run_inline` for inspecting Resolve state.
+- Two measured facts about Resolve's Lua bridge, found while building the
+  removed `run_inline`, are kept as reference because they describe Resolve
+  itself: `fusion.Execute()` is a no-op from the Python bridge in 20.x, and
+  `fusion.RunScript()` returns before the script finishes.
+
+### Validation
+
+- Full suite green: 3,472 passed, 1 skipped. The drop from the previous run is
+  exactly the deleted execution tests, less the five new policy tests.
+- New tests pin both halves: every plugin write is a rated, recognised write; a
+  dry run on the real tools is refused rather than executed; the safe-install
+  dry run still works; plugin writes never archive or reach Resolve; safe mode
+  blocks deletes and not installs; the removed actions refuse with a migration
+  pointer; the probe refuses `execute` before any side effect; and an AST scan
+  finds no `RunScript`, `Execute`, `exec` or `eval` call anywhere in `src/`.
+- No live Resolve run. The actions that remain behave as before apart from the
+  gate, which is decorator-level and verified offline. The removed actions can
+  only be verified absent, which the tests do.
+
 ## What's New in v2.224.3 — the Windows import guard covers the advanced server
 
 Contributed by @Dev-next-gen (#222). Test-only; no behaviour changed.
