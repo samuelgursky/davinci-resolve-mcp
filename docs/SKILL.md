@@ -735,6 +735,16 @@ Key actions:
   Resolve API behavior (no connection needed); filter by substring
 - `verification_stats` — readback-verification tally (verified/contradicted/
   unverified) since server start (no connection needed)
+- `report_issue(kind, title, summary, …)` — when the user says "send this as a
+  bug" or "…as a feature request", draft a GitHub issue for this server. Fill
+  it from the conversation (the failing tool/action and its error verbatim,
+  expected vs actual, steps). Server version, Resolve build, connection mode
+  and OS are attached; paths, usernames, e-mails and secrets are redacted. It
+  **files nothing**: show the user the draft, then hand them the returned
+  `url` to review and submit on GitHub. Redaction cannot catch client or
+  project names written as prose, so ask the user to check. Never call it
+  unprompted; offering once after a failure that looks like a server defect
+  is fine. No connection needed, and it never launches Resolve
 - `get_page` / `open_page(page)` — read or switch the active page
 - `get_keyframe_mode` / `set_keyframe_mode(mode)`
 - `get_fairlight_presets` — Resolve 20.2.2+; returns available Fairlight

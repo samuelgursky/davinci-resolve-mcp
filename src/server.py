@@ -147,6 +147,7 @@ from src.utils.media_analysis_jobs import (
 from src.utils.platform import get_resolve_paths, get_resolve_plugin_paths
 from src.utils.resolve_connection import connect_resolve
 from src.utils import resolve_runtime as _resolve_runtime
+from src.utils import issue_report as _issue_report
 from src.utils.lut_paths import master_lut_dir, ensure_lut_in_master
 from src.utils import fuse_templates, dctl_templates, script_templates
 from src.utils.timeline_title_text import (
@@ -248,7 +249,10 @@ mcp = FastMCP(
         "DAVINCI_RESOLVE_BRIDGE=1 only forces it), so a connection error does NOT mean "
         "the free edition is unsupported — on Resolve 21.0.x. Resolve 21.1 moved Python "
         "scripting to Studio and free 21.1 no longer lists Python scripts in that menu "
-        "(issue #203), so on 21.1+ a free-edition connection error may be final."
+        "(issue #203), so on 21.1+ a free-edition connection error may be final. "
+        "When the user asks to send something as a bug or feature request, draft it "
+        "with resolve_control(action='report_issue') — it returns a prefilled GitHub "
+        "issue link for the user to review and submit; nothing is filed for them."
     ),
 )
 
@@ -16619,6 +16623,23 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         Omit symbol for every recorded gate this build does not clear.
       verification_stats() -> {stats}  — readback-verification tally
         (verified/contradicted/unverified) since server start (no connection needed).
+      report_issue(kind, title, summary, steps?, expected?, actual?, error?, tool?,
+                   tool_action?, use_case?, proposal?, include_environment?)
+        -> {title, body, labels, url, url_truncated, redactions, submitted: false, next_step}
+        — Draft a GitHub bug report (kind="bug") or feature request (kind="feature")
+          for this MCP server. Call it when the user asks to send, report or file
+          something as a bug or feature request ("send this as a bug"). Do not call
+          it unprompted; you may OFFER once when a failure looks like a defect in
+          this server rather than in the user's request. Write the fields from the
+          conversation: the failing tool/action and its error verbatim, what the
+          user expected, and steps that reproduce it. Server version, Resolve
+          build, connection mode and OS are attached automatically
+          (include_environment=false to omit); nothing connects to or launches
+          Resolve. NOTHING IS FILED: show the user the title and body, then give
+          them the url — the issue is created only when they open it and press
+          Submit on GitHub. Paths, usernames, e-mails and secrets are redacted,
+          but client or project names in plain prose are not: ask the user to
+          check before submitting.
       job_status(job_id) -> {id, label, status, result?, error?, started_at, ended_at}
         — poll a background job started by a long op run with background=True
           (no connection needed). status is running, done, or error.
@@ -16751,6 +16772,48 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         stats = _verification_stats()
         return {"stats": stats, "note": "Counts since server start. A rising "
                 "'contradicted' count means the API reported success but a readback disagreed."}
+    if action == "report_issue":
+        # Drafts only — never files, never connects. See utils/issue_report.py.
+        kind = _issue_report.normalize_kind(p.get("kind") or p.get("type"))
+        if kind is None:
+            return _err(
+                "report_issue requires kind: 'bug' or 'feature'",
+                code="INVALID_KIND",
+                category="invalid_input",
+            )
+        title = str(p.get("title") or "").strip()
+        summary = str(p.get("summary") or p.get("description") or p.get("body") or "").strip()
+        if not title or not summary:
+            return _err(
+                "report_issue requires title and summary",
+                code="MISSING_FIELDS",
+                category="invalid_input",
+                remediation="Write both from the conversation: a one-line title and "
+                "a summary of what happened or what the user wants.",
+            )
+        environment = None
+        if _setup_bool(p.get("include_environment", p.get("includeEnvironment")), True):
+            environment = _issue_report.collect_environment(resolve, VERSION)
+        draft = _issue_report.build_issue(
+            kind,
+            title,
+            summary,
+            steps=p.get("steps"),
+            expected=p.get("expected"),
+            actual=p.get("actual"),
+            error=p.get("error"),
+            tool=p.get("tool"),
+            tool_action=p.get("tool_action") or p.get("failed_action"),
+            use_case=p.get("use_case"),
+            proposal=p.get("proposal"),
+            environment=environment,
+        )
+        return {
+            "success": True,
+            **draft,
+            "submitted": False,
+            "next_step": _issue_report.next_step_guidance(draft["url_truncated"]),
+        }
 
     # Background-job polling is a registry read — no Resolve connection needed.
     if action == "job_status":
@@ -17075,7 +17138,7 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         if err:
             return _err(err)
         return {"success": bool(r.ExportUserPreferencesPreset(clean["name"], clean["path"]))}
-    return _unknown(action, ["is_studio","get_keyboard_presets","get_current_keyboard_preset","launch","runtime_mode","get_version","api_truth","check_version_support","verification_stats","job_status","list_jobs","get_execution_trace","get_execution","list_recent_executions","begin_execution","end_execution","export_execution_report","clear_executions","inspect_operation","list_lifecycle_hooks","mcp_update_status","set_mcp_update_policy","ignore_mcp_update","snooze_mcp_update","clear_mcp_update_preferences","get_page","open_page","get_keyframe_mode","set_keyframe_mode","quit","get_fairlight_presets","set_high_priority","disable_background_tasks_for_current_session","list_user_preferences_presets","save_user_preferences_preset","load_user_preferences_preset","delete_user_preferences_preset","import_user_preferences_preset","export_user_preferences_preset","open_control_panel","control_panel_status","close_control_panel","save_state","restore_state"])
+    return _unknown(action, ["is_studio","get_keyboard_presets","get_current_keyboard_preset","launch","runtime_mode","get_version","api_truth","check_version_support","verification_stats","report_issue","job_status","list_jobs","get_execution_trace","get_execution","list_recent_executions","begin_execution","end_execution","export_execution_report","clear_executions","inspect_operation","list_lifecycle_hooks","mcp_update_status","set_mcp_update_policy","ignore_mcp_update","snooze_mcp_update","clear_mcp_update_preferences","get_page","open_page","get_keyframe_mode","set_keyframe_mode","quit","get_fairlight_presets","set_high_priority","disable_background_tasks_for_current_session","list_user_preferences_presets","save_user_preferences_preset","load_user_preferences_preset","delete_user_preferences_preset","import_user_preferences_preset","export_user_preferences_preset","open_control_panel","control_panel_status","close_control_panel","save_state","restore_state"])
 
 
 # ─── V2 C4: Per-field corrections with provenance + changelog ────────────────
