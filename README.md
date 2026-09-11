@@ -2,7 +2,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-[![Version](https://img.shields.io/badge/version-3.0.1-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
+[![Version](https://img.shields.io/badge/version-3.1.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![npm](https://img.shields.io/npm/v/davinci-resolve-mcp.svg?label=npm&color=CB3837)](https://www.npmjs.com/package/davinci-resolve-mcp)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](docs/reference/api-coverage.md)
 [![Tools](https://img.shields.io/badge/MCP%20Tools-36%20(377%20full)-blue.svg)](#server-modes)
@@ -409,6 +409,17 @@ Extension authoring references live in [docs/authoring](docs/authoring/). Resolv
   instead.
 
 Resolve 19.1.3 remains the compatibility baseline. Resolve 20.x scripting calls are additive, version-guarded, and live-tested on 20.3.2. Resolve 21.0 scripting additions (audio classification, speaker-detection transcription, IntelliSearch, slate analysis, motion-deblur, speech generation, session background-task control) are exposed behind runtime capability detection, so they stay inert on older builds and activate automatically on Resolve 21+. They are live-tested on Studio 21.0.2.4 — see the [Resolve 21 delta](docs/reference/api-coverage.md#resolve-21-delta-detail). Note that `AnalyzeForIntellisearch`, `AnalyzeForSlate` and `GenerateSpeech` each require a separately-downloaded AI Extras pack, and Resolve reports a missing pack inconsistently (some return `False`, others an error string), so these actions report `success: false` with the Resolve-supplied reason rather than guessing.
+
+## Reporting Bugs and Requesting Features
+
+Tell your assistant "send this as a bug" or "send this as a feature request". It
+drafts a GitHub issue from the conversation, including the failing call and
+its error, and attaches the server version, Resolve build, connection mode and
+OS. Local paths, your username and anything that looks like a secret are
+redacted. Nothing is filed for you: you get a prefilled link, review the
+draft, and submit it on GitHub yourself. You can also
+[open an issue](https://github.com/samuelgursky/davinci-resolve-mcp/issues/new/choose)
+directly.
 
 ## Development
 

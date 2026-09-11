@@ -2,6 +2,56 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v3.1.0 — "send this as a bug": issues drafted from chat
+
+A new `resolve_control` action, `report_issue`. While working in any MCP client,
+say "send this as a bug" or "send this as a feature request" and the assistant
+drafts the GitHub issue for you.
+
+### Added
+
+- **`resolve_control(action="report_issue")`** drafts a bug report
+  (`kind="bug"`) or feature request (`kind="feature"`) from the conversation:
+  what happened, steps to reproduce, expected vs actual, and the failing
+  tool/action with its error. It attaches what a maintainer would otherwise
+  have to ask for in the thread: server version, Resolve build and edition,
+  connection mode (local scripting, network scripting or in-app bridge),
+  whether Resolve is running with a UI or headless, OS, and Python.
+- **It files nothing.** It returns the draft plus a prefilled GitHub
+  `issues/new` link. You review the draft and submit it under your own
+  account, so no GitHub credential lives in the server and nothing is
+  published that you have not seen.
+- **It never connects to or launches Resolve.** A report about a connection
+  that will not come up must not start one, so the environment is read only
+  from a handle the server already holds.
+- **Every field is redacted before it reaches the draft:** absolute paths
+  (POSIX, Windows and UNC, including paths with spaces; the file extension is
+  kept, and the Blackmagic install locations and `~/.davinci-resolve-mcp` are
+  kept because they identify nothing), the local username, full name and
+  hostname, e-mail addresses, the control panel's `#token=` fragment, and
+  key-shaped secrets. Client or project names written as ordinary prose
+  cannot be recognised, so the result tells the assistant to have you check
+  the draft before submitting.
+- Links over 8,000 characters shorten only the narrative. The environment
+  table always survives, and the full body is still returned to the chat.
+- `bug_report` and `feature_request` issue templates, carrying the `bug` and
+  `enhancement` labels.
+
+### Documentation
+
+- README: new *Reporting Bugs and Requesting Features* section (with the
+  matching section in `README.zh-CN.md`); `docs/SKILL.md` documents when to
+  call the action and that the user submits; the server instructions now
+  mention it, so any MCP client can find it.
+
+### Validation
+
+- 27 new unit tests (`tests/test_issue_report.py`) cover redaction, layout,
+  link round-trip and truncation, the no-connect guarantee, and the
+  templates. The full suite passes: 3509 passed, 0 failed.
+- Smoke-tested through the real MCP stdio protocol against `src/server.py`.
+- No Resolve behaviour changed, so no live Resolve run was needed.
+
 ## What's New in v3.0.1 — project deletion is gated, and the open project is refused by default
 
 A security fix, published as [GHSA-gmp7-qjp9-m7gm](https://github.com/samuelgursky/davinci-resolve-mcp/security/advisories/GHSA-gmp7-qjp9-m7gm).
