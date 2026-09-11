@@ -261,13 +261,18 @@ class TestDynamicImportsTakeFileUrls(unittest.TestCase):
 
         call = re.compile(r"\bimport\(\s*([^'\"`\s])")
         offenders = []
-        for folder in ("scripts", "bin"):
-            for script in sorted((REPO_ROOT / folder).glob("*.mjs")):
+        # The advanced server loads its own modules with import() too, including from
+        # its tools/ subfolder, so that tree is walked recursively.
+        for folder, pattern in (("scripts", "*.mjs"), ("bin", "*.mjs"),
+                                ("resolve-advanced/server", "**/*.mjs")):
+            for script in sorted((REPO_ROOT / folder).glob(pattern)):
+                if "node_modules" in script.parts:
+                    continue
                 text = script.read_text(encoding="utf-8")
                 for match in call.finditer(text):
                     if not text[match.start(1):].startswith("pathToFileURL("):
                         line = text.count("\n", 0, match.start()) + 1
-                        offenders.append(f"{folder}/{script.name}:{line}")
+                        offenders.append(f"{script.relative_to(REPO_ROOT).as_posix()}:{line}")
         self.assertEqual(offenders, [], "wrap the path in pathToFileURL(...).href")
 
 
