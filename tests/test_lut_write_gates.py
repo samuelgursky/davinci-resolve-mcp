@@ -153,5 +153,23 @@ class NativeDryRunIsHonestTest(_HookState):
                 self.assertEqual(self._count(), 0)
 
 
+class GranularRemoveLabelTest(unittest.TestCase):
+    def test_the_granular_remove_is_labelled_destructive(self) -> None:
+        """MCP clients read destructiveHint to decide how carefully to treat a
+        call. The granular server has no gate decorator, so for it the label is
+        the signal: a file delete labelled a plain write undersells it."""
+        import ast
+        from pathlib import Path
+
+        graph = Path(__file__).resolve().parents[1] / "src" / "granular" / "graph.py"
+        tree = ast.parse(graph.read_text(encoding="utf-8"))
+        labels = {
+            fn.name: [ast.unparse(k.value) for d in fn.decorator_list if isinstance(d, ast.Call)
+                      for k in d.keywords if k.arg == "annotations"]
+            for fn in tree.body if isinstance(fn, ast.FunctionDef)
+        }
+        self.assertEqual(labels["remove_lut_file"], ["EXTERNAL_DESTRUCTIVE_TOOL"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -395,7 +395,7 @@ def install_lut_file(name: str, source: Optional[str] = None,
         return _lut_error(exc)
 
 
-@mcp.tool(annotations=EXTERNAL_WRITE_TOOL)
+@mcp.tool(annotations=EXTERNAL_DESTRUCTIVE_TOOL)
 def remove_lut_file(name: str) -> Dict[str, Any]:
     """Delete a LUT from the writable MCP folder only.
 
