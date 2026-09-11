@@ -2,6 +2,64 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v3.2.0 — LUT files: find them, install them, remove them, gated
+
+Contributed by @legionsound (#223), live-validated on Studio 21.1.0.14.
+
+### Added
+
+- **The `lut` tool** — `path`, `list`, `read`, `install`, `remove`, `attenuate`,
+  `capabilities` — and seven granular twins. `graph set_lut` could already put
+  a LUT on a node, but nothing answered the question it raises: which LUTs
+  exist? This closes the gap against Blackmagic's own `list_luts` and
+  `delete_lut`, and matches what `dctl` already offered for shaders in the same
+  directory tree. Tool count 36/377 → 37/384.
+- **Reads roam, writes do not.** `list` and `read` walk the whole master LUT
+  root, so stock, vendor and hand-installed LUTs are all discoverable. `install`,
+  `remove` and `attenuate` touch only the namespaced `MCP/` subfolder: stock and
+  vendor LUTs are never modified or removed. Every listing reports `set_lut_path`
+  in the exact form `graph set_lut` accepts.
+- **The master root, not the per-user LUT folder**, because `Graph.SetLUT`
+  resolves names only against the master root.
+
+### Gating
+
+- **Gated from its first release**, the way v3.0.0 gates plugin-folder writes.
+  The tool carries `@_destructive_op`. `install` and `attenuate` are MEDIUM, and
+  `remove` is HIGH, so it is blocked in safe mode. All three honour `dry_run`
+  natively, are audited, and sit in the non-timeline exemption. The
+  write-enforcement ratchet passes with nothing added to its backlog, making this
+  the first new tool to land under it.
+- **No code execution.** Blackmagic's `generate_lut` evaluates a caller-supplied
+  function at every lattice point, and this server does not execute caller code.
+  So authoring is limited to writing a provided `.cube`, and to blending an
+  existing LUT toward identity. `lut capabilities` reports
+  `generate_from_code: false` together with the reason.
+
+### Changed
+
+- Adapted on merge: the granular `remove_lut_file` is labelled
+  `EXTERNAL_DESTRUCTIVE_TOOL` rather than `EXTERNAL_WRITE_TOOL`. The granular
+  server has no gate decorator, so for it the MCP annotation is the signal a
+  client reads, and a file delete labelled a plain write undersold it. A test
+  pins the label.
+
+### Validation
+
+- Full suite green: 3,549 passed, 1 skipped.
+- Live evidence is @legionsound's on Studio 21.1.0.14, and it covers the claim
+  the tool rests on: install → `refresh_luts` → `graph set_lut` → `get_lut`,
+  then a rendered TIFF, through both interfaces. A solid-red clip's centre pixel
+  went from `[255, 0, 0]` to `[0, 255, 0]` under a constant-green LUT, and the
+  relocation fallback did not fire, so the installed path resolved on its own.
+  Discovery listed 249 LUTs identically through both interfaces with Resolve
+  closed. Three containment checks are kept as tests: `../escaped.cube` is
+  refused, removing a stock LUT is refused, and a re-install without
+  `overwrite` is refused. Not reproduced here.
+- **Not claimed**: LUT formats other than 3D `.cube`; `layer_index` above 1 and
+  colour-group graphs; `attenuate` against a real vendor LUT; the Windows and
+  Linux master roots; and a read-only master root.
+
 ## What's New in v3.1.1 — chat-drafted issues are labelled for every reporter
 
 A repository workflow change. Nothing in the server or the npm package behaves

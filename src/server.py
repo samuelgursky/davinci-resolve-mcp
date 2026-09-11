@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 377-tool granular server instead
 """
 
-VERSION = "3.1.1"
+VERSION = "3.2.0"
 
 import base64
 import os
