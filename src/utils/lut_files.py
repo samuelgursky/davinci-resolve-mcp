@@ -154,7 +154,8 @@ def install_lut(name: str, *, source: Optional[str] = None,
     if (source is None) == (source_path is None):
         raise LutPathError("provide exactly one of source (text) or source_path (a file to copy)")
     absolute, set_lut_path = resolve_writable(name)
-    if os.path.exists(absolute) and not overwrite:
+    existed = os.path.exists(absolute)
+    if existed and not overwrite:
         raise LutPathError(
             f"{set_lut_path} already exists. Pass overwrite=true to replace it."
         )
@@ -175,7 +176,14 @@ def install_lut(name: str, *, source: Optional[str] = None,
         "path": absolute,
         "set_lut_path": set_lut_path,
         "bytes": os.path.getsize(absolute),
-        "overwritten": bool(overwrite and payload is not None),
+        # Whether a file was actually replaced, not whether the caller allowed
+        # it: `payload is not None` is always true here, so this reported a
+        # replacement for every overwrite=true install, including the ones that
+        # landed on an empty MCP/. This flag is the record of what an install
+        # destroyed -- execution_lifecycle rates `lut install` on the fact that
+        # it "can replace with overwrite=true" -- so it has to be the observed
+        # pre-state, not the permission.
+        "overwritten": existed,
         "note": ("Call project_settings(action='refresh_luts') so Resolve picks up "
                  "the new file before applying it."),
     }
