@@ -25,7 +25,7 @@ Every non-deprecated method in the bundled legacy README is represented. This
 does not claim complete coverage of the newer Resolve 21.1 typed API. The
 default compound server exposes **37 tools** that group related operations by
 action parameter, keeping LLM context windows lean. The full granular server
-provides **384 individual tools** for power users. The legacy coverage spans
+provides **387 individual tools** for power users. The legacy coverage spans
 13 API object classes. MCP-level kernel actions are tracked separately in
 [Kernel Action Coverage](../kernels/README.md).
 
@@ -38,6 +38,11 @@ Parity with Blackmagic's own MCP surfaced one more gap: it exposes
 `list_luts`/`generate_lut`/`delete_lut`, and this server could set a LUT on a
 node but never list, install or remove LUT files. The `lut` tool and its
 granular twins close that. See [LUT file controls](lut-file-controls.md).
+
+The typed stub shipped in #205 is now queryable from the server itself, the
+way Blackmagic's MCP exposes `search_scripting_api` — and each result also says
+whether this server wraps the method, so a lookup doubles as a parity check.
+See [Querying the typed API](typed-api-search.md).
 
 The 34th compound tool is `timeline_versioning` (C6) — an MCP-level workflow
 tool, not a wrapper around a Resolve API method. It surfaces the

@@ -52,6 +52,7 @@ from src.utils.resolve211_edits import validate_edit_options, validate_transitio
 
 # Platform-specific Resolve paths
 from src.utils.cdl import normalize_cdl_payload
+from src.utils import typed_api_search
 from src.utils import lut_files
 from src.utils import resolve_writes as _resolve_writes
 from src.utils.mcp_stdio import run_fastmcp_stdio
@@ -16652,6 +16653,15 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
       set_keyframe_mode(mode) -> {success}
       quit() -> {success}
       get_fairlight_presets() -> {presets}
+      search_api(pattern, kind?, limit?) -> {methods, option_types, total_matches}
+        — regex over the shipped Resolve 21.1 typed stub. Each hit says whether
+          THIS server references the method, and where, so it doubles as a
+          parity check. kind: 'all' (default) | 'methods' | 'options'.
+          No connection needed.
+      describe_api(symbol) -> {signatures, stub_line, description, source_files}
+        — one 'Class.Method' or one TypedDict name. No connection needed.
+      api_surface() -> {methods, option_types, option_fields, objects}
+        — what the shipped stub contains. No connection needed.
       set_high_priority() -> {success}
       disable_background_tasks_for_current_session() -> {success}  — Resolve 21+
       list_user_preferences_presets() -> {presets}  — Resolve 21.0.4+
@@ -16706,7 +16716,24 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
     # that property is worth keeping: it is the one call that still answers when
     # Resolve is down or unreachable. So the live build is used only if one is
     # ALREADY connected, or if the caller names it. Never connect for this.
-    if action == "api_truth":
+    if action == "search_api":
+        try:
+            return typed_api_search.search(
+                project_dir, p.get("pattern"),
+                kind=p.get("kind", "all"), limit=p.get("limit", 50))
+        except typed_api_search.TypedApiError as exc:
+            return _err(str(exc), code="TYPED_API_QUERY", category="invalid_input")
+    elif action == "describe_api":
+        try:
+            return typed_api_search.describe(project_dir, p.get("symbol"))
+        except typed_api_search.TypedApiError as exc:
+            return _err(str(exc), code="TYPED_API_QUERY", category="invalid_input")
+    elif action == "api_surface":
+        try:
+            return typed_api_search.summary(project_dir)
+        except typed_api_search.TypedApiError as exc:
+            return _err(str(exc), code="TYPED_API_QUERY", category="invalid_input")
+    elif action == "api_truth":
         facts = lookup_api_truth(p.get("query"))
         live_version = p.get("resolve_version")
         if not live_version and resolve is not None:
@@ -17139,7 +17166,7 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         if err:
             return _err(err)
         return {"success": bool(r.ExportUserPreferencesPreset(clean["name"], clean["path"]))}
-    return _unknown(action, ["is_studio","get_keyboard_presets","get_current_keyboard_preset","launch","runtime_mode","get_version","api_truth","check_version_support","verification_stats","report_issue","job_status","list_jobs","get_execution_trace","get_execution","list_recent_executions","begin_execution","end_execution","export_execution_report","clear_executions","inspect_operation","list_lifecycle_hooks","mcp_update_status","set_mcp_update_policy","ignore_mcp_update","snooze_mcp_update","clear_mcp_update_preferences","get_page","open_page","get_keyframe_mode","set_keyframe_mode","quit","get_fairlight_presets","set_high_priority","disable_background_tasks_for_current_session","list_user_preferences_presets","save_user_preferences_preset","load_user_preferences_preset","delete_user_preferences_preset","import_user_preferences_preset","export_user_preferences_preset","open_control_panel","control_panel_status","close_control_panel","save_state","restore_state"])
+    return _unknown(action, ["is_studio","get_keyboard_presets","get_current_keyboard_preset","launch","runtime_mode","get_version","search_api","describe_api","api_surface","api_truth","check_version_support","verification_stats","report_issue","job_status","list_jobs","get_execution_trace","get_execution","list_recent_executions","begin_execution","end_execution","export_execution_report","clear_executions","inspect_operation","list_lifecycle_hooks","mcp_update_status","set_mcp_update_policy","ignore_mcp_update","snooze_mcp_update","clear_mcp_update_preferences","get_page","open_page","get_keyframe_mode","set_keyframe_mode","quit","get_fairlight_presets","set_high_priority","disable_background_tasks_for_current_session","list_user_preferences_presets","save_user_preferences_preset","load_user_preferences_preset","delete_user_preferences_preset","import_user_preferences_preset","export_user_preferences_preset","open_control_panel","control_panel_status","close_control_panel","save_state","restore_state"])
 
 
 # ─── V2 C4: Per-field corrections with provenance + changelog ────────────────
