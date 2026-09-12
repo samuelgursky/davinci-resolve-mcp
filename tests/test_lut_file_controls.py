@@ -89,6 +89,21 @@ class ListingTests(TempLutRoot):
         self.assertFalse(by_path["Vendor/Stock.cube"]["writable"])
         self.assertTrue(by_path[f"{lut_files.WRITABLE_SUBDIR}/Mine.cube"]["writable"])
 
+    def test_a_sibling_folder_sharing_the_prefix_is_not_writable(self):
+        self.write(f"{lut_files.WRITABLE_SUBDIR}/Mine.cube")
+        self.write(f"{lut_files.WRITABLE_SUBDIR}_old/Backup.cube")
+        self.write(f"{lut_files.WRITABLE_SUBDIR}resets/Vendor.cube")
+        by_path = {row["set_lut_path"]: row for row in lut_files.list_luts()["luts"]}
+        self.assertTrue(by_path[f"{lut_files.WRITABLE_SUBDIR}/Mine.cube"]["writable"])
+        self.assertFalse(by_path[f"{lut_files.WRITABLE_SUBDIR}_old/Backup.cube"]["writable"])
+        self.assertFalse(by_path[f"{lut_files.WRITABLE_SUBDIR}resets/Vendor.cube"]["writable"])
+
+    def test_writability_matches_what_remove_will_accept(self):
+        self.write(f"{lut_files.WRITABLE_SUBDIR}_old/Backup.cube")
+        row = lut_files.list_luts()["luts"][0]
+        if row["writable"]:
+            lut_files.remove_lut(row["set_lut_path"])
+
     def test_set_lut_path_is_master_relative_with_forward_slashes(self):
         self.write("A/B/Deep.cube")
         out = lut_files.list_luts()
