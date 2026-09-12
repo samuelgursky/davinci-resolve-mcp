@@ -161,15 +161,24 @@ def install_lut(name: str, *, source: Optional[str] = None,
     if source_path is not None:
         if not os.path.isfile(source_path):
             raise LutPathError(f"source_path not found: {source_path}")
-        with open(source_path, "r", encoding="utf-8", errors="strict") as handle:
+        # A copy has to be byte-exact. Two of the extensions this server
+        # advertises -- .dat and .olut -- are binary, and a .cube carries its
+        # TITLE in whatever encoding the vendor wrote it in, so decoding the
+        # source as UTF-8 turned "install the LUT I already have on disk" into
+        # a UnicodeDecodeError surfacing as LUT_ERROR.
+        with open(source_path, "rb") as handle:
             payload = handle.read()
     else:
         payload = source
     if not payload.strip():
         raise LutPathError("refusing to install an empty LUT")
     os.makedirs(os.path.dirname(absolute), exist_ok=True)
-    with open(absolute, "w", encoding="utf-8") as handle:
-        handle.write(payload)
+    if isinstance(payload, bytes):
+        with open(absolute, "wb") as handle:
+            handle.write(payload)
+    else:
+        with open(absolute, "w", encoding="utf-8") as handle:
+            handle.write(payload)
     return {
         "success": True,
         "path": absolute,
