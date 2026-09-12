@@ -107,6 +107,7 @@ autoresearch/
 docs/_scratch/
 docs/_design/
 **/*gameplan*.md
+docs/superpowers/specs/
 **/*ledger*.json
 **/*review-log*.md
 **/*session*.md

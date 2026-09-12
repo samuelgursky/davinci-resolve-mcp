@@ -19,10 +19,41 @@ import pathlib
 import unittest
 from unittest import mock
 
+import re
+
 from src.utils import destructive_hook as dh
 from src.utils.api_truth import ACTION_SYMBOLS, API_TRUTH, traps_for
 
 from tests.test_destructive_registry_drift import _destructive_op_tools
+
+SERVER = pathlib.Path(__file__).resolve().parent.parent / "src" / "server.py"
+
+
+def _handler_source(server_src: str, action: str):
+    """Source of the helper an action dispatches to, else its own branch.
+
+    Actions here are dispatched as `elif action == "x": return _helper(...)`, and
+    the confirmation logic lives in `_helper`, not at the branch.
+    """
+    m = re.search(rf'action == "{re.escape(action)}"\s*:\s*\n\s*return (_[a-z0-9_]+)\(',
+                  server_src)
+    if m:
+        fn = m.group(1)
+        d = re.search(rf"\ndef {re.escape(fn)}\(", server_src)
+        if d:
+            nxt = re.search(r"\ndef [a-zA-Z_]", server_src[d.start() + 1:])
+            end = d.start() + 1 + (nxt.start() if nxt else len(server_src))
+            return server_src[d.start():end]
+
+    # Not every action delegates: `copy_grades` is dispatched inline. Returning
+    # None for those made the caller skip them, which quietly excused the single
+    # most important action from the guard. Fall back to the branch body.
+    b = re.search(rf'action == "{re.escape(action)}"\s*:', server_src)
+    if b:
+        rest = server_src[b.end():]
+        nxt = re.search(r"\n    (?:elif action ==|return _unknown\()", rest)
+        return rest[:nxt.start()] if nxt else rest[:4000]
+    return None
 
 
 class RegistryIntegrity(unittest.TestCase):
@@ -74,6 +105,52 @@ class RegistryIntegrity(unittest.TestCase):
                 method, corpus,
                 f"{entry['symbol']} carries destroys_prior_work (it refuses calls) but no "
                 "live probe re-measures it. Add one, or drop the flag.",
+            )
+
+    def test_exempt_actions_really_do_confirm_for_themselves(self):
+        """An exemption is only safe while the action's own gate still exists.
+
+        These actions are excused from the refusal because they already make the
+        caller confirm. If someone deletes that handler-side gate, the exemption
+        silently becomes "no confirmation at all" — so tie the two together.
+        """
+        server_src = SERVER.read_text(encoding="utf-8")
+        for tool, action in sorted(dh.TRAP_REFUSAL_EXEMPT_ACTIONS):
+            body = _handler_source(server_src, action)
+            self.assertIsNotNone(body, f"no handler found for {tool}.{action}")
+            self.assertIn(
+                "confirm_token", body,
+                f"{tool}.{action} is exempt from the trap refusal because it confirms for "
+                "itself, but its handler no longer mentions confirm_token. Either restore "
+                "the gate or drop the exemption.",
+            )
+
+    def test_refusing_actions_are_not_dry_run_by_default(self):
+        """A refusal must never answer for a call that mutates nothing.
+
+        `bulk_match_to_hero` defaulted `dry_run` to True inside its handler, so a
+        bare first call was a pure preview — and the guard refused it, demanding
+        acknowledgement of a destruction that call was never going to perform.
+        The dry-run exemption only sees an EXPLICIT dry_run, so a handler-level
+        default has to be caught here instead.
+        """
+        server_src = SERVER.read_text(encoding="utf-8")
+        for (tool, action) in sorted(ACTION_SYMBOLS):
+            if not any(e.get("destroys_prior_work") for e in traps_for(tool, action)):
+                continue
+            if (tool, action) in dh.TRAP_REFUSAL_EXEMPT_ACTIONS:
+                continue
+            body = _handler_source(server_src, action)
+            self.assertIsNotNone(
+                body,
+                f"could not locate the handler for {tool}.{action}; the guard would "
+                "silently skip it, which is how copy_grades went unchecked.",
+            )
+            self.assertNotRegex(
+                body, r"""dry_run["']\s*,\s*True""",
+                f"{tool}.{action} refuses on destroys_prior_work but defaults dry_run to "
+                "True in its handler, so a first call previews and mutates nothing. Exempt "
+                "it, or stop defaulting dry_run.",
             )
 
     def test_unmapped_action_returns_nothing(self):
@@ -143,6 +220,32 @@ class GuardBehaviour(unittest.TestCase):
         tool, _ = self._tool()
         out = tool("copy_grades", {"dry_run": True})
         self.assertEqual(out.get("error", {}).get("code"), "DRY_RUN_UNAVAILABLE")
+
+    def test_exempt_action_is_not_refused_but_still_advised(self):
+        """The action that already confirms runs, and keeps the fact attached.
+
+        Refusing here would cost the caller two acknowledgements found serially:
+        add acknowledge_trap, retry, then discover a confirm_token is also
+        needed. The advisory push is still worth having.
+        """
+        tool, calls = self._tool()
+        out = tool("safe_copy_grade", {})
+        self.assertEqual(calls, ["safe_copy_grade"], "an action that self-confirms must not be refused")
+        self.assertNotIn("retry_with", out)
+        self.assertEqual(out["known_limitation"][0]["symbol"], "TimelineItem.CopyGrades")
+
+    def test_dry_run_by_default_action_is_not_refused_on_a_bare_call(self):
+        """A first call to bulk_match_to_hero previews; it must not be refused.
+
+        Its handler defaults dry_run to True, so `{}` mutates nothing — but
+        _explicit_dry_run_requested({}) is False, so the dry-run exemption alone
+        never covered it.
+        """
+        self.assertFalse(dh._explicit_dry_run_requested({}))
+        tool, calls = self._tool()
+        out = tool("bulk_match_to_hero", {})
+        self.assertEqual(calls, ["bulk_match_to_hero"])
+        self.assertNotIn("retry_with", out)
 
     def test_unmapped_action_is_untouched(self):
         tool, calls = self._tool()

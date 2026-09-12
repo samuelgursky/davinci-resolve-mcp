@@ -741,6 +741,32 @@ def _trap_guard_disabled() -> bool:
     return os.environ.get(TRAP_GUARD_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+#: Actions that already make the caller confirm, so the trap guard must NOT also
+#: refuse them.
+#:
+#: `destroys_prior_work` is a property of the SYMBOL (TimelineItem.CopyGrades),
+#: but four actions call that symbol and two of them already own a confirmation
+#: path. Refusing those means the caller is told to add `acknowledge_trap`, and
+#: only after retrying discovers they also need a confirm token — two
+#: acknowledgements for one operation, found serially. Worse, it lands hardest on
+#: `safe_copy_grade`, whose whole name promises it is the careful route; making
+#: it the most irritating to call pushes people toward the raw `copy_grades` the
+#: guard exists to protect them from.
+#:
+#: Two mechanisms enforcing one rule drift apart. The confirm-token flow is older
+#: and more specific, so it wins and this guard stands down. These actions still
+#: get the advisory `known_limitation` — the fact is worth having, the second
+#: refusal is not.
+TRAP_REFUSAL_EXEMPT_ACTIONS: FrozenSet[Tuple[str, str]] = frozenset({
+    # Issues a confirm_token whose preview names the exact risk: "Replaces the
+    # entire node graph on every successfully resolved target item."
+    ("timeline_item_color", "safe_copy_grade"),
+    # Dry-run-by-default in the handler (`p.get("dry_run", True)`), then
+    # confirm_token to execute. A first call with no params mutates nothing.
+    ("timeline_item_color", "bulk_match_to_hero"),
+})
+
+
 def _trap_acknowledged(params: Optional[Dict[str, Any]]) -> bool:
     """Did the caller explicitly accept a known-destructive behaviour?"""
     return bool(isinstance(params, dict) and params.get("acknowledge_trap"))
@@ -1126,6 +1152,7 @@ def destructive_op(tool_name: str) -> Callable[[Callable[..., Any]], Callable[..
                 # at all. The advisory push still rides along on that refusal.
                 if (
                     blocking
+                    and (tool_name, action) not in TRAP_REFUSAL_EXEMPT_ACTIONS
                     and not _trap_acknowledged(params)
                     and not _explicit_dry_run_requested(params)
                 ):
