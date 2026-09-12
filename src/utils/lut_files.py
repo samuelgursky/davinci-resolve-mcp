@@ -50,6 +50,20 @@ def writable_dir() -> str:
     return os.path.join(master_lut_dir(), WRITABLE_SUBDIR)
 
 
+def _is_within(path: str, parent: str) -> bool:
+    """Whether ``path`` is ``parent`` itself or sits under it, compared by segment.
+
+    ``commonpath`` is the comparison the rest of the repo uses for confinement
+    checks (`media_analysis._is_relative_to`), and it is the only one that is
+    correct here: a string prefix test also accepts a sibling whose name merely
+    starts with the same characters.
+    """
+    try:
+        return os.path.commonpath([path, parent]) == parent
+    except (ValueError, OSError):
+        return False
+
+
 def normalize_relative(name: str, *, default_ext: Optional[str] = None) -> str:
     """Validate a caller-supplied LUT name and return it as a POSIX relative path.
 
@@ -123,7 +137,13 @@ def list_luts(subdir: Optional[str] = None) -> Dict[str, Any]:
             except OSError:
                 size = None
             try:
-                is_writable = os.path.realpath(current).startswith(writable_root)
+                # Segment-wise, not a string prefix: a sibling of the writable
+                # subdir whose name starts with it -- MCP_old/ after a manual
+                # backup, MCPresets/ from a vendor pack -- cleared
+                # `startswith(writable_root)` and was listed as writable, while
+                # `remove` resolves names under MCP/ and refuses the very path
+                # the listing handed back.
+                is_writable = _is_within(os.path.realpath(current), writable_root)
             except OSError:
                 is_writable = False
             found.append({
