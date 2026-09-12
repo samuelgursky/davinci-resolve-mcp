@@ -121,6 +121,14 @@ class InstallRemoveTests(TempLutRoot):
         out = lut_files.install_lut("warm.cube", source=IDENTITY_CUBE, overwrite=True)
         self.assertTrue(out["success"])
 
+    def test_overwritten_reports_a_replacement_that_happened(self):
+        fresh = lut_files.install_lut("warm.cube", source=IDENTITY_CUBE, overwrite=True)
+        self.assertFalse(fresh["overwritten"])
+        replaced = lut_files.install_lut("warm.cube", source=IDENTITY_CUBE, overwrite=True)
+        self.assertTrue(replaced["overwritten"])
+        first = lut_files.install_lut("cool.cube", source=IDENTITY_CUBE)
+        self.assertFalse(first["overwritten"])
+
     def test_install_needs_exactly_one_source(self):
         with self.assertRaises(lut_files.LutPathError):
             lut_files.install_lut("warm.cube")
