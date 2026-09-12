@@ -2,6 +2,518 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v3.2.0 — LUT files: find them, install them, remove them, gated
+
+Contributed by @legionsound (#223), live-validated on Studio 21.1.0.14.
+
+### Added
+
+- **The `lut` tool** — `path`, `list`, `read`, `install`, `remove`, `attenuate`,
+  `capabilities` — and seven granular twins. `graph set_lut` could already put
+  a LUT on a node, but nothing answered the question it raises: which LUTs
+  exist? This closes the gap against Blackmagic's own `list_luts` and
+  `delete_lut`, and matches what `dctl` already offered for shaders in the same
+  directory tree. Tool count 36/377 → 37/384.
+- **Reads roam, writes do not.** `list` and `read` walk the whole master LUT
+  root, so stock, vendor and hand-installed LUTs are all discoverable. `install`,
+  `remove` and `attenuate` touch only the namespaced `MCP/` subfolder: stock and
+  vendor LUTs are never modified or removed. Every listing reports `set_lut_path`
+  in the exact form `graph set_lut` accepts.
+- **The master root, not the per-user LUT folder**, because `Graph.SetLUT`
+  resolves names only against the master root.
+
+### Gating
+
+- **Gated from its first release**, the way v3.0.0 gates plugin-folder writes.
+  The tool carries `@_destructive_op`. `install` and `attenuate` are MEDIUM, and
+  `remove` is HIGH, so it is blocked in safe mode. All three honour `dry_run`
+  natively, are audited, and sit in the non-timeline exemption. The
+  write-enforcement ratchet passes with nothing added to its backlog, making this
+  the first new tool to land under it.
+- **No code execution.** Blackmagic's `generate_lut` evaluates a caller-supplied
+  function at every lattice point, and this server does not execute caller code.
+  So authoring is limited to writing a provided `.cube`, and to blending an
+  existing LUT toward identity. `lut capabilities` reports
+  `generate_from_code: false` together with the reason.
+
+### Changed
+
+- Adapted on merge: the granular `remove_lut_file` is labelled
+  `EXTERNAL_DESTRUCTIVE_TOOL` rather than `EXTERNAL_WRITE_TOOL`. The granular
+  server has no gate decorator, so for it the MCP annotation is the signal a
+  client reads, and a file delete labelled a plain write undersold it. A test
+  pins the label.
+
+### Validation
+
+- Full suite green: 3,549 passed, 1 skipped.
+- Live evidence is @legionsound's on Studio 21.1.0.14, and it covers the claim
+  the tool rests on: install → `refresh_luts` → `graph set_lut` → `get_lut`,
+  then a rendered TIFF, through both interfaces. A solid-red clip's centre pixel
+  went from `[255, 0, 0]` to `[0, 255, 0]` under a constant-green LUT, and the
+  relocation fallback did not fire, so the installed path resolved on its own.
+  Discovery listed 249 LUTs identically through both interfaces with Resolve
+  closed. Three containment checks are kept as tests: `../escaped.cube` is
+  refused, removing a stock LUT is refused, and a re-install without
+  `overwrite` is refused. Not reproduced here.
+- **Not claimed**: LUT formats other than 3D `.cube`; `layer_index` above 1 and
+  colour-group graphs; `attenuate` against a real vendor LUT; the Windows and
+  Linux master roots; and a read-only master root.
+
+## What's New in v3.1.1 — chat-drafted issues are labelled for every reporter
+
+A repository workflow change. Nothing in the server or the npm package behaves
+differently.
+
+### Added
+
+- **A GitHub Actions workflow labels issues drafted by `report_issue`.** The
+  prefilled link asks GitHub for the `bug` or `enhancement` label, but GitHub
+  applies `labels=` only for people with triage rights, so an outside
+  reporter's issue could arrive unlabelled. On `issues.opened` the workflow
+  now looks for the draft's hidden `filed-via` marker and adds `via-mcp`, plus
+  `bug` or `enhancement` from the draft's first heading. `label:via-mcp` now
+  lists every report that came in through chat.
+- The issue body is untrusted input handled under a write token. It is read
+  only inside `github-script`, never passed through a shell, and the only
+  effect is adding those fixed labels. The workflow's only permission is
+  `issues: write`.
+
+### Validation
+
+- 5 new tests run the workflow's own script under Node against real drafts:
+  bug, feature, CRLF line endings (as GitHub's web form submits), a truncated
+  link body, and issues `report_issue` did not draft. A change to the marker
+  or the headings on either side now fails the suite. The full suite passes:
+  3514 passed, 0 failed.
+- No Resolve behaviour changed, so no live Resolve run was needed.
+
+## What's New in v3.1.0 — "send this as a bug": issues drafted from chat
+
+A new `resolve_control` action, `report_issue`. While working in any MCP client,
+say "send this as a bug" or "send this as a feature request" and the assistant
+drafts the GitHub issue for you.
+
+### Added
+
+- **`resolve_control(action="report_issue")`** drafts a bug report
+  (`kind="bug"`) or feature request (`kind="feature"`) from the conversation:
+  what happened, steps to reproduce, expected vs actual, and the failing
+  tool/action with its error. It attaches what a maintainer would otherwise
+  have to ask for in the thread: server version, Resolve build and edition,
+  connection mode (local scripting, network scripting or in-app bridge),
+  whether Resolve is running with a UI or headless, OS, and Python.
+- **It files nothing.** It returns the draft plus a prefilled GitHub
+  `issues/new` link. You review the draft and submit it under your own
+  account, so no GitHub credential lives in the server and nothing is
+  published that you have not seen.
+- **It never connects to or launches Resolve.** A report about a connection
+  that will not come up must not start one, so the environment is read only
+  from a handle the server already holds.
+- **Every field is redacted before it reaches the draft:** absolute paths
+  (POSIX, Windows and UNC, including paths with spaces; the file extension is
+  kept, and the Blackmagic install locations and `~/.davinci-resolve-mcp` are
+  kept because they identify nothing), the local username, full name and
+  hostname, e-mail addresses, the control panel's `#token=` fragment, and
+  key-shaped secrets. Client or project names written as ordinary prose
+  cannot be recognised, so the result tells the assistant to have you check
+  the draft before submitting.
+- Links over 8,000 characters shorten only the narrative. The environment
+  table always survives, and the full body is still returned to the chat.
+- `bug_report` and `feature_request` issue templates, carrying the `bug` and
+  `enhancement` labels.
+
+### Documentation
+
+- README: new *Reporting Bugs and Requesting Features* section (with the
+  matching section in `README.zh-CN.md`); `docs/SKILL.md` documents when to
+  call the action and that the user submits; the server instructions now
+  mention it, so any MCP client can find it.
+
+### Validation
+
+- 27 new unit tests (`tests/test_issue_report.py`) cover redaction, layout,
+  link round-trip and truncation, the no-connect guarantee, and the
+  templates. The full suite passes: 3509 passed, 0 failed.
+- Smoke-tested through the real MCP stdio protocol against `src/server.py`.
+- No Resolve behaviour changed, so no live Resolve run was needed.
+
+## What's New in v3.0.1 — project deletion is gated, and the open project is refused by default
+
+A security fix, published as [GHSA-gmp7-qjp9-m7gm](https://github.com/samuelgursky/davinci-resolve-mcp/security/advisories/GHSA-gmp7-qjp9-m7gm).
+One behaviour change existing callers may notice is called out below.
+
+### Security
+
+- **`project_manager delete` permanently deleted any named project — including
+  the one open in Resolve — without confirmation, and no gate saw it.** It runs
+  through `delete_project_safely`, a *reliability* helper that works around
+  DeleteProject's flakiness and session lock by closing the open project and
+  then deleting it. The `project_manager` tool carried no `@_destructive_op`,
+  `delete` was not registered, and the CRITICAL risk rule written for project
+  deletion named `delete_project`, an action no tool dispatches. So it matched
+  nothing: safe mode, dry-run refusal and the security audit log never saw a
+  project deletion.
+- **Thirteen further deletes that the classifier already rated HIGH were not
+  enforced, for the same reason.** They are the three `render` deletes,
+  `render_presets.delete_burnin`, `gallery_stills.delete_stills`, `fusion_comp`
+  `delete_tool` and `delete_keyframe`, `timeline_item.delete_keyframe`, the three
+  `media_pool_item_markers` deletes, `project_settings.delete_color_group` and
+  `resolve_control.delete_user_preferences_preset`. Safe mode is enforced only
+  by the decorator, and only for registered actions, so these ratings were a
+  promise nothing kept.
+
+### Changed
+
+- **The raw `delete` now refuses the currently open project unless
+  `close_current=True`**, matching `safe_project_delete`. This is the one change
+  existing callers may notice: a call that used to close and delete the open
+  project now returns an error, until it passes `close_current=True`.
+- All of the actions above are registered and their tools decorated. The project
+  delete is CRITICAL, and `safe_project_delete` and the thirteen others are HIGH,
+  so all are blocked while safe mode is on. An explicit dry run is refused
+  unless the action honours it natively; only `safe_project_delete` does, and
+  keeps working. Every call is audited. None of them archives the timeline,
+  except the keyframe deletes on `fusion_comp` and `timeline_item`, which change
+  timeline items and so still do.
+- **`remove_motion_blur`** (on `folder` and `media_pool_item`) is **re-rated
+  MEDIUM**. It renders new media and never touches the source, and was already
+  confirm-gated for exactly that reason, but the `remove_` name-prefix rule had
+  rated it HIGH on its name alone. It is now audited, and not blocked by safe
+  mode.
+- **The name-prefix rule is now a fallback for unlisted actions**: an explicit
+  lower rating wins. Before, it fired ahead of the LOW and MEDIUM tables and
+  could not be overridden. No existing rating changed except `remove_motion_blur`
+  — no LOW, MEDIUM or graph-LUT entry started with `delete_` or `remove_`.
+
+### Fixed
+
+- **Nine risk rules named actions that no tool dispatches, and so protected
+  nothing.** On `project_manager`: `delete_project`, now repointed at the real
+  `delete`, plus `close_project_without_saving` and `save_project_as`. On
+  `edit_engine`: `auto_cut_silence` and `ripple_trim`. On `timeline`: `cut_clip`,
+  `delete_clip_by_id`, `delete_markers` and `ripple_delete` — which is a CutList
+  entry kind inside `apply_cuts`, not an action. The rest were removed; since
+  they never matched, removing them changes nothing at runtime. An existing test
+  even asserted that the dead `delete_project` rule classified as CRITICAL — true
+  of a name no tool uses, and part of how it survived. It now tests the real
+  `delete`.
+- **The bridge installer's Lua canary gave only the pre-21.1 diagnosis** — that
+  Resolve cannot find a Python 3. On free 21.1 that is wrong, because Python
+  scripting moved to Studio (#203). Its comments and printed output now give both
+  causes, the newer first (#219). The printed post-install guidance was already
+  corrected in v2.224.1.
+
+### Added
+
+- **`tests/test_write_enforcement_ratchet.py`** fails the suite in three cases:
+  - an action is rated destructive but not enforced;
+  - a risk rule names an action no tool dispatches;
+  - a new write-style action appears with neither a rating nor a registry entry.
+
+  The 144 unrated write-style actions that exist today are frozen as a backlog.
+  Rating one forces its removal from the list, so it can only shrink. This is
+  the second instance of this gap in two days, and the first time it cannot
+  come back unnoticed.
+- `tests/test_project_delete_guard.py` pins the delete guard, its rating and its
+  enforcement.
+
+### Documentation
+
+- Removed a stale tool count from `docs/authoring/script-plugin-authoring.md`.
+
+### Validation
+
+- Full suite green: 3,482 passed, 1 skipped. Every static and drift gate is clean, including
+  the native-dry-run scan. That scan requires the native-dry-run list to match,
+  exactly, the registered actions whose handlers read `dry_run`, which is how
+  `safe_project_delete` was confirmed as the only one.
+- No live Resolve run. The gating is decorator-level and verified offline. The
+  delete guard is tested against a fake project manager, deliberately:
+  exercising it live means deleting a real project.
+
+## What's New in v3.0.0 — the server no longer executes caller-supplied code, and every plugin write is gated
+
+**A breaking release.** Two public actions are removed. The rest of the change
+is a security fix, published as [GHSA-vh75-g46q-hgcw](https://github.com/samuelgursky/davinci-resolve-mcp/security/advisories/GHSA-vh75-g46q-hgcw).
+
+### Removed (breaking)
+
+- **`script_plugin run_inline`** ran a caller's source directly. Python ran as a
+  subprocess on the host, with the user's privileges and a live Resolve handle.
+  Lua ran inside Resolve's Fusion engine with `os` and `io` in scope, so
+  `os.execute` reached the shell.
+- **`script_plugin execute`** ran an installed script. `install` accepts
+  caller-supplied source, so the two together did the same thing in two steps.
+- **`probe_script_lifecycle`'s `execute` option.** The probe now **refuses**
+  `execute=true` up front, before generating or installing anything. Skipping it
+  silently would have reported a probe as complete for a step it never ran.
+
+Both actions shipped in v2.5.0 as documented features, and the agent guidance
+recommended `run_inline` for conversational queries. They are removed under the
+maintainer's policy that this server does not execute caller-supplied code, in
+any form. Calling either now returns an error that names the removal and points
+to the replacement, rather than a bare "unknown action".
+
+### Migration
+
+- Install the script with `script_plugin install`, then run it yourself from
+  **Workspace → Scripts** inside Resolve. Python output appears in Resolve's
+  Console.
+- For queries and edits in conversation, use the typed tools.
+
+### Security
+
+- **Plugin-folder writes passed every gate as reads.** `install` and `remove`
+  on `dctl`, `fuse_plugin` and `script_plugin`, plus `safe_install_extension`
+  and `safe_remove_extension`, were in neither write table. The risk classifier
+  returned `recognised=False` — a bare `remove` misses the `remove_*` prefix
+  rule — the destructive registry had no entry, and `fuse_plugin` and
+  `script_plugin` carried no `@_destructive_op` at all. So safe mode, dry-run
+  refusal and the security audit log treated them as reads. These are the
+  actions that put files into folders Resolve and Fusion later load and run: a
+  Fuse registers on the next restart, a script runs when clicked.
+- **`run_inline` and `execute` were in the same state.** With safe mode on, the
+  setting whose whole purpose is to block dangerous operations let arbitrary
+  code execution through as a read.
+- All of this is fixed here, for every version from v2.5.0 onward, and published
+  as the advisory linked above. A read-only audit confirmed `script_plugin` was
+  the only path in the repository that ran caller-supplied code: the Node
+  advanced server spawns fixed binaries only, never with `shell: true`.
+
+### Fixed
+
+- **A dry run of `install` or `remove` wrote or deleted the file for real.**
+  Dry-run refusal only applies to registered actions, so `dry_run=true` was
+  silently ignored. It is now refused with `DRY_RUN_UNAVAILABLE`. For a genuine
+  preview, use `safe_install_extension` / `safe_remove_extension`, which honour
+  `dry_run` themselves.
+- **The lifecycle probes skipped the gate.** They called the raw `_safe_*`
+  helpers directly, and `safe_remove_extension` unlinks the file itself, so
+  their installs and cleanup deletes reached disk ungated. They now go through
+  `script_plugin(...)`, and an AST guard keeps it that way.
+- **Plugin writes would have snapshotted the open timeline.** Once registered,
+  every write falls into version-on-mutate archiving — and `dctl encrypt_native`,
+  registered in v2.224.0, already archived a timeline version on every call. A
+  new non-timeline exemption keeps these writes gated and audited but skips the
+  archive. It also never resolves the versioning context, which reaches Resolve:
+  installing a shader must neither touch the project nor launch Resolve.
+
+### Changed — risk ratings
+
+- `install` and `safe_install_extension`: **MEDIUM** — audited and dry-run-honest,
+  not blocked by safe mode, like the other create-style writes.
+- `remove` and `safe_remove_extension`: **HIGH** — blocked while safe mode is on.
+  `allow_risky_operation: true` overrides a single call.
+- Safe mode is off by default, and `confirmation_required` is informational, not
+  a token demand. So for most users the visible change is that these calls are
+  now audited, and a dry run means a dry run.
+
+### Documentation
+
+- `docs/SKILL.md`, `docs/authoring/script-plugin-authoring.md` (retitled; its
+  execution section replaced by how to run an installed script) and the
+  extension-authoring kernel map describe the gated, execution-free surface.
+  So does the agent-facing prompt guidance, which had told agents to prefer
+  `run_inline` for inspecting Resolve state.
+- Two measured facts about Resolve's Lua bridge, found while building the
+  removed `run_inline`, are kept as reference because they describe Resolve
+  itself: `fusion.Execute()` is a no-op from the Python bridge in 20.x, and
+  `fusion.RunScript()` returns before the script finishes.
+
+### Validation
+
+- Full suite green: 3,472 passed, 1 skipped. The drop from the previous run is
+  exactly the deleted execution tests, less the five new policy tests.
+- New tests pin both halves: every plugin write is a rated, recognised write; a
+  dry run on the real tools is refused rather than executed; the safe-install
+  dry run still works; plugin writes never archive or reach Resolve; safe mode
+  blocks deletes and not installs; the removed actions refuse with a migration
+  pointer; the probe refuses `execute` before any side effect; and an AST scan
+  finds no `RunScript`, `Execute`, `exec` or `eval` call anywhere in `src/`.
+- No live Resolve run. The actions that remain behave as before apart from the
+  gate, which is decorator-level and verified offline. The removed actions can
+  only be verified absent, which the tests do.
+
+## What's New in v2.224.3 — the Windows import guard covers the advanced server
+
+Contributed by @Dev-next-gen (#222). Test-only; no behaviour changed.
+
+### Changed
+
+- The static guard added in v2.224.2 fails if a dynamic `import()` is given a
+  bare filesystem path — the pattern Node's ESM loader rejects on Windows. It
+  covered only `scripts/*.mjs` and `bin/*.mjs`, so a bare-path import added
+  under `resolve-advanced/server/` would have passed it, and with CI running
+  only on Linux the Windows failure would have stayed invisible there too. It
+  now also walks `resolve-advanced/server/` recursively, since the advanced
+  server loads modules from its `tools/` subfolder as well.
+- Offenders are reported by their path from the repository root, so a hit in a
+  nested file names that file. `node_modules` is skipped.
+
+### Validation
+
+- There is nothing under `resolve-advanced/server/` to catch today — every
+  dynamic import there passes a string literal — so the widened guard was
+  verified against a planted file, reproduced independently here: a probe at
+  `resolve-advanced/server/tools/zz_bare_import_probe.mjs` containing
+  `await import(path.join(...))` fails it, naming that file and line; with the
+  probe removed it passes. Per the contributor, the original
+  `scripts/author_interchange.mjs:45` case is still caught against the
+  pre-v2.224.2 bridge.
+- Full suite green: 3,485 passed, 1 skipped.
+
+## What's New in v2.224.2 — offline authoring works on Windows
+
+Contributed by @Dev-next-gen (#221), found and verified on Windows.
+
+### Fixed
+
+- **`timeline(action="author_offline")` failed for every target on Windows
+  before writing anything.** The authoring bridge,
+  `scripts/author_interchange.mjs`, handed a filesystem path straight to a
+  dynamic `import()`. On macOS and Linux that is harmless; on Windows the path
+  is `C:\...`, and Node's ESM loader reads the drive letter as a URL scheme
+  `c:` and refuses it with `ERR_UNSUPPORTED_ESM_URL_SCHEME`. Because the import
+  runs before target validation, even the bridge's own error for an unknown
+  target never appeared. The path is now wrapped in `pathToFileURL(...).href`.
+  Nothing changes on macOS or Linux.
+- This is the second time the same bug has shipped: the launcher hit it first
+  and was fixed the same way in 06d5bd6 (2026-07-15), and the authoring bridge,
+  added later, repeated it. CI runs only on Linux, which cannot see it, so it
+  stayed green both times.
+
+### Added
+
+- **A static guard so it cannot ship a third time.** A new test fails if any
+  dynamic `import()` in `scripts/*.mjs` or `bin/*.mjs` is given anything other
+  than a string literal or `pathToFileURL(...)`. Checked statically precisely
+  because no Linux run can observe the failure. Verified here that it earns its
+  place: run against the unfixed bridge it fails naming exactly
+  `scripts/author_interchange.mjs:45`, and passes with the fix.
+
+### Validation
+
+- Full suite green: 3,485 passed, 1 skipped.
+- A repo-wide scan for non-literal dynamic imports, including
+  `resolve-advanced/server/` which the new guard does not cover, found only the
+  two launcher imports already fixed in 06d5bd6 and the one fixed here — so the
+  fix is complete, not a first instance of several.
+- **Not verified on Windows hardware by this project — there is none here.**
+  The Windows failure and the fix were measured by @Dev-next-gen on Python 3.12
+  and Node 25: two failures and four errors on main, all eight passing with the
+  change. The `.drt` authoring cases additionally need `jszip` from the
+  `resolve-advanced` install, which that machine did not have; they now get
+  past the import — the only part this touches — and stop at the missing
+  module instead.
+
+## What's New in v2.224.1 — the bridge installer explains the outcome it was built to detect
+
+Reported by @hemna (#219). No behaviour changed; the installer writes exactly
+what it wrote before and says considerably more about it.
+
+### Fixed
+
+- **The canary-only outcome had no printed guidance at all.** Seeing
+  `resolve_bridge_canary` in Workspace ▸ Scripts while `resolve_bridge_probe`
+  is absent is not a failed install — it is the single most informative thing
+  the installer can tell you, and the exact signal the Lua canary exists to
+  produce. But the printed steps were a fixed four-line list that assumed the
+  Python probe had listed, so a user in this case followed step 3 to a menu
+  entry that cannot exist. The explanation was written down the whole time —
+  inside the canary's own Lua comments, which nobody has any reason to open.
+  There is now a real branch for it that says the install worked, says not to
+  re-run it, and explains what the missing probe means.
+- **Duplicate canary entries are now expected rather than alarming.** The
+  installer writes into every Scripts/Utility folder Resolve scans, giving the
+  canary the same filename in each, so Resolve lists it once per folder with no
+  way to tell them apart. The reporter saw two and reasonably read it as a
+  broken install; a real run on the maintainer's machine produces **four**. The
+  guidance now names the number and says running any one of them is the same as
+  running any other. The count is derived from what was actually installed, and
+  the filename now has a single definition shared by the writer and the
+  counter — those two disagreeing would produce guidance promising entries that
+  are not there.
+- **The Console is named.** The canary reports through `print()`, which lands in
+  Workspace ▸ Console and nowhere else. The installer had never mentioned the
+  Console — the string does not appear in it — so running the canary with no
+  Console open looks exactly like nothing happening, which is what was
+  reported.
+
+### Changed
+
+- The canary-only explanation is **split by edition instead of asserting a
+  single cause**. The canary's own text predates Resolve 21.1 and blames Python
+  discovery — `PYTHON3HOME`, then `/usr/local/bin/python3`, and nowhere else.
+  That is still right on Studio and on 21.0.x and earlier, but on **free 21.1
+  it is wrong**: Python scripting moved to the Studio edition (#203), so `.py`
+  files do not list there whatever Python is installed, and the older advice
+  would send a user chasing a setting that cannot fix their problem. Both
+  branches are now stated, newer cause first.
+
+### Validation
+
+- Full suite green: 3,484 passed, 1 skipped. Six new tests cover the duplicate
+  count and its wording, the absence of that wording for a single canary, the
+  canary-only branch, the Console pointer, both edition branches with the
+  newer one ordered first, and the single-definition guarantee on the canary
+  filename.
+- Verified by running the installer for real on this machine, which is where
+  the four-entry figure comes from.
+- **Still open in #219**: the canary's own embedded remediation text carries
+  the pre-21.1 single-cause diagnosis. Correcting what it says to a specific
+  user needs their edition, which has been asked for; the printed guidance
+  above no longer depends on that answer.
+
+## What's New in v2.224.0 — native Resolve 21.1 DCTL encryption
+
+Contributed by @legionsound (#216), live-validated on Studio 21.1.0.14.
+
+### Added
+
+- **`dctl encrypt_native`**, with the granular twin `encrypt_dctl_native`,
+  calling native 21.1 DCTL encryption. The caller supplies an existing `.dctl`
+  input, a new `.dctle` output path and an optional expiry; the wrapper reports
+  the actual final path, size and hash. Tool count 376 → 377.
+- **A destination is never replaced.** Resolve writes into isolated staging and
+  only a verified non-empty regular file is published. The publish uses
+  `O_EXCL` creation at `0o600`, so a file that appears *during* encryption
+  cannot be clobbered, and the existence check uses `lexists` so a **dangling
+  symlink** counts as an occupied destination rather than a free one — the case
+  a plain existence test silently gets wrong. The cross-volume fallback removes
+  its own partial output if the copy fails.
+- Source bytes are preserved, and the action neither installs nor applies the
+  shader.
+
+### Changed
+
+- Classified **LOW** risk rather than MEDIUM, with a destructive-action hook
+  entry and dry-run refusal coverage. LOW is the honest rating here: the action
+  only ever creates a new file and is incapable of overwriting one, so grouping
+  it with operations that rewrite existing work would make the rating mean
+  less. Verified: `dctl.encrypt_native` classifies LOW / destructive /
+  recognised, and is in the destructive registry.
+- Two native boundaries handled explicitly rather than papered over: Resolve
+  appends `.dctle` itself, so a fixed staging stem prevents a doubled suffix on
+  a user-supplied name; and an empty expiry string is normalized to null,
+  because an isolated probe measured the native call returning false for `""`
+  and true for null or omission. Other expiry strings pass through untouched.
+
+### Validation
+
+- Full suite green: 3,478 passed, 1 skipped. Drift guards, api-parity and read/write
+  symmetry all clean with the 377 count.
+- Live evidence is @legionsound's on Studio 21.1.0.14, through both interfaces
+  with synthetic identity code: each exported a non-empty file, reported
+  correct size and hash, preserved the source bytes, produced owner-only
+  permissions, and refused a repeat export without altering the destination.
+  Not reproduced here; this machine is Studio 19.1.3.7, below the 21.1 floor.
+- **Not claimed**: that an encrypted shader is accepted by a render, and
+  nothing at all about cipher strength. Observed file sizes are recorded as
+  observations, not format guarantees.
+- This PR was branched from current `main` and merged **without adaptation** —
+  the first in the 21.1 series to need none.
+
 ## What's New in v2.223.0 — native Resolve 21.1 DCTL validation
 
 Contributed by @legionsound (#215), live-validated on Studio 21.1.0.14.

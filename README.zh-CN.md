@@ -2,17 +2,17 @@
 
 [English](README.md) | 简体中文
 
-[![Version](https://img.shields.io/badge/version-2.223.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
+[![Version](https://img.shields.io/badge/version-3.2.0-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![npm](https://img.shields.io/npm/v/davinci-resolve-mcp.svg?label=npm&color=CB3837)](https://www.npmjs.com/package/davinci-resolve-mcp)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](docs/reference/api-coverage.md)
-[![Tools](https://img.shields.io/badge/MCP%20Tools-36%20(376%20full)-blue.svg)](#服务器模式)
+[![Tools](https://img.shields.io/badge/MCP%20Tools-37%20(384%20full)-blue.svg)](#服务器模式)
 [![Advanced](https://img.shields.io/badge/Advanced%20(offline)-18%20tools-blueviolet.svg)](#服务器模式)
 [![Tested](https://img.shields.io/badge/Live%20Tested-93.6%25-green.svg)](docs/reference/api-coverage.md#test-results)
 [![DaVinci Resolve](https://img.shields.io/badge/DaVinci%20Resolve-18.5+-darkred.svg)](https://www.blackmagicdesign.com/products/davinciresolve)
 [![Python](https://img.shields.io/badge/python-3.10+-green.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
-> 本翻译对应 v2.223.0 版 README。如与英文原版有出入，以 [英文原版](README.md) 为准。
+> 本翻译对应 v3.2.0 版 README。如与英文原版有出入，以 [英文原版](README.md) 为准。
 
 一个 Model Context Protocol (MCP) 服务器，让 AI 助手通过官方脚本 API 控制 DaVinci Resolve Studio（达芬奇）。它提供完整的 API 覆盖，外加带护栏的工作流助手，涵盖剪辑、媒体池整理、渲染设置、审阅标记、调色、Fusion、Fairlight、项目生命周期任务、扩展开发，以及不碰源媒体的媒体分析。
 
@@ -87,8 +87,8 @@ venv/bin/python -m src.control_panel
 
 | 模式 | 入口 | 工具数 | 适合谁 |
 |------|------|--------|--------|
-| Compound（复合） | `src/server.py` | 36 | 大多数助手的默认模式。相关的 Resolve 操作按 action 参数分组，压低上下文占用。 |
-| Full / granular（细粒度） | `src/server.py --full` 或 `src/resolve_mcp_server.py` | 376 | 想要"一个 Resolve API 方法 = 一个 MCP 工具"的重度用户。 |
+| Compound（复合） | `src/server.py` | 37 | 大多数助手的默认模式。相关的 Resolve 操作按 action 参数分组，压低上下文占用。 |
+| Full / granular（细粒度） | `src/server.py --full` 或 `src/resolve_mcp_server.py` | 384 | 想要"一个 Resolve API 方法 = 一个 MCP 工具"的重度用户。 |
 
 除非你明确需要一方法一工具的细粒度界面，否则推荐复合模式。
 
@@ -226,7 +226,7 @@ DRX 调色写入**针对 Resolve Studio 做过实机校准**：调色参数默�
 
 | 指标 | 数值 |
 |------|------|
-| MCP 工具 | **36** 复合 / **376** 细粒度（实时服务器） |
+| MCP 工具 | **37** 复合 / **384** 细粒度（实时服务器） |
 | Advanced（离线）工具 | **18**——.drp/.drt/.drx + 数据库创作，无需 Resolve 运行 |
 | 内核 action | 9 个复合工具下 **136** 个带护栏的工作流 action |
 | API 方法覆盖 | **361/361**（100%） |
@@ -268,6 +268,10 @@ DRX 调色写入**针对 Resolve Studio 做过实机校准**：调色参数默�
 - Resolve 外部脚本设为 **Local**（Studio 版）。免费版上这个偏好设置无效——请改用 [应用内桥接](#免费版应用内桥接)。
 
 Resolve 19.1.3 仍是兼容性基线。Resolve 20.x 的脚本调用是增量式的、带版本护栏的，并已在 20.3.2 上实机测试。Resolve 21.0 新增的脚本能力（音频分类、说话人检测转写、IntelliSearch、场记板分析、运动去模糊、语音生成、会话后台任务控制）通过运行时能力检测暴露，在旧构建上保持沉默，在 Resolve 21+ 上自动激活。它们已在 Studio 21.0.2.4 上实机测试——见 [Resolve 21 增量明细](docs/reference/api-coverage.md#resolve-21-delta-detail)。注意 `AnalyzeForIntellisearch`、`AnalyzeForSlate` 和 `GenerateSpeech` 各自需要单独下载的 AI Extras 包，而 Resolve 报告缺包的方式不一致（有的返回 `False`，有的返回错误字符串），所以这些 action 会带着 Resolve 给出的原因报告 `success: false`，而不是瞎猜。
+
+## 报告 Bug 与提出功能需求
+
+对你的助手说"把这个作为 bug 发送"或"把这个作为功能需求发送"。它会根据对话起草一个 GitHub issue，包含失败的调用及其错误，并附上服务器版本、Resolve 构建、连接方式和操作系统。本地路径、你的用户名以及任何看起来像密钥的内容都会被脱敏。不会替你直接提交：你会拿到一个预填好的链接，检查草稿后在 GitHub 上自己提交。你也可以直接[新建 issue](https://github.com/samuelgursky/davinci-resolve-mcp/issues/new/choose)。
 
 ## 开发
 

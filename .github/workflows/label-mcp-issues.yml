@@ -1,0 +1,42 @@
+name: Label chat-drafted issues
+
+# Issues drafted with resolve_control(action="report_issue") carry a hidden
+# `filed-via` marker. The prefilled link asks GitHub for the label, but GitHub
+# honours `labels=` only from people with triage rights, so an outside
+# reporter's issue could arrive unlabelled. This labels it on open: `via-mcp`
+# always, plus `bug` or `enhancement` from the draft's first heading.
+#
+# It runs on issues opened by anyone, holding a write token, so the issue body
+# is untrusted input. It is read only inside github-script — never
+# interpolated into a shell — and the only effect is adding fixed labels.
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  issues: write
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Label issues drafted by report_issue
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const body = context.payload.issue.body || "";
+            if (!body.includes("<!-- filed-via: davinci-resolve-mcp report_issue -->")) {
+              core.info("Not drafted by report_issue; nothing to do.");
+              return;
+            }
+            // Web-submitted bodies use CRLF, so allow trailing whitespace.
+            const labels = ["via-mcp"];
+            if (/^### What happened\s*$/m.test(body)) labels.push("bug");
+            else if (/^### What I'd like\s*$/m.test(body)) labels.push("enhancement");
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.issue.number,
+              labels,
+            });
+            core.info(`Labelled #${context.payload.issue.number}: ${labels.join(", ")}`);

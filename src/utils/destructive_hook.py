@@ -64,6 +64,42 @@ SAFE_MODE_BLOCKED_RISK_LEVELS: FrozenSet[str] = frozenset({
 # replace_clip/link_*). The test_destructive_registry_drift guard asserts every
 # string here is a real handler so this can't regress.
 DESTRUCTIVE_ACTIONS_BY_TOOL: Dict[str, FrozenSet[str]] = {
+    # Plugin-folder writes. These create, replace and delete files that Resolve
+    # and Fusion later load and run: a Fuse registers on the next restart, a
+    # Resolve-page script runs when clicked. Until they were listed here every
+    # gate treated them as reads, and a dry run of `install` wrote the file for
+    # real. They never mutate the timeline, so NON_TIMELINE_WRITE_TOOLS keeps
+    # them out of timeline archiving while every gate still sees them.
+    "dctl": frozenset({"encrypt_native", "install", "remove"}),
+    # LUT files under Resolve's master LUT root. Writes are confined to the
+    # namespaced MCP/ subfolder by src/utils/lut_files.py; these entries make
+    # every gate see them as the writes they are.
+    "lut": frozenset({"attenuate", "install", "remove"}),
+    "fuse_plugin": frozenset({"install", "remove"}),
+    "script_plugin": frozenset({
+        "install",
+        "remove",
+        "safe_install_extension",
+        "safe_remove_extension",
+    }),
+    # Deletes the classifier already rated HIGH (CRITICAL for the raw project
+    # delete) on tools that carried no @_destructive_op, so safe mode never saw
+    # them. Plus the 21.0 AI deblur, rated MEDIUM: it creates media, and is
+    # registered so it is audited and its dry run is honest.
+    "folder": frozenset({"remove_motion_blur"}),
+    "fusion_comp": frozenset({"delete_keyframe", "delete_tool"}),
+    "gallery_stills": frozenset({"delete_stills"}),
+    "media_pool_item": frozenset({"remove_motion_blur"}),
+    "media_pool_item_markers": frozenset({
+        "delete_at_frame",
+        "delete_by_color",
+        "delete_by_custom_data",
+    }),
+    "project_manager": frozenset({"delete", "safe_project_delete"}),
+    "project_settings": frozenset({"delete_color_group"}),
+    "render": frozenset({"delete_all_jobs", "delete_job", "delete_preset"}),
+    "render_presets": frozenset({"delete_burnin"}),
+    "resolve_control": frozenset({"delete_user_preferences_preset"}),
     "media_pool": frozenset({
         "delete_clips",
         "delete_folders",
@@ -142,6 +178,7 @@ DESTRUCTIVE_ACTIONS_BY_TOOL: Dict[str, FrozenSet[str]] = {
         "create_subtitles",
     }),
     "timeline_item": frozenset({
+        "delete_keyframe",
         "set_output_blanking",
         "set_use_timeline_for_output_blanking",
         "set_clip_enabled",
@@ -235,6 +272,26 @@ NO_ARCHIVE_ON_KEYS: Dict[Tuple[str, str], frozenset] = {
 }
 
 
+# ── Non-timeline write tools ────────────────────────────────────────────────
+#
+# Tools whose registered actions do not mutate the working timeline: they write
+# plugin folders, or act on projects, the render queue, presets, the gallery,
+# pool items or app preferences. Every
+# gate applies to them — safe mode, dry-run refusal, the audit log — but they
+# skip version-on-mutate archiving, and skip resolving the versioning context
+# at all: that goes through the project-root provider, which reaches Resolve,
+# and installing a shader must neither snapshot the open timeline nor touch
+# Resolve. `media_pool` has its own branch for the same reason; these differ in
+# that there is no project state to log.
+
+NON_TIMELINE_WRITE_TOOLS: frozenset = frozenset({
+    "dctl", "fuse_plugin", "lut", "script_plugin",
+    "folder", "gallery_stills", "media_pool_item", "media_pool_item_markers",
+    "project_manager", "project_settings", "render", "render_presets",
+    "resolve_control",
+})
+
+
 # ── Strict-mode allowlist ───────────────────────────────────────────────────
 #
 # Actions in this set REFUSE to run if the version-on-mutate archive fails. For
@@ -299,6 +356,12 @@ NATIVE_DRY_RUN_ACTIONS: frozenset = frozenset({
     ("timeline", "apply_cuts"),
     ("timeline", "ripple_insert"),
     ("timeline_ai", "create_subtitles"),
+    ("script_plugin", "safe_install_extension"),
+    ("script_plugin", "safe_remove_extension"),
+    ("project_manager", "safe_project_delete"),
+    ("lut", "attenuate"),
+    ("lut", "install"),
+    ("lut", "remove"),
 })
 
 
@@ -859,6 +922,31 @@ def destructive_op(tool_name: str) -> Callable[[Callable[..., Any]], Callable[..
                     operation_id=operation_id,
                     tool_name=tool_name,
                     action=action,
+                    risk_level=risk_level,
+                    recognised=risk_recognised,
+                )
+
+            if tool_name in NON_TIMELINE_WRITE_TOOLS:
+                result = fn(action, params, *args, **kwargs)
+                _audit_security_event(
+                    operation_id=operation_id,
+                    tool_name=tool_name,
+                    action=action,
+                    risk_level=risk_level,
+                    status="allowed",
+                    params=params,
+                    reason="not_a_timeline_mutation",
+                    recognised=risk_recognised,
+                )
+                if isinstance(result, dict):
+                    result.setdefault("_versioning", {
+                        "analysis_run_id": None,
+                        "archived": False,
+                        "skipped_reason": "not_a_timeline_mutation",
+                    })
+                return _annotate_security(
+                    result,
+                    operation_id=operation_id,
                     risk_level=risk_level,
                     recognised=risk_recognised,
                 )

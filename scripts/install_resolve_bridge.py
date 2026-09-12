@@ -281,9 +281,16 @@ _FRAMEWORK_PYTHON_ROOTS = (
 #: PYTHON3HOME is unset. This is the one python.org's installer creates.
 _FALLBACK_PYTHON3 = Path("/usr/local/bin/python3")
 
+#: Filename of the Lua enumeration canary. Named once: the installer writes it
+#: and the post-install guidance counts it, and those two disagreeing is how a
+#: user ends up told to expect entries that are not there.
+_CANARY_NAME = "resolve_bridge_canary.lua"
+
 _LUA_CANARY = """-- Installed by davinci-resolve-mcp as an enumeration canary.
 -- If THIS appears under Workspace > Scripts but resolve_bridge_probe does not,
--- Resolve is listing Lua and silently skipping Python: it cannot find a Python 3.
+-- Resolve is listing Lua and silently skipping Python. On Resolve 21.1+ FREE
+-- that is expected: Python scripting moved to Studio (issue #203), and nothing
+-- below will change it. On Studio, or 21.0.x and earlier, it cannot find a Python 3.
 -- It looks at PYTHON3HOME, then /usr/local/bin/python3 -- and nowhere else, which
 -- is why Homebrew, pyenv, uv and conda interpreters go unseen. Either point it at
 -- the one you have (no sudo, but does NOT survive a reboot):
@@ -294,9 +301,12 @@ _LUA_CANARY = """-- Installed by davinci-resolve-mcp as an enumeration canary.
 -- already looks, which persists:
 --   sudo ln -s "$(command -v python3)" /usr/local/bin/python3
 -- A python.org build creates that symlink for you. Restart Resolve after.
-print("Resolve is enumerating scripts. If the Python probe is missing, Resolve")
-print("cannot find a Python 3: set PYTHON3HOME with launchctl setenv, or install")
-print("a python.org build. Homebrew/pyenv/uv/conda are not looked at directly.")
+print("Resolve is enumerating scripts. If the Python probe is missing:")
+print("- Resolve 21.1+ FREE: Python scripting moved to Studio, so .py scripts")
+print("  no longer list at all (issue #203). No Python setting changes that.")
+print("- Studio, or 21.0.x and earlier: Resolve cannot find a Python 3. Set")
+print("  PYTHON3HOME with launchctl setenv, or install a python.org build.")
+print("  Homebrew/pyenv/uv/conda are not looked at directly.")
 """
 
 
@@ -650,7 +660,7 @@ def _install_to(target: Path, *, probe_only: bool, installed: list[str]) -> None
         installed.append(str(target / probe))
     # Lua always enumerates; Python only with a framework install. The canary
     # makes "Python not detected" distinguishable from "wrong folder".
-    canary = target / "resolve_bridge_canary.lua"
+    canary = target / _CANARY_NAME
     canary.write_text(_LUA_CANARY, encoding="utf-8")
     installed.append(str(canary))
     if probe_only:
@@ -686,6 +696,65 @@ def _install_to(target: Path, *, probe_only: bool, installed: list[str]) -> None
     installed.append(str(launcher_path))
 
 
+def canary_count(result: dict) -> int:
+    """How many identical `resolve_bridge_canary` entries Resolve will list.
+
+    One per Scripts/Utility folder installed into, all with the same filename,
+    so they are indistinguishable in the menu. Reported in issue #219 by a user
+    who reasonably read two identical entries as a broken install.
+    """
+    return sum(1 for path in result.get("installed", [])
+               if str(path).endswith(_CANARY_NAME))
+
+
+def next_steps(result: dict) -> list:
+    """The post-install instructions, as lines.
+
+    Built rather than printed inline so the canary-only branch is testable: it
+    is the single most likely outcome on macOS and, until issue #219, the only
+    one the installer had no words for. The user followed step 3 to a menu
+    entry that cannot exist, and the explanation was sitting in a Lua comment
+    they had no reason to open.
+    """
+    lines = [
+        "Next:",
+        "  1. Restart DaVinci Resolve so it re-scans the Scripts folders.",
+        "  2. Open a saved project (the Scripts menu is empty in Project Manager).",
+        "  3. Workspace > Scripts > resolve_bridge_probe  — run it TWICE.",
+        # The probe runs INSIDE Resolve, which never sees the shell's
+        # DAVINCI_RESOLVE_BRIDGE_CONFIG — it always writes to the fixed default
+        # directory, so the guidance must not follow the override.
+        "  4. Read ~/.config/davinci-resolve-mcp/host-model-probe.json",
+    ]
+    count = canary_count(result)
+    if count > 1:
+        lines += [
+            "",
+            f"Expect {count} identical 'resolve_bridge_canary' entries — one per Scripts",
+            "folder this installed into. That is normal, not a double install; running",
+            "any one of them is the same as running any other.",
+        ]
+    lines += [
+        "",
+        "If step 3 shows no 'resolve_bridge_probe' and you can only see",
+        "'resolve_bridge_canary':",
+        "  - The install worked. Do not re-run it. That is the canary doing its job:",
+        "    Resolve is enumerating scripts, listing Lua, and skipping Python.",
+        "  - Run 'resolve_bridge_canary' and read its output in Workspace > Console.",
+        "    It reports with print(), not a dialog, so with no Console open it looks",
+        "    like nothing happened.",
+        "  - What it means depends on your edition:",
+        "      * Resolve 21.1+ FREE — Python scripting moved to the Studio edition,",
+        "        so .py files no longer list there at all and no Python setting will",
+        "        change that. See issue #203.",
+        "      * Studio, or 21.0.x and earlier — Resolve cannot find a Python 3. It",
+        "        looks at PYTHON3HOME and then /usr/local/bin/python3 and nowhere",
+        "        else, which is why Homebrew, pyenv, uv and conda builds go unseen.",
+        "        The canary's own output carries the fix.",
+    ]
+    return lines
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--probe-only", action="store_true",
@@ -709,14 +778,8 @@ def main() -> int:
         print("WARNING: " + warning)
         print("!" * 72)
         print()
-    print("Next:")
-    print("  1. Restart DaVinci Resolve so it re-scans the Scripts folders.")
-    print("  2. Open a saved project (the Scripts menu is empty in Project Manager).")
-    print("  3. Workspace > Scripts > resolve_bridge_probe  — run it TWICE.")
-    # The probe runs INSIDE Resolve, which never sees the shell's
-    # DAVINCI_RESOLVE_BRIDGE_CONFIG — it always writes to the fixed default
-    # directory, so the guidance must not follow the override.
-    print("  4. Read ~/.config/davinci-resolve-mcp/host-model-probe.json")
+    for line in next_steps(result):
+        print(line)
     return 0
 
 

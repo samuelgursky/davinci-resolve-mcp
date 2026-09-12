@@ -2,16 +2,16 @@
 """
 DaVinci Resolve MCP Server (Compound Tools)
 
-36 compound tools covering 100% of the DaVinci Resolve Scripting API (336 methods)
+37 compound tools covering 100% of the DaVinci Resolve Scripting API (336 methods)
 plus Fusion Fuse, DCTL, and Resolve-page Script authoring tools.
 Each tool groups related operations via an 'action' parameter.
 
 Usage:
     python src/server.py              # Start the MCP server
-    python src/server.py --full       # Start the 376-tool granular server instead
+    python src/server.py --full       # Start the 377-tool granular server instead
 """
 
-VERSION = "2.223.0"
+VERSION = "3.2.0"
 
 import base64
 import os
@@ -42,6 +42,7 @@ for p in [current_dir, project_dir]:
     if p not in sys.path:
         sys.path.insert(0, p)
 
+from src.utils.resolve211_encryption import encrypt_dctl
 from src.utils.resolve211_multicam import create_multicam, resolve_constant, GRADES
 from src.utils.resolve211_blanking import validate_blanking
 from src.utils.resolve211_alignment import auto_align
@@ -51,6 +52,7 @@ from src.utils.resolve211_edits import validate_edit_options, validate_transitio
 
 # Platform-specific Resolve paths
 from src.utils.cdl import normalize_cdl_payload
+from src.utils import lut_files
 from src.utils import resolve_writes as _resolve_writes
 from src.utils.mcp_stdio import run_fastmcp_stdio
 from src.utils.api_truth import lookup_api_truth, VERIFIED_ON as _API_TRUTH_VERIFIED_ON
@@ -146,6 +148,7 @@ from src.utils.media_analysis_jobs import (
 from src.utils.platform import get_resolve_paths, get_resolve_plugin_paths
 from src.utils.resolve_connection import connect_resolve
 from src.utils import resolve_runtime as _resolve_runtime
+from src.utils import issue_report as _issue_report
 from src.utils.lut_paths import master_lut_dir, ensure_lut_in_master
 from src.utils import fuse_templates, dctl_templates, script_templates
 from src.utils.timeline_title_text import (
@@ -247,7 +250,10 @@ mcp = FastMCP(
         "DAVINCI_RESOLVE_BRIDGE=1 only forces it), so a connection error does NOT mean "
         "the free edition is unsupported — on Resolve 21.0.x. Resolve 21.1 moved Python "
         "scripting to Studio and free 21.1 no longer lists Python scripts in that menu "
-        "(issue #203), so on 21.1+ a free-edition connection error may be final."
+        "(issue #203), so on 21.1+ a free-edition connection error may be final. "
+        "When the user asks to send something as a bug or feature request, draft it "
+        "with resolve_control(action='report_issue') — it returns a prefilled GitHub "
+        "issue link for the user to review and submit; nothing is filed for them."
     ),
 )
 
@@ -379,7 +385,7 @@ def davinci_resolve_workflow() -> str:
     return """Use this DaVinci Resolve MCP server as a guarded post-production control surface.
 
 Core pattern:
-- Prefer the 36 compound tools and their action names over raw scripting.
+- Prefer the 37 compound tools and their action names over raw scripting.
 - Start by probing state: resolve_control.get_version/get_page, project_manager.get_current, timeline.get_current, and media_pool.probe_media_pool.
 - Before mutating timelines, media pools, render settings, grades, projects, databases, or extensions, prefer the matching probe, capabilities, boundary_report, safe_*, or dry_run action when one exists.
 - Preserve source media integrity. Never transcode, proxy, rewrite, move, rename, or create derivatives of source media unless the user explicitly asks. Analysis output belongs in sidecars or analysis directories.
@@ -410,8 +416,8 @@ Editorial improvements + versioning (C6 — always on for destructive timeline o
 - Read-only inspection (list, get_current, get_property, etc.) bypasses versioning entirely — no setup needed.
 - Inspect history via `timeline_versioning(action="get_history", timeline_name=…)`, `list_versions`, `diff_versions(from_version, to_version)`, or `list_runs`. Roll back via `timeline_versioning(action="rollback", timeline_name=…, version=…)`.
 
-For one-off scripting:
-- Prefer script_plugin(action="run_inline") over arbitrary persistent code changes. Use it to inspect Resolve state, then move durable behavior into guarded compound actions when it proves valuable.
+For one-off queries:
+- Do not reach for scripts to inspect or change Resolve state: this server does not execute caller-supplied code (script_plugin execution was removed in v3.0.0). Use the typed tools, and move durable behavior into guarded compound actions.
 """
 
 
@@ -16574,6 +16580,7 @@ def setup(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any
 
 @mcp.tool()
 @_guard_missing_params
+@_destructive_op("resolve_control")
 def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """App-level DaVinci Resolve operations.
 
@@ -16617,6 +16624,23 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         Omit symbol for every recorded gate this build does not clear.
       verification_stats() -> {stats}  — readback-verification tally
         (verified/contradicted/unverified) since server start (no connection needed).
+      report_issue(kind, title, summary, steps?, expected?, actual?, error?, tool?,
+                   tool_action?, use_case?, proposal?, include_environment?)
+        -> {title, body, labels, url, url_truncated, redactions, submitted: false, next_step}
+        — Draft a GitHub bug report (kind="bug") or feature request (kind="feature")
+          for this MCP server. Call it when the user asks to send, report or file
+          something as a bug or feature request ("send this as a bug"). Do not call
+          it unprompted; you may OFFER once when a failure looks like a defect in
+          this server rather than in the user's request. Write the fields from the
+          conversation: the failing tool/action and its error verbatim, what the
+          user expected, and steps that reproduce it. Server version, Resolve
+          build, connection mode and OS are attached automatically
+          (include_environment=false to omit); nothing connects to or launches
+          Resolve. NOTHING IS FILED: show the user the title and body, then give
+          them the url — the issue is created only when they open it and press
+          Submit on GitHub. Paths, usernames, e-mails and secrets are redacted,
+          but client or project names in plain prose are not: ask the user to
+          check before submitting.
       job_status(job_id) -> {id, label, status, result?, error?, started_at, ended_at}
         — poll a background job started by a long op run with background=True
           (no connection needed). status is running, done, or error.
@@ -16749,6 +16773,48 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         stats = _verification_stats()
         return {"stats": stats, "note": "Counts since server start. A rising "
                 "'contradicted' count means the API reported success but a readback disagreed."}
+    if action == "report_issue":
+        # Drafts only — never files, never connects. See utils/issue_report.py.
+        kind = _issue_report.normalize_kind(p.get("kind") or p.get("type"))
+        if kind is None:
+            return _err(
+                "report_issue requires kind: 'bug' or 'feature'",
+                code="INVALID_KIND",
+                category="invalid_input",
+            )
+        title = str(p.get("title") or "").strip()
+        summary = str(p.get("summary") or p.get("description") or p.get("body") or "").strip()
+        if not title or not summary:
+            return _err(
+                "report_issue requires title and summary",
+                code="MISSING_FIELDS",
+                category="invalid_input",
+                remediation="Write both from the conversation: a one-line title and "
+                "a summary of what happened or what the user wants.",
+            )
+        environment = None
+        if _setup_bool(p.get("include_environment", p.get("includeEnvironment")), True):
+            environment = _issue_report.collect_environment(resolve, VERSION)
+        draft = _issue_report.build_issue(
+            kind,
+            title,
+            summary,
+            steps=p.get("steps"),
+            expected=p.get("expected"),
+            actual=p.get("actual"),
+            error=p.get("error"),
+            tool=p.get("tool"),
+            tool_action=p.get("tool_action") or p.get("failed_action"),
+            use_case=p.get("use_case"),
+            proposal=p.get("proposal"),
+            environment=environment,
+        )
+        return {
+            "success": True,
+            **draft,
+            "submitted": False,
+            "next_step": _issue_report.next_step_guidance(draft["url_truncated"]),
+        }
 
     # Background-job polling is a registry read — no Resolve connection needed.
     if action == "job_status":
@@ -17073,7 +17139,7 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         if err:
             return _err(err)
         return {"success": bool(r.ExportUserPreferencesPreset(clean["name"], clean["path"]))}
-    return _unknown(action, ["is_studio","get_keyboard_presets","get_current_keyboard_preset","launch","runtime_mode","get_version","api_truth","check_version_support","verification_stats","job_status","list_jobs","get_execution_trace","get_execution","list_recent_executions","begin_execution","end_execution","export_execution_report","clear_executions","inspect_operation","list_lifecycle_hooks","mcp_update_status","set_mcp_update_policy","ignore_mcp_update","snooze_mcp_update","clear_mcp_update_preferences","get_page","open_page","get_keyframe_mode","set_keyframe_mode","quit","get_fairlight_presets","set_high_priority","disable_background_tasks_for_current_session","list_user_preferences_presets","save_user_preferences_preset","load_user_preferences_preset","delete_user_preferences_preset","import_user_preferences_preset","export_user_preferences_preset","open_control_panel","control_panel_status","close_control_panel","save_state","restore_state"])
+    return _unknown(action, ["is_studio","get_keyboard_presets","get_current_keyboard_preset","launch","runtime_mode","get_version","api_truth","check_version_support","verification_stats","report_issue","job_status","list_jobs","get_execution_trace","get_execution","list_recent_executions","begin_execution","end_execution","export_execution_report","clear_executions","inspect_operation","list_lifecycle_hooks","mcp_update_status","set_mcp_update_policy","ignore_mcp_update","snooze_mcp_update","clear_mcp_update_preferences","get_page","open_page","get_keyframe_mode","set_keyframe_mode","quit","get_fairlight_presets","set_high_priority","disable_background_tasks_for_current_session","list_user_preferences_presets","save_user_preferences_preset","load_user_preferences_preset","delete_user_preferences_preset","import_user_preferences_preset","export_user_preferences_preset","open_control_panel","control_panel_status","close_control_panel","save_state","restore_state"])
 
 
 # ─── V2 C4: Per-field corrections with provenance + changelog ────────────────
@@ -18071,6 +18137,7 @@ def layout_presets(action: str, params: Optional[Dict[str, Any]] = None) -> Dict
 
 @mcp.tool()
 @_guard_missing_params
+@_destructive_op("render_presets")
 def render_presets(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Import/export render and burn-in presets.
 
@@ -19029,6 +19096,7 @@ def _project_lint_live(r, pm) -> Dict[str, Any]:
 
 @mcp.tool()
 @_guard_missing_params
+@_destructive_op("project_manager")
 def project_manager(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Manage DaVinci Resolve projects.
 
@@ -19046,7 +19114,7 @@ def project_manager(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         render and wedges Resolve's pipeline until restart (stuck
         IsRenderingInProgress, 0% jobs, refused Quit). stop_render=true stops
         the render, waits for the flag to clear, then closes.
-      delete(name) -> {success}
+      delete(name, close_current?) -> {success}
       import_project(path, name?) -> {success}
       export_project(name, path, with_stills_and_luts?) -> {success}
       archive(name, path, src_media?, render_cache?, proxy_media?) -> {success}
@@ -19179,6 +19247,18 @@ def project_manager(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
     elif action == "delete":
         if not p.get("name"):
             return _err("delete requires name")
+        # Refuse the open project unless the caller says so, as
+        # safe_project_delete does. delete_project_safely closes and deletes the
+        # current project without asking — the call that loses a project someone
+        # is working in. If the current project cannot be read, DeleteProject on
+        # an open project fails anyway (the session holds its lock).
+        try:
+            _open = pm.GetCurrentProject()
+            _open_name = _open.GetName() if _open else None
+        except Exception:
+            _open_name = None
+        if _open_name == p["name"] and not p.get("close_current", False):
+            return _err("Refusing to delete the currently open project; pass close_current=True")
         from src.utils.project_cleanup import delete_project_safely
         deleted = delete_project_safely(pm, p["name"])
         return {"success": bool(deleted.get("success")), "delete_detail": deleted}
@@ -19363,6 +19443,7 @@ def _setting_limitation(name: Any, obj: str = "Project") -> Optional[Dict[str, A
 
 @mcp.tool()
 @_guard_missing_params
+@_destructive_op("project_settings")
 def project_settings(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Project metadata, settings, and color groups.
 
@@ -20339,6 +20420,7 @@ def _export_render_boundary_report(proj, p: Dict[str, Any]):
 
 @mcp.tool()
 @_guard_missing_params
+@_destructive_op("render")
 def render(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Render pipeline: jobs, presets, formats, codecs, and rendering.
 
@@ -21318,6 +21400,7 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
 
 @mcp.tool()
 @_guard_missing_params
+@_destructive_op("folder")
 def folder(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Operations on Media Pool folders.
 
@@ -21490,6 +21573,7 @@ def _keyed_get(getter, key):
 
 @mcp.tool()
 @_guard_missing_params
+@_destructive_op("media_pool_item")
 def media_pool_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Operations on a media pool clip. Identify clip by clip_id.
 
@@ -21954,6 +22038,7 @@ def media_pool_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
 
 @mcp.tool()
 @_guard_missing_params
+@_destructive_op("media_pool_item_markers")
 def media_pool_item_markers(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Markers and flags on media pool clips. Identify clip by clip_id.
 
@@ -28804,6 +28889,7 @@ def gallery(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, A
 
 @mcp.tool()
 @_guard_missing_params
+@_destructive_op("gallery_stills")
 def gallery_stills(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Manage stills in gallery albums (best results on Color page).
 
@@ -30260,6 +30346,7 @@ def _fusion_get_text_plus(comp, p: Dict[str, Any]) -> Dict[str, Any]:
 
 @mcp.tool()
 @_guard_missing_params
+@_destructive_op("fusion_comp")
 def fusion_comp(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Fusion composition node graph operations.
 
@@ -30870,6 +30957,7 @@ def _validate_glsl_minimal(source: str) -> Dict[str, Any]:
 
 @mcp.tool()
 @_guard_missing_params
+@_destructive_op("fuse_plugin")
 def fuse_plugin(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Author and install Fusion Fuse plugins (.fuse files).
 
@@ -31114,6 +31202,102 @@ _DCTL_VALID_CATEGORIES = ("lut", "aces_idt", "aces_odt")
 
 @mcp.tool()
 @_guard_missing_params
+@_destructive_op("lut")
+def lut(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Discover, install and remove LUT files under Resolve's master LUT root.
+
+    `graph set_lut` could already put a LUT on a node, but nothing answered the
+    question it raises — which LUTs exist? These actions do, and they report
+    each LUT's master-relative `set_lut_path`, which is the exact form
+    `set_lut` resolves.
+
+    Reads roam, writes do not. `list` and `read` walk the whole master LUT root
+    so stock, vendor and hand-installed LUTs are discoverable. `install`,
+    `remove` and `attenuate` write only inside the namespaced `MCP/` subfolder,
+    so stock and vendor LUTs are never modified or removed here.
+
+    Installs land in the MASTER root, not the per-user LUT dir the `dctl` tool
+    uses: Graph.SetLUT() resolves names only against the master root (measured;
+    see utils/lut_paths.py). After installing, call
+    project_settings(action='refresh_luts') before applying.
+
+    Actions:
+      path() -> {lut_dir, writable_dir}
+      list(subdir?) -> {luts, count, lut_dir, writable_dir}
+        — each entry: {name, set_lut_path, bytes, writable}
+      read(name) -> {size, title, domain_min, domain_max, entries, ...}
+        — 3D .cube only; reports shape and header, never the whole table.
+      install(name, source | source_path, overwrite?) -> {success, set_lut_path}
+        — source: .cube text. source_path: a file to copy in. Exactly one.
+      remove(name) -> {success, removed}
+        — MCP/ only.
+      attenuate(source, strength, name) -> {success, set_lut_path, ...}
+        — blend an existing .cube toward identity, 0..1, and install the result.
+      capabilities() -> {numpy_available, supported, refused, size_range}
+
+    Not provided: the official MCP's generate_lut executes a caller-supplied
+    Python function body per lattice point. This server does not accept
+    caller-supplied code, so authoring here is limited to writing a provided
+    .cube and attenuating an existing one.
+    """
+    p = _params(params)
+    try:
+        if action == "path":
+            return {"lut_dir": lut_files.master_lut_dir(),
+                    "writable_dir": lut_files.writable_dir()}
+        if action == "list":
+            return lut_files.list_luts(p.get("subdir"))
+        if action == "read":
+            if not p.get("name"):
+                return _err("read requires name")
+            return lut_files.read_lut_summary(p["name"])
+        if action == "capabilities":
+            from src.utils import cube_lut
+            caps = dict(cube_lut.capabilities())
+            caps["writable_dir"] = lut_files.writable_dir()
+            caps["extensions"] = list(lut_files.LUT_EXTENSIONS)
+            caps["generate_from_code"] = False
+            caps["generate_from_code_reason"] = (
+                "This server does not execute caller-supplied Python. Use install "
+                "with .cube text, or attenuate an existing LUT.")
+            return caps
+        if action == "install":
+            if not p.get("name"):
+                return _err("install requires name")
+            if p.get("dry_run"):
+                return _ok(would_install=p["name"], writable_dir=lut_files.writable_dir())
+            return lut_files.install_lut(
+                p["name"], source=p.get("source"), source_path=p.get("source_path"),
+                overwrite=bool(p.get("overwrite", False)))
+        if action == "remove":
+            if not p.get("name"):
+                return _err("remove requires name")
+            if p.get("dry_run"):
+                return _ok(would_remove=p["name"], writable_dir=lut_files.writable_dir())
+            return lut_files.remove_lut(p["name"])
+        if action == "attenuate":
+            for required in ("source", "strength", "name"):
+                if p.get(required) is None:
+                    return _err(f"attenuate requires {required}")
+            if p.get("dry_run"):
+                return _ok(would_write=p["name"], source=p["source"], strength=p["strength"])
+            return lut_files.attenuate_lut(p["source"], p["strength"], p["name"])
+    except lut_files.LutPathError as exc:
+        return _err(str(exc), code="INVALID_LUT_PATH", category="invalid_input")
+    except FileNotFoundError as exc:
+        return _err(str(exc), code="LUT_NOT_FOUND", category="invalid_input")
+    except OSError as exc:
+        return _err(f"{type(exc).__name__}: {exc}", code="LUT_IO_ERROR",
+                    category="filesystem")
+    except Exception as exc:
+        return _err(f"{type(exc).__name__}: {exc}", code="LUT_ERROR")
+    return _unknown(action, ["path", "list", "read", "install", "remove",
+                             "attenuate", "capabilities"])
+
+
+@mcp.tool()
+@_guard_missing_params
+@_destructive_op("dctl")
 def dctl(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Author and install DCTL files (Color page custom shaders + ACES transforms).
 
@@ -31142,6 +31326,7 @@ def dctl(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]
         — ext: '.dctl' (default) or '.dctle' (encrypted)
       remove(name, category?, subdir?, ext?) -> {success}
       read(name, category?, subdir?, ext?) -> {source, encrypted}
+      encrypt_native(input_path, output_path, expiry?) -> {success, path?, bytes?, sha256?} — native 21.1; never overwrites.
       validate(source) -> {valid, errors, warnings, checker}
       validate_native(source) -> {valid, diagnostic, checker} — Resolve 21.1 validation; source and diagnostic unchanged.
       template(kind, name, options?) -> {source, kind, name, suggested_category}
@@ -31309,6 +31494,15 @@ def dctl(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]
             return missing
         return native_dctl_result(r, source)
 
+    if action == "encrypt_native":
+        r = get_resolve()
+        if r is None:
+            return _not_connected_error()
+        missing = _requires_method(r, "EncryptDCTL", "21.1")
+        if missing:
+            return missing
+        return encrypt_dctl(r, p.get("input_path"), p.get("output_path"), p.get("expiry"), _resolve_safe_dir)
+
     if action == "validate":
         source = p.get("source")
         if not isinstance(source, str):
@@ -31335,7 +31529,7 @@ def dctl(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]
         }
 
     return _unknown(action, ["path", "list", "install", "remove", "read",
-                             "validate_native", "validate", "template", "list_templates"])
+                             "encrypt_native", "validate_native", "validate", "template", "list_templates"])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -31399,244 +31593,6 @@ def _validate_script_source(source: str, language: str) -> Dict[str, Any]:
                     "checker": "python-compile"}
     # Lua
     return _validate_lua_syntax(source)
-
-
-# ─── Script execution ─────────────────────────────────────────────────────────
-
-def _python_env_for_resolve() -> Dict[str, str]:
-    """Build env vars so a Python subprocess can import DaVinciResolveScript."""
-    env = os.environ.copy()
-    env["RESOLVE_SCRIPT_API"] = RESOLVE_API_PATH
-    env["RESOLVE_SCRIPT_LIB"] = RESOLVE_LIB_PATH
-    # The child writes its stdout into a pipe, so Python picks the locale
-    # codepage rather than the console's — cp1252 on a default Windows install.
-    # A script that prints a non-Latin-1 character then dies with
-    # UnicodeEncodeError instead of returning its output, and the failure is
-    # attributed to the script rather than to the pipe it was handed (#153).
-    env["PYTHONIOENCODING"] = "utf-8"
-    pp = env.get("PYTHONPATH", "")
-    if RESOLVE_MODULES_PATH not in pp:
-        env["PYTHONPATH"] = (RESOLVE_MODULES_PATH +
-                             (os.pathsep + pp if pp else ""))
-    return env
-
-
-# fusionscript's RemoteApp thread keeps dispatching packets from Resolve while
-# the interpreter tears down at exit, and can SIGSEGV *after* the script has
-# finished — turning a successful run into exit code -11 / success:false.
-# Run the script via runpy and hard-exit before teardown so the exit code is
-# truthful. SystemExit must be caught here: uncaught, a plain sys.exit(0) at
-# the end of a script would take the normal teardown path and reopen the
-# segfault window. sys.path[0] is pointed at the script's directory to mimic
-# `python script.py` (under -c it points at the server's cwd, which both
-# breaks sibling imports and lets stray files there shadow real modules).
-# Cost of os._exit: atexit handlers never run and non-daemon threads are not
-# joined — documented in script_plugin's execute action.
-_PY_SCRIPT_EXIT_GUARD = (
-    "import os, runpy, sys, traceback\n"
-    "sys.argv = sys.argv[1:]\n"
-    "sys.path[0] = os.path.dirname(os.path.abspath(sys.argv[0]))\n"
-    "code = 0\n"
-    "try:\n"
-    "    runpy.run_path(sys.argv[0], run_name='__main__')\n"
-    "except SystemExit as e:\n"
-    "    if isinstance(e.code, int):\n"
-    "        code = e.code\n"
-    "    elif e.code is not None:\n"
-    "        print(e.code, file=sys.stderr)\n"
-    "        code = 1\n"
-    "except BaseException:\n"
-    "    traceback.print_exc()\n"
-    "    code = 1\n"
-    "sys.stdout.flush()\n"
-    "sys.stderr.flush()\n"
-    "os._exit(code)\n"
-)
-
-
-def _execute_python_script(path: str, args: List[str],
-                            timeout: int) -> Dict[str, Any]:
-    # Ensure Resolve is running so the script can connect.
-    get_resolve()
-    cmd = [sys.executable, "-c", _PY_SCRIPT_EXIT_GUARD, path] + [str(a) for a in args]
-    try:
-        result = safe_run(cmd, env=_python_env_for_resolve(),
-                          capture_output=True, text=True, encoding="utf-8",
-                          errors="replace", timeout=timeout)
-    except subprocess.TimeoutExpired as e:
-        return _err(f"Script timed out after {timeout}s. "
-                    f"Partial stdout: {(e.stdout or '')[:1000]}")
-    except OSError as e:
-        return _err(f"Failed to launch Python subprocess: {e}")
-    return {
-        "success": result.returncode == 0,
-        "stdout": result.stdout,
-        "stderr": result.stderr,
-        "exit_code": result.returncode,
-        "language": "py",
-    }
-
-
-def _execute_lua_script(path: str) -> Dict[str, Any]:
-    r = get_resolve()
-    if r is None:
-        return _not_connected_error()
-    fusion = r.Fusion()
-    if fusion is None:
-        return _err("handle.Fusion() returned None — cannot run Lua scripts.")
-    try:
-        success = bool(fusion.RunScript(path))
-    except Exception as e:
-        return _err(f"Lua RunScript failed: {e}")
-    return {
-        "success": success,
-        "language": "lua",
-        "output_note": ("Lua print() output goes to Resolve's "
-                        "Workspace → Console → Lua tab. The MCP cannot capture "
-                        "Lua stdout. Use the Console to see what the script printed."),
-    }
-
-
-def _run_inline_python(source: str, timeout: int) -> Dict[str, Any]:
-    """Write source to a temp file, run it, return captured output.
-
-    Prepends a boilerplate header that connects to Resolve and exposes
-    `resolve`, `project`, `mp`, `timeline` as globals — same shape as the
-    scaffold template, so inline snippets feel like a REPL.
-    """
-    boilerplate = (
-        "import sys\n"
-        "import DaVinciResolveScript as dvr_script\n"
-        "resolve = dvr_script.scriptapp('Resolve')\n"
-        "project = (resolve.GetProjectManager().GetCurrentProject()\n"
-        "           if resolve else None)\n"
-        "mp = project.GetMediaPool() if project else None\n"
-        "timeline = project.GetCurrentTimeline() if project else None\n"
-        "\n"
-    )
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.py',
-                                      delete=False, encoding='utf-8') as f:
-        f.write(boilerplate)
-        f.write(source)
-        tmp = f.name
-    try:
-        return _execute_python_script(tmp, [], timeout)
-    finally:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-
-
-def _run_inline_lua(source: str) -> Dict[str, Any]:
-    """Run a Lua snippet inside Resolve's Fusion engine.
-
-    Implementation note: Fusion's `Execute()` is effectively a no-op from the
-    Python bridge in Resolve 20.x — it runs without propagating return values
-    or side effects observable from Python. `RunScript()` against a file path
-    DOES work and gives the script full access to the standard Lua context
-    (`fu`, `fusion`, `app`, `bmd`, `io`, `os`, ...). We bridge results back
-    via `app:SetData(key, value)` which IS visible from Python's
-    `fusion.GetData(key)`.
-
-    The wrapper captures `print()` output into a string and stores stdout,
-    return value, and any pcall error in three Fusion-app SetData slots that
-    the Python side reads after RunScript returns.
-    """
-    r = get_resolve()
-    if r is None:
-        return _not_connected_error()
-    fusion = r.Fusion()
-    if fusion is None:
-        return _err("handle.Fusion() returned None — cannot run inline Lua.")
-
-    wrapped = (
-        'local _mcp_stdout = {}\n'
-        'local _mcp_orig_print = print\n'
-        'print = function(...)\n'
-        '    local args = {...}\n'
-        '    local parts = {}\n'
-        '    for i, v in ipairs(args) do parts[i] = tostring(v) end\n'
-        '    table.insert(_mcp_stdout, table.concat(parts, "\\t"))\n'
-        'end\n'
-        'local _mcp_ok, _mcp_result = pcall(function()\n'
-        + source + '\n'
-        'end)\n'
-        'print = _mcp_orig_print\n'
-        'local _mcp_app = fu or fusion or app\n'
-        'if _mcp_app then\n'
-        '    _mcp_app:SetData("__mcp_stdout__", table.concat(_mcp_stdout, "\\n"))\n'
-        '    if _mcp_ok then\n'
-        '        _mcp_app:SetData("__mcp_result__",\n'
-        '            _mcp_result ~= nil and tostring(_mcp_result) or "")\n'
-        '        _mcp_app:SetData("__mcp_error__", "")\n'
-        '    else\n'
-        '        _mcp_app:SetData("__mcp_result__", "")\n'
-        '        _mcp_app:SetData("__mcp_error__", tostring(_mcp_result))\n'
-        '    end\n'
-        '    _mcp_app:SetData("__mcp_done__", "1")\n'  # completion sentinel
-        'end\n'
-    )
-
-    # Clear prior slots so we can detect if RunScript silently did nothing.
-    # SetData goes through the Lua bridge and returns nil whether or not it
-    # took, so the return is not evidence -- but GetData is. The __mcp_done__
-    # slot is the one that matters: a stale "1" left by the previous run makes
-    # the poll below exit immediately and return the PREVIOUS run's stdout,
-    # result and error as this run's.
-    for slot in ("__mcp_done__", "__mcp_stdout__", "__mcp_result__", "__mcp_error__"):
-        fusion.SetData(slot, "")
-    stale = fusion.GetData("__mcp_done__")
-    if stale not in ("", None):
-        return _err(
-            "Could not clear the Fusion completion sentinel before running.",
-            code="FUSION_SENTINEL_NOT_CLEARED", category="api_error", retryable=True,
-            reason=f"__mcp_done__ still reads {stale!r} after SetData. The poll would "
-                   "exit immediately and hand back the previous run's output as this "
-                   "run's.",
-            remediation="Retry; if it persists, restart Resolve to clear the Fusion "
-                        "app's data slots.",
-        )
-
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.lua',
-                                      prefix='mcp-lua-inline-',
-                                      delete=False, encoding='utf-8') as tf:
-        tf.write(wrapped)
-        tmp = tf.name
-
-    try:
-        try:
-            fusion.RunScript(tmp)
-        except Exception as e:
-            return _err(f"Lua RunScript failed: {e}")
-
-        # RunScript is async — poll the completion sentinel until set.
-        deadline = time.time() + 60
-        while fusion.GetData("__mcp_done__") != "1":
-            if time.time() > deadline:
-                return _err("Lua run_inline timed out after 60s waiting for "
-                            "the script to complete.")
-            time.sleep(0.1)
-    finally:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-
-    stdout = fusion.GetData("__mcp_stdout__") or ""
-    result = fusion.GetData("__mcp_result__") or ""
-    error = fusion.GetData("__mcp_error__") or ""
-
-    response: Dict[str, Any] = {
-        "success": not error,
-        "stdout": stdout + ("\n" if stdout and not stdout.endswith("\n") else ""),
-        "language": "lua",
-    }
-    if result:
-        response["result"] = result
-    if error:
-        response["error"] = error
-    return response
 
 
 _EXTENSION_KERNEL_ACTIONS = [
@@ -31977,7 +31933,7 @@ def _probe_fuse_lifecycle(p: Dict[str, Any]) -> Dict[str, Any]:
     if p.get("include_template_matrix"):
         out["template_matrix"] = _extension_template_matrix()["fuse"]
     if p.get("install"):
-        install = _safe_install_extension({
+        install = script_plugin("safe_install_extension", {
             "extension_type": "fuse",
             "name": name,
             "source": source,
@@ -31987,7 +31943,7 @@ def _probe_fuse_lifecycle(p: Dict[str, Any]) -> Dict[str, Any]:
         out["read"] = fuse_plugin("read", {"name": name}) if install.get("success") else None
         out["list"] = fuse_plugin("list")
         if p.get("cleanup", True):
-            out["remove"] = _safe_remove_extension({"extension_type": "fuse", "name": name})
+            out["remove"] = script_plugin("safe_remove_extension", {"extension_type": "fuse", "name": name})
     return out
 
 
@@ -32014,7 +31970,7 @@ def _probe_dctl_lifecycle(p: Dict[str, Any]) -> Dict[str, Any]:
     if p.get("include_template_matrix"):
         out["template_matrix"] = _extension_template_matrix()["dctl"]
     if p.get("install"):
-        install = _safe_install_extension({
+        install = script_plugin("safe_install_extension", {
             "extension_type": "dctl",
             "name": name,
             "source": source,
@@ -32028,11 +31984,19 @@ def _probe_dctl_lifecycle(p: Dict[str, Any]) -> Dict[str, Any]:
         if p.get("refresh_luts") and category == "lut":
             out["refresh_luts"] = project_settings("refresh_luts")
         if p.get("cleanup", True):
-            out["remove"] = _safe_remove_extension({"extension_type": "dctl", "name": name, "category": category, "subdir": subdir})
+            out["remove"] = script_plugin("safe_remove_extension", {"extension_type": "dctl", "name": name, "category": category, "subdir": subdir})
     return out
 
 
 def _probe_script_lifecycle(p: Dict[str, Any]) -> Dict[str, Any]:
+    if p.get("execute"):
+        # Refused rather than ignored: silently skipping it would report a
+        # lifecycle probe as complete for a step it never ran.
+        return _err(
+            "probe_script_lifecycle no longer executes scripts: script execution was "
+            "removed in v3.0.0. Drop `execute`; the probe still generates, validates, "
+            "installs, reads, lists and removes."
+        )
     name = p.get("name", "_mcp_script_lifecycle_probe")
     kind = p.get("kind", "scaffold")
     language = _normalize_script_language(p.get("language", "py"))
@@ -32058,7 +32022,7 @@ def _probe_script_lifecycle(p: Dict[str, Any]) -> Dict[str, Any]:
     if p.get("include_template_matrix"):
         out["template_matrix"] = _extension_template_matrix()["script"]
     if p.get("install"):
-        install = _safe_install_extension({
+        install = script_plugin("safe_install_extension", {
             "extension_type": "script",
             "name": name,
             "source": source,
@@ -32069,15 +32033,8 @@ def _probe_script_lifecycle(p: Dict[str, Any]) -> Dict[str, Any]:
         out["install"] = install
         out["read"] = script_plugin("read", {"name": name, "category": category, "language": language}) if install.get("success") else None
         out["list"] = script_plugin("list", {"category": category, "language": language})
-        if p.get("execute") and install.get("success"):
-            out["execute"] = script_plugin("execute", {
-                "name": name,
-                "category": category,
-                "language": language,
-                "timeout": p.get("timeout", 120),
-            })
         if p.get("cleanup", True):
-            out["remove"] = _safe_remove_extension({
+            out["remove"] = script_plugin("safe_remove_extension", {
                 "extension_type": "script",
                 "name": name,
                 "category": category,
@@ -32108,8 +32065,19 @@ def _extension_boundary_report(p: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+#: Removed in v3.0.0 (maintainer policy: the server does not execute
+#: caller-supplied code). `run_inline` ran a caller's Python as a subprocess on
+#: the host, or Lua inside Resolve's Fusion engine with `os` and `io` in scope;
+#: `execute` ran an installed script. Neither passed any gate. Kept as a named
+#: set so a stale caller gets a migration pointer rather than "unknown action",
+#: and so the action-list drift guard, which reads literal comparisons, does not
+#: count them as live actions.
+_REMOVED_SCRIPT_ACTIONS = frozenset({"execute", "run_inline"})
+
+
 @mcp.tool()
 @_guard_missing_params
+@_destructive_op("script_plugin")
 def script_plugin(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Author and install Resolve-page Lua/Python scripts (Workspace → Scripts menu).
 
@@ -32145,25 +32113,12 @@ def script_plugin(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
         — kind: 'scaffold' | 'media_rules'
         — options: {language: 'lua'|'py', ...kind-specific}
       list_templates() -> {kinds}
-      execute(name, category, language, args?, timeout?) -> {success, stdout?, stderr?, exit_code?}
-        — Python: subprocess with stdout/stderr captured.
-        — Lua: fusion.RunScript(); print() output goes to Resolve Console.
-        — args: list of CLI args for the Python subprocess (Python only).
-        — timeout: seconds (default 120 for execute, 60 for run_inline).
-        — Auto-launches Resolve if not running.
-        — Python scripts hard-exit after the script body (guards against
-          fusionscript's segfault-at-exit race), so atexit handlers do not
-          run and non-daemon threads are not joined. Do cleanup inline or
-          in try/finally, not in atexit.
-      run_inline(source, language, timeout?) -> {success, stdout?, stderr?, result?}
-        — Python: writes to temp file with `resolve`/`project`/`mp`/`timeline`
-          pre-bound, runs as subprocess, captures stdout/stderr.
-        — Lua: fusion.Execute(source); return value comes back as `result`.
-        — Use this for ad-hoc one-shot queries without persisting a file.
+      execute / run_inline — REMOVED in v3.0.0. This server does not execute
+        caller-supplied code; install a script and run it from Workspace > Scripts.
       extension_capabilities() -> {paths, templates, lifecycle, safe_guards}
       probe_fuse_lifecycle(name?, kind?, install?, cleanup?) -> {template, validation, install?, remove?}
       probe_dctl_lifecycle(name?, kind?, category?, install?, refresh_luts?, cleanup?) -> {template, validation, install?, remove?}
-      probe_script_lifecycle(name?, language?, category?, install?, execute?, cleanup?) -> {template, validation, install?, execute?, remove?}
+      probe_script_lifecycle(name?, language?, category?, install?, cleanup?) -> {template, validation, install?, remove?}
       safe_install_extension(extension_type, name, source?|kind?, dry_run?) -> {success}
       safe_remove_extension(extension_type, name, dry_run?) -> {success}
       refresh_or_restart_required(extension_type, category?) -> {refresh_luts, restart_required}
@@ -32365,49 +32320,16 @@ def script_plugin(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
         return {"source": source, "kind": kind, "name": name,
                 "language": language}
 
-    if action == "execute":
-        name = p.get("name", "")
-        invalid = _validate_script_name(name)
-        if invalid:
-            return invalid
-        category = p.get("category")
-        if not category:
-            return _err("execute requires a 'category'.")
-        language = _normalize_script_language(p.get("language", "lua"))
-        invalid = _validate_script_language(language)
-        if invalid:
-            return invalid
-        timeout = int(p.get("timeout", 120))
-        try:
-            target = _script_path(name, category, language)
-        except ValueError as e:
-            return _err(str(e))
-        if not os.path.isfile(target):
-            return _err(f"No script named '{name}{_SCRIPT_LANG_EXT[language]}' "
-                        f"at {target}")
-        if language == "py":
-            args = p.get("args", [])
-            if not isinstance(args, list):
-                return _err("'args' must be a list of strings.")
-            return _execute_python_script(target, args, timeout)
-        return _execute_lua_script(target)
-
-    if action == "run_inline":
-        source = p.get("source")
-        if not isinstance(source, str) or not source.strip():
-            return _err("run_inline requires a non-empty 'source' string.")
-        language = _normalize_script_language(p.get("language", "lua"))
-        invalid = _validate_script_language(language)
-        if invalid:
-            return invalid
-        timeout = int(p.get("timeout", 60))
-        if language == "py":
-            return _run_inline_python(source, timeout)
-        return _run_inline_lua(source)
+    if action in _REMOVED_SCRIPT_ACTIONS:
+        return _err(
+            f"script_plugin.{action} was removed in v3.0.0: this server does not "
+            "execute caller-supplied code. Install the script with `install`, then "
+            "run it yourself from Resolve's Workspace > Scripts menu."
+        )
 
     return _unknown(action, ["path", "categories", "list", "install", "remove",
                              "read", "validate", "template", "list_templates",
-                             "execute", "run_inline", *_EXTENSION_KERNEL_ACTIONS])
+                             *_EXTENSION_KERNEL_ACTIONS])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -32751,9 +32673,9 @@ if __name__ == "__main__":
     start_background_update_check(VERSION, project_dir, logger, env=_setup_update_env())
     _install_threaded_tool_dispatch(mcp)
 
-    # Support --full flag to run the 376-tool granular server instead
+    # Support --full flag to run the 377-tool granular server instead
     if "--full" in sys.argv:
-        logger.info("Starting full 376-tool granular server...")
+        logger.info("Starting full 377-tool granular server...")
         sys.argv = [arg for arg in sys.argv if arg != "--full"]
         from src.granular import mcp as granular_mcp
 
@@ -32779,5 +32701,5 @@ if __name__ == "__main__":
         logger.error(f"Unknown --transport {transport!r}; use stdio|sse|streamable-http")
         sys.exit(2)
 
-    logger.info("Starting DaVinci Resolve MCP Server (36 compound tools)")
+    logger.info("Starting DaVinci Resolve MCP Server (37 compound tools)")
     run_fastmcp_stdio(mcp)

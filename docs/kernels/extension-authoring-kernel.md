@@ -33,7 +33,7 @@ All kernel actions are exposed through `script_plugin`.
 | `extension_capabilities` | Report Fuse, DCTL, script paths, template kinds, MCP markers, lifecycle rules, and safety guards. |
 | `probe_fuse_lifecycle` | Generate, validate, optionally install/read/list/remove a Fuse template. |
 | `probe_dctl_lifecycle` | Generate, validate, optionally install/read/list/remove a LUT or ACES DCTL template. |
-| `probe_script_lifecycle` | Generate, validate, optionally install/read/list/execute/remove a Resolve-page script. |
+| `probe_script_lifecycle` | Generate, validate, optionally install/read/list/remove a Resolve-page script. Refuses `execute` (removed in v3.0.0). |
 | `safe_install_extension` | Install Fuse, DCTL, or script source/templates with `_mcp_` name and marker guards. |
 | `safe_remove_extension` | Remove Fuse, DCTL, or script files only when the file is MCP-marked by default. |
 | `refresh_or_restart_required` | Classify whether an extension needs LUT refresh, menu refresh, UI reload, or Resolve restart. |
@@ -47,8 +47,6 @@ All kernel actions are exposed through `script_plugin`.
 | Regular DCTL | LUT directory | `project_settings.refresh_luts` picks it up. | Not required for LUT-category DCTLs. |
 | ACES IDT/ODT DCTL | ACES Transforms IDT/ODT | Not picked up by LUT refresh. | Required. |
 | Resolve-page script | Fusion/Scripts category directory | Workspace Scripts menu refreshes when opened. | Not required. |
-| Inline Python script | Temp file subprocess | Captured synchronously. | Not required. |
-| Inline Lua script | Temp Lua file via `fusion.RunScript` | Captured through Fusion app data bridge. | Not required. |
 
 ## Supported Findings
 
@@ -59,20 +57,17 @@ All kernel actions are exposed through `script_plugin`.
 - ACES IDT DCTL template generation, install into `ACES Transforms/IDT/MCP`,
   read, list, and safe remove worked. It remains restart-required before Resolve
   can use the transform.
-- Python Resolve-page script template generation, install, read, list, execute,
-  stdout/stderr capture, and safe remove worked.
-- `script_plugin.run_inline` worked for Python with stdout capture.
-- `script_plugin.run_inline` worked for Lua with stdout and return-value capture.
+- Python Resolve-page script template generation, install, read, list, and safe
+  remove worked.
 - The template matrix generated and validated every Fuse, DCTL, and script
   template kind.
 - Safe install rejected unmarked provided source by default.
 
 ## Boundaries
 
-- Installed Lua script execution through `fusion.RunScript(path)` returned
-  `success=False` in the release probe, even though install/read/list/remove
-  worked and inline Lua execution worked. Use `run_inline(language="lua")` when
-  captured output/return values matter.
+- **No script execution.** `run_inline` and `execute` were removed in v3.0.0:
+  the server does not execute caller-supplied code, and the probes no longer run
+  scripts. Installed scripts are run by the user from Workspace → Scripts.
 - New Fuses still require a Resolve restart to appear as registered Fusion
   tools. The MCP can install/remove files but cannot force Fusion to register a
   new Fuse in-process.
@@ -93,8 +88,8 @@ python3.11 tests/live_extension_authoring_validation.py --output-dir /tmp/extens
 ```
 
 The harness creates a disposable `_mcp_` project, installs and removes a
-generated Fuse, regular DCTL, ACES DCTL, Python script, and Lua script, probes
-inline Python/Lua execution, writes JSON and Markdown reports, deletes the
+generated Fuse, regular DCTL, ACES DCTL, Python script, and Lua script, writes
+JSON and Markdown reports, deletes the
 project, and removes its temp work directory.
 
 Use `--keep-open` only when you intentionally want to inspect the disposable

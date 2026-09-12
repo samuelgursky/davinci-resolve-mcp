@@ -1,0 +1,104 @@
+{
+  "master_lut_root": "/Library/Application Support/Blackmagic Design/DaVinci Resolve/LUT",
+  "resolve_running_during_probe": "discovery probe: no; application probe: yes (Studio 21.1.0.14)",
+  "note": "LUT discovery and installation are filesystem operations, so they work whether or not Resolve is up. Blackmagic's own list_luts refuses when Resolve is not running; this does not need to.",
+  "gap_closed": {
+    "official_mcp_has": [
+      "list_luts",
+      "generate_lut",
+      "delete_lut"
+    ],
+    "community_had": [
+      "graph set_lut",
+      "graph get_lut",
+      "export_lut",
+      "safe_export_lut",
+      "apply_arri_cdl_lut",
+      "project_settings refresh_luts"
+    ],
+    "community_lacked": "any way to see which LUTs exist, install one, or remove one \u2014 while the same needs for DCTL shaders were served by the dctl tool in the same directory tree"
+  },
+  "live_results": {
+    "luts_discovered": 249,
+    "both_interfaces_identical_listing": true,
+    "install": {
+      "set_lut_path": "MCP/mcp_live_probe.cube",
+      "bytes": 179,
+      "appeared_in_listing": true,
+      "marked_writable": true,
+      "count_delta": 1
+    },
+    "read": {
+      "parsed": true,
+      "size": 2,
+      "entries": 8,
+      "whole_table_returned": false
+    },
+    "reinstall_without_overwrite_refused": true,
+    "path_traversal_refused": true,
+    "escaped_file_created": false,
+    "stock_luts_present": 249,
+    "stock_lut_removal_refused_and_file_intact": true,
+    "cleanup_removed_probe": true,
+    "count_before": 249,
+    "count_after": 249
+  },
+  "deliberately_not_ported": {
+    "official_generate_lut": "executes a caller-supplied Python function body per lattice point",
+    "reason": "this server does not execute caller-supplied code; authoring is limited to writing a provided .cube and attenuating an existing one via the cube_lut helpers"
+  },
+  "untested": [
+    "attenuate against a real vendor LUT (bounds and missing-source paths are unit-tested only)",
+    "Windows and Linux master LUT roots",
+    "behaviour when the master LUT root is read-only",
+    "LUT formats other than 3D .cube applied on a node",
+    "application on layer_index > 1 node graphs and color-group graphs"
+  ],
+  "application_proof": {
+    "harness": "tests/live_lut_apply.py",
+    "project": "MCP LUT Apply Probe 20260911 (disposable, deleted afterwards)",
+    "fixture": "2s 640x360 solid-red ProRes clip; constant-green 2-point 3D .cube",
+    "baseline_render": {
+      "status": "Complete",
+      "centre_rgb": [
+        255,
+        0,
+        0
+      ]
+    },
+    "compound": {
+      "set_lut_path": "MCP/mcp_apply_probe_compound.cube",
+      "refresh": true,
+      "set_lut": true,
+      "direct_resolution_without_fallback": true,
+      "get_lut_readback": "MCP/mcp_apply_probe_compound.cube",
+      "render_status": "Complete",
+      "centre_rgb": [
+        0,
+        255,
+        0
+      ]
+    },
+    "granular": {
+      "set_lut_path": "MCP/mcp_apply_probe_granular.cube",
+      "refresh": true,
+      "set_lut": true,
+      "direct_resolution_without_fallback": true,
+      "get_lut_readback": "MCP/mcp_apply_probe_granular.cube",
+      "render_status": "Complete",
+      "centre_rgb": [
+        0,
+        255,
+        0
+      ]
+    },
+    "cleanup": "both installed LUTs removed; node cleared with SetLUT(1, '')"
+  },
+  "native_findings": {
+    "no_delay_needed": "SetLUT on a just-installed MCP/ path succeeded immediately after RefreshLUTList",
+    "exact_readback": "GetLUT(1) returned the master-relative path exactly as installed",
+    "clear": "SetLUT(1, '') returned True and GetLUT then returned ''",
+    "compound_graph_default_target": "graph set_lut/get_lut default to source='timeline', whose graph had 0 nodes, so SetLUT returned False; pass source='item' to reach the clip. Pre-existing behaviour, documented, not changed here",
+    "response_key_difference": "compound get_lut answers {lut}, granular graph_get_lut answers {lut_path}. Pre-existing, noted, not changed here"
+  }
+}

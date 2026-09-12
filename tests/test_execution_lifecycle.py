@@ -204,7 +204,7 @@ class TestExecutionLifecycle(unittest.TestCase):
         self.assertEqual(res["risk"]["level"], "high")
 
     def test_classify_operation_risk_critical_project_delete(self):
-        assessment = classify_operation_risk("project_manager", "delete_project", {"project_name": "Old"})
+        assessment = classify_operation_risk("project_manager", "delete", {"project_name": "Old"})
         self.assertEqual(assessment.level, RiskLevel.CRITICAL)
         self.assertTrue(assessment.destructive)
         self.assertTrue(assessment.confirmation_required)

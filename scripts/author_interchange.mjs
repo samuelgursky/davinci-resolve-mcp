@@ -17,7 +17,7 @@
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -42,8 +42,10 @@ async function main() {
   }
   if (!outputPath) throw new Error('outputPath is required');
 
+  // A file URL, not a path: on Windows the ESM loader reads `C:\...` as a URL with
+  // scheme `c:` and refuses it (ERR_UNSUPPORTED_ESM_URL_SCHEME). Same fix as 06d5bd6.
   const module = await import(
-    path.join(here, '..', 'resolve-advanced', 'server', 'author-interchange.mjs')
+    pathToFileURL(path.join(here, '..', 'resolve-advanced', 'server', 'author-interchange.mjs')).href
   );
   const authored = await module.authorInterchange(events, target, opts);
 

@@ -2947,3 +2947,92 @@ class BoundMethodKeywordTests(unittest.TestCase):
             "the free-edition bridge's _BoundMethod (PR #165). Rewrite these "
             "positionally:\n  " + "\n  ".join(offenders),
         )
+
+
+class InstallerGuidanceTests(unittest.TestCase):
+    """What the installer tells the user after it writes the files.
+
+    Issue #219: a user saw two identical `resolve_bridge_canary` entries and no
+    `resolve_bridge_probe`, followed the printed steps to a menu entry that
+    cannot exist, ran the canary, and saw nothing happen. Every part of that
+    was already understood by this code — the duplicate is one canary per
+    Scripts folder, the missing probe is exactly what the canary exists to
+    signal, and the canary reports through `print()` to Workspace > Console.
+    None of it was ever said out loud. These tests pin that it is.
+    """
+
+    @staticmethod
+    def _installer():
+        import importlib.util
+        from pathlib import Path as _Path
+        path = _Path(__file__).resolve().parents[1] / "scripts" / "install_resolve_bridge.py"
+        spec = importlib.util.spec_from_file_location("_install_resolve_bridge", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    @staticmethod
+    def _result(canaries: int):
+        installed = [f"/target{i}/Scripts/Utility/resolve_bridge_canary.lua"
+                     for i in range(canaries)]
+        installed.append("/target0/Scripts/Utility/resolve_bridge_probe.py")
+        return {"installed": installed}
+
+    def test_the_canary_filename_has_one_definition(self) -> None:
+        """The writer and the counter must not be able to disagree — a guidance
+        line promising entries that are not there is worse than no line."""
+        installer = self._installer()
+        self.assertEqual(installer._CANARY_NAME, "resolve_bridge_canary.lua")
+        source = installer.__file__
+        with open(source, encoding="utf-8") as handle:
+            body = handle.read()
+        self.assertEqual(
+            body.count('"resolve_bridge_canary.lua"'), 1,
+            "the canary filename is written and counted; it gets one definition",
+        )
+
+    def test_duplicate_canaries_are_counted_and_explained(self) -> None:
+        installer = self._installer()
+        self.assertEqual(installer.canary_count(self._result(2)), 2)
+        text = "\n".join(installer.next_steps(self._result(2)))
+        self.assertIn("Expect 2 identical", text)
+        self.assertIn("not a double install", text)
+
+    def test_a_single_canary_gets_no_duplicate_warning(self) -> None:
+        """One entry needs no explanation; saying it anyway is noise that
+        trains people to skip the block that matters."""
+        installer = self._installer()
+        text = "\n".join(installer.next_steps(self._result(1)))
+        self.assertNotIn("identical", text)
+
+    def test_the_canary_only_case_has_guidance_at_all(self) -> None:
+        """The outcome the user actually hit. Step 3 names a menu entry that
+        does not exist in this case, so the block must say the install is fine
+        and stop them re-running it."""
+        installer = self._installer()
+        text = "\n".join(installer.next_steps(self._result(2)))
+        self.assertIn("no 'resolve_bridge_probe'", text)
+        self.assertIn("The install worked. Do not re-run it.", text)
+
+    def test_the_console_is_named_because_the_canary_prints_there(self) -> None:
+        """`print()` from a Lua script lands in Workspace > Console. Without
+        that pointer the canary looks broken, which is what was reported."""
+        installer = self._installer()
+        text = "\n".join(installer.next_steps(self._result(2)))
+        self.assertIn("Workspace > Console", text)
+        self.assertIn("looks", text)
+
+    def test_the_cause_is_split_by_edition_not_asserted_as_python_discovery(self) -> None:
+        """The canary's own text predates Resolve 21.1 and blames Python
+        discovery. On free 21.1 that is wrong — Python scripting moved to
+        Studio (#203) — and would send a user chasing PYTHON3HOME for a cause
+        that cannot apply. The guidance must carry both branches.
+        """
+        installer = self._installer()
+        text = "\n".join(installer.next_steps(self._result(2)))
+        self.assertIn("21.1+ FREE", text)
+        self.assertIn("#203", text)
+        self.assertIn("PYTHON3HOME", text)
+        free = text.index("21.1+ FREE")
+        studio = text.index("Studio, or 21.0.x")
+        self.assertLess(free, studio, "the newer, likelier cause reads first")
