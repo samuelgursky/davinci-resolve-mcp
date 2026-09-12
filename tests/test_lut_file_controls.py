@@ -137,6 +137,26 @@ class InstallRemoveTests(TempLutRoot):
         with open(out["path"], encoding="utf-8") as handle:
             self.assertEqual(handle.read(), IDENTITY_CUBE)
 
+    def test_install_from_a_file_copies_a_binary_lut_byte_for_byte(self):
+        blob = bytes(range(256)) * 4
+        source = os.path.join(self.root, "Vendor", "Stock.olut")
+        os.makedirs(os.path.dirname(source), exist_ok=True)
+        with open(source, "wb") as handle:
+            handle.write(blob)
+        out = lut_files.install_lut("copied.olut", source_path=source)
+        with open(out["path"], "rb") as handle:
+            self.assertEqual(handle.read(), blob)
+
+    def test_install_from_a_file_copies_a_cube_that_is_not_utf8(self):
+        text = IDENTITY_CUBE.replace('TITLE "test"', 'TITLE "Lumière"')
+        source = os.path.join(self.root, "Vendor", "Lumiere.cube")
+        os.makedirs(os.path.dirname(source), exist_ok=True)
+        with open(source, "wb") as handle:
+            handle.write(text.encode("latin-1"))
+        out = lut_files.install_lut("lumiere.cube", source_path=source)
+        with open(out["path"], "rb") as handle:
+            self.assertEqual(handle.read(), text.encode("latin-1"))
+
     def test_remove_only_touches_the_writable_subdir(self):
         self.write("Vendor/Stock.cube")
         with self.assertRaises(lut_files.LutPathError):
