@@ -4336,6 +4336,55 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
             self.assertEqual(resumed["pending_clips"], 1)
 
 
+class CleanupArtifactsTests(unittest.TestCase):
+    """cleanup_artifacts(frames_only=False) deletes the whole analysis root, so it
+    has to let go of the cached timeline-brain connection on that root first."""
+
+    def _log_one_edit(self, project_root, run_id):
+        from src.utils import timeline_brain_db
+
+        with timeline_brain_db.transaction(project_root) as conn:
+            conn.execute(
+                "INSERT INTO brain_edits(analysis_run_id, edit_type, created_at)"
+                " VALUES (?, ?, ?)",
+                (run_id, "silence_ripple", "2026-01-01T00:00:00Z"),
+            )
+
+    def test_full_cleanup_releases_the_timeline_brain_connection(self):
+        from src.utils import timeline_brain_db
+
+        self.addCleanup(timeline_brain_db.close_all)
+        tmp = tempfile.mkdtemp(prefix="cleanup_artifacts_test_")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        project_root = os.path.join(tmp, "project-analysis")
+        os.makedirs(project_root)
+        db_path = timeline_brain_db.db_path_for_project(project_root)
+        self._log_one_edit(project_root, "run-before-cleanup")
+        self.assertTrue(os.path.isfile(db_path))
+
+        result = cleanup_artifacts(project_root, frames_only=False)
+        self.assertTrue(result["success"], result)
+        # On Windows the still-open handle makes rmtree skip the DB file, and
+        # ignore_errors=True hides it: the root survives while we report it gone.
+        self.assertFalse(
+            os.path.isdir(project_root),
+            msg=f"analysis root still on disk after cleanup: {project_root}",
+        )
+
+        # And the cached handle must be dropped, or the next write for this root
+        # goes to the deleted file and never reaches disk.
+        self._log_one_edit(project_root, "run-after-cleanup")
+        self.assertTrue(os.path.isfile(db_path), msg=f"write went nowhere: {db_path}")
+        probe = sqlite3.connect(db_path)
+        try:
+            rows = probe.execute(
+                "SELECT analysis_run_id FROM brain_edits"
+            ).fetchall()
+        finally:
+            probe.close()
+        self.assertEqual([r[0] for r in rows], ["run-after-cleanup"])
+
+
 class MediaAnalysisCoverageTests(unittest.TestCase):
     """Pre-flight coverage_report assessment used by editorial / color / online guardrails."""
 
