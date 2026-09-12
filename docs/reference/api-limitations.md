@@ -12,7 +12,7 @@ that none exists).
 
 **Verified on:** DaVinci Resolve Studio 21.0.2
 
-**Totals:** 41 missing capabilities, 52 bugs / unreliable behaviors.
+**Totals:** 41 missing capabilities, 53 bugs / unreliable behaviors.
 
 The authoritative source is the runtime-queryable `api_truth` ledger
 (`resolve_control api_truth "<query>"`); this document is generated from
@@ -768,3 +768,11 @@ values, or automation-hostile modal prompts.
 - **Behavior:** Reported by @legionsound (issue #207) from Studio 21.1.0.14 on macOS; NOT reproduced here (no 21.1 install). The documented success result is None. A minimal identity transform written across several lines — `__DEVICE__ float3 transform(...)` with the body on its own lines — validates (None). The SAME function collapsed onto one line consistently returns 'DCTL Error: main DCTL function does not have return value.', which is false: the return statement is there. A genuinely invalid source returns 'cannot find main DCTL function.', so the validator does distinguish; it is the single-line layout it misreads. An earlier multi-line timeout did not reproduce after a Resolve restart with a 30-second limit. Nothing establishes a GPU compiler or render defect — this is the validator's parse, not the DCTL's execution. EncryptDCTL untested.
 - **Workaround / current handling:** Any wrapper around ValidateDCTL must pass the native diagnostic through verbatim and must not reflow or rewrite the user's source to dodge it; ship the multi-line identity fixture as the known-good control. A 'no return value' error on a one-line function is this quirk, not a missing return — re-run the validation with the function laid out across lines before believing it. This server's own `dctl validate` is a static, offline check (entry point, brace balance, float suffixes) and does not call ValidateDCTL at all. The separate `dctl validate_native` and granular `validate_dctl_native` now expose the native validator without changing source or diagnostics. Both interfaces were contributor-validated against the three fixtures on Studio 21.1.0.14; see resolve211-dctl-validation.md.
 - **Tags:** dctl, validation, unreliable-return, version-gated, reported
+
+### TimelineItem.ExportLUT
+
+- **Object:** `TimelineItem`
+- **Signature:** `(exportType, path) -> bool`
+- **Behavior:** Gated on the Color page. Measured on all six pages: returns False from media, edit, fusion, fairlight and deliver, and True only from color. The refusal is a bare False with no reason. It does at least fail cleanly - no file is written on the failing pages, so there is no stale-file trap here.
+- **Workaround / current handling:** resolve.OpenPage('color') before the call and restore the prior page afterwards. Treat a False as 'you were on the wrong page' before suspecting the path.
+- **Tags:** page-gated, silent-failure, lut

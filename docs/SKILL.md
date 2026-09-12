@@ -674,6 +674,7 @@ specific pages. Always confirm or switch pages before calling page-sensitive too
 | Operation category | Required page | How to switch |
 |---|---|---|
 | Color grading, node graphs, CDL | Color | `resolve_control(action="open_page", params={"page": "color"})` |
+| LUT export (`export_lut`, `safe_export_lut`) | Color — measured `False` from media, edit, fusion, fairlight and deliver | `resolve_control(action="open_page", params={"page": "color"})` |
 | Gallery stills export, `grab_and_export` | Color, Gallery panel open | `resolve_control` + open Gallery panel in Workspace menu |
 | Fusion compositions (page comp) | Fusion | `resolve_control(action="open_page", params={"page": "fusion"})` |
 | Timeline editing, track operations | Edit or Cut | `resolve_control(action="open_page", params={"page": "edit"})` |
@@ -2331,6 +2332,24 @@ Resolve API returned `False`. This usually means a precondition was not met
 ---
 
 ## Known Gotchas
+
+### `copy_grades` refuses until you acknowledge it
+
+`TimelineItem.CopyGrades` **replaces** the target's grade — it does not merge —
+returns `True` while doing it, and creates no version to roll back to. Measured on
+Studio 21.1.0.14 by baking each state to a 33-point LUT: after the copy the
+target's LUT is byte-identical to the source's. Pointed at clips someone graded by
+hand, that is unrecoverable loss reported as success.
+
+So `copy_grades`, `safe_copy_grade`, `bulk_match_to_hero` and
+`timeline.apply_look_to_items` refuse until you pass `acknowledge_trap: true`. The
+refusal carries the measured fact in `known_limitation`. Before acknowledging,
+confirm the targets are actually uniform — export each one's LUT on the Color page
+and compare — rather than assuming a group shares a grade.
+
+Other recorded traps ride along on results as `known_limitation` without blocking.
+`RESOLVE_MCP_DISABLE_TRAP_GUARD=1` disables both behaviours.
+
 
 **Resolve API object lifetimes** — Objects like timelines, clips, and color groups
 returned by the API are live references that can become stale if the project state
