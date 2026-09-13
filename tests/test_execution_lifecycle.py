@@ -357,6 +357,72 @@ class TestExecutionLifecycle(unittest.TestCase):
         self.assertTrue(drift["drift_detected"])
         self.assertEqual(drift["duration_delta_frames"], -40)
 
+    def test_drift_detection_skips_a_project_switch(self):
+        """Issue #224: `project_manager.load` swaps the current project, so the
+        pre- and post-state durations describe two different timelines. The
+        difference between them is not drift and must not be reported as such."""
+        states = [
+            {"project_name": "A", "timeline_name": "Cut A", "duration_frames": 120},
+            {"project_name": "B", "timeline_name": "Cut B", "duration_frames": 17854},
+        ]
+        provider = lambda: states.pop(0) if states else None
+        hook = DriftDetectionHook(state_provider=provider)
+        ctx = ToolCallContext("project_manager", "load", {"name": "B"})
+        ctx.pre_state = hook._state_provider()
+
+        envelope = {"success": True, "_operation": {"op": "project_manager.load"}}
+        self.pipeline.register_hook(hook)
+        res = self.pipeline.run_after(ctx, envelope, duration_ms=25)
+        drift = res["_operation"]["lifecycle"]["drift_detection"]
+        self.assertFalse(drift["drift_detected"])
+        self.assertTrue(drift["baseline_reset"])
+        self.assertEqual(drift["reset_on"], "project_name")
+        self.assertNotIn("duration_delta_frames", drift)
+
+    def test_drift_detection_skips_a_timeline_switch_inside_one_project(self):
+        """Same rule one level down: the current timeline can be replaced
+        without the project changing."""
+        states = [
+            {"project_name": "A", "timeline_name": "Cut v1", "duration_frames": 120},
+            {"project_name": "A", "timeline_name": "Cut v2", "duration_frames": 900},
+        ]
+        provider = lambda: states.pop(0) if states else None
+        hook = DriftDetectionHook(state_provider=provider)
+        ctx = ToolCallContext("timeline", "set_current", {"name": "Cut v2"})
+        ctx.pre_state = hook._state_provider()
+        res = hook.after_tool_call(ctx, {"success": True}, duration_ms=5)
+        self.assertFalse(res["drift_detected"])
+        self.assertEqual(res["reset_on"], "timeline_name")
+
+    def test_drift_detection_still_fires_on_the_same_timeline(self):
+        """The fix must not silence the case the hook exists for: same project,
+        same timeline, duration moved under a non-duration-altering action."""
+        states = [
+            {"project_name": "A", "timeline_name": "Cut A", "duration_frames": 240},
+            {"project_name": "A", "timeline_name": "Cut A", "duration_frames": 200},
+        ]
+        provider = lambda: states.pop(0) if states else None
+        hook = DriftDetectionHook(state_provider=provider)
+        ctx = ToolCallContext("timeline", "set_clip_color", {})
+        ctx.pre_state = hook._state_provider()
+        res = hook.after_tool_call(ctx, {"success": True}, duration_ms=5)
+        self.assertTrue(res["drift_detected"])
+        self.assertEqual(res["duration_delta_frames"], -40)
+
+    def test_drift_detection_tolerates_states_without_identity(self):
+        """A state provider that reports no timeline name (older payloads, or a
+        project with no current timeline) must not silently disable the check."""
+        states = [
+            {"duration_frames": 240},
+            {"duration_frames": 200},
+        ]
+        provider = lambda: states.pop(0) if states else None
+        hook = DriftDetectionHook(state_provider=provider)
+        ctx = ToolCallContext("timeline", "set_clip_color", {})
+        ctx.pre_state = hook._state_provider()
+        res = hook.after_tool_call(ctx, {"success": True}, duration_ms=5)
+        self.assertTrue(res["drift_detected"])
+
     def test_bridge_connection_and_live_lifecycle_state(self):
         import tempfile
         from tests.test_resolve_bridge import FakeResolve

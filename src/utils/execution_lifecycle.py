@@ -541,8 +541,43 @@ class DriftDetectionHook(LifecycleHook):
         "delete_clips", "cut_clip", "delete_item", "ripple_trim"
     }
 
+    #: Identity keys that make a duration comparable. If either of these moved,
+    #: the two durations describe different timelines and their difference is
+    #: not drift.
+    _IDENTITY_KEYS = ("project_name", "timeline_name")
+
     def __init__(self, state_provider: Optional[Callable[[], Optional[Dict[str, Any]]]] = None):
         self._state_provider = state_provider
+
+    @classmethod
+    def _baseline_identity_changed(
+        cls, pre_state: Dict[str, Any], post_state: Dict[str, Any]
+    ) -> Optional[str]:
+        """Name the identity key that moved, or None if the baseline still holds.
+
+        A duration delta only means drift when both numbers describe the same
+        timeline. Actions that *replace* the current timeline rather than modify
+        it -- `project_manager.load` most obviously -- leave a pre-state
+        measuring one project's timeline and a post-state measuring another's.
+        Comparing them reports a large unexpected drift for a call during which
+        nothing was edited at all.
+
+        That is the failure this layer exists to prevent, occurring inside the
+        layer itself: the README is explicit that a confident wrong answer is
+        worse than no answer, and an agent reading the envelope is told an edit
+        corrupted a timeline when no edit happened.
+
+        Identity is checked rather than the action being allow-listed, because
+        the set of actions that can swap the current timeline is open-ended
+        (`load`, `create`, `set_current`, anything that closes a project) while
+        the question -- does the baseline still refer to the thing we measured?
+        -- is the same for all of them.
+        """
+        for key in cls._IDENTITY_KEYS:
+            before, after = pre_state.get(key), post_state.get(key)
+            if before is not None and after is not None and before != after:
+                return key
+        return None
 
     def after_tool_call(
         self, ctx: ToolCallContext, result: Any, duration_ms: int
@@ -555,6 +590,23 @@ class DriftDetectionHook(LifecycleHook):
             if not post_state:
                 return None
             ctx.post_state = post_state
+
+            moved = self._baseline_identity_changed(ctx.pre_state, post_state)
+            if moved:
+                # Say so explicitly rather than returning None. "No drift
+                # record" is indistinguishable from "not checked"; this reports
+                # that the check ran and the baseline stopped applying.
+                return {
+                    "drift_detected": False,
+                    "baseline_reset": True,
+                    "reset_on": moved,
+                    "notice": (
+                        f"Drift not evaluated: {moved} changed from "
+                        f"{ctx.pre_state.get(moved)!r} to {post_state.get(moved)!r} "
+                        f"during '{ctx.action}', so the pre-state duration is no "
+                        "longer a baseline for the post-state duration."
+                    ),
+                }
 
             pre_dur = ctx.pre_state.get("duration_frames")
             post_dur = post_state.get("duration_frames")

@@ -2,6 +2,46 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.1.1 — drift detection stops comparing two different timelines
+
+Reported by @V2arK (#224), with the root cause correctly diagnosed in the report.
+
+### Fixed
+
+- **`project_manager.load` emitted a drift warning for an edit that never
+  happened.** `DriftDetectionHook` compared `pre_state["duration_frames"]`
+  against the post-state's with no check that the two described the same
+  timeline — and `load` is not in `_DURATION_ALTERING_ACTIONS`, so a project
+  switch took the "unexpected drift" branch by construction. Switching from a
+  120-frame timeline in one project to a 17854-frame timeline in another
+  reported a drift of 17734 frames during an action that edited nothing.
+
+  This is the failure the verification layer exists to prevent, occurring
+  inside the verification layer: an agent reading the envelope was told an edit
+  had corrupted a timeline when no edit had occurred, and the README is
+  explicit that a confident wrong answer is worse than no answer.
+
+- **The check is now on identity, not on an action allow-list.** The hook skips
+  the comparison when `project_name` or `timeline_name` moved between pre- and
+  post-state — both of which the state provider already reported and the hook
+  simply ignored. Identity was chosen over adding `load` to a list because the
+  set of actions that can replace the current timeline is open-ended (`load`,
+  `create`, `set_current`, anything that closes a project) while the question —
+  does the baseline still refer to what we measured? — is the same for all of
+  them. The reporter suggested both directions; this is the more general one.
+
+- **The reset is reported, not silently omitted.** The hook returns
+  `drift_detected: false` with `baseline_reset: true`, the key that moved, and
+  a notice, rather than returning nothing. No drift record is indistinguishable
+  from "not checked"; this says the check ran and the baseline stopped
+  applying.
+
+  The case the hook exists for is unaffected: same project, same timeline,
+  duration moved under a non-duration-altering action still reports drift, and
+  a state with no identity keys at all still compares durations rather than
+  silently disabling itself. All three are covered by tests, and the two new
+  ones fail without the change.
+
 ## What's New in v4.1.0 — `timeline_markers add` can be previewed, and "false" stops meaning true
 
 Contributed by @Rohitkanithi (#218), adapted onto v4.0.0.
