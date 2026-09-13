@@ -244,3 +244,39 @@ test('injectGrades: internals — extractDrxBodyHex throws on missing Body', () 
 test.skip('injectGrades: rendered frame matches direct DRX apply '
   + '(covered by tests/live_drp_roundtrip_verification.py — grade-render compare still TODO)',
 () => {});
+
+test('injectGrades: flips the owning version\'s HasCorrection to true (Resolve reads the flag, not the body)', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'inject-hc-'));
+  const src = path.join(dir, 'src.drp');
+  const out = path.join(dir, 'out.drp');
+  const buf = await drpFormat.buildDRP({
+    projectName: 'inject-hc-test',
+    timelines: [{
+      name: 'T1', frameRate: 24, startTimecode: '01:00:00:00', resolution: '1920x1080',
+      videoTracks: [{ clips: [
+        { start: 0, duration: 24, in: 0, mediaFilePath: '/synthetic/a.mov', grade: { body: BASELINE_BODY, hasCorrection: false, versionName: 'V1' } },
+        { start: 24, duration: 24, in: 0, mediaFilePath: '/synthetic/b.mov', grade: { body: ORIGINAL_BODY_CLIP_2, hasCorrection: false, versionName: 'V1' } },
+      ] }],
+      audioTracks: [],
+    }],
+  });
+  await fs.writeFile(src, buf);
+  const before = await readSeqContainer(src);
+  assert.equal((before.match(/<HasCorrection>true<\/HasCorrection>/g) || []).length, 0, 'fixture starts ungraded');
+  const ids = [...before.matchAll(/<(?:Sm2TiVideoClip|Sm2VideoClip)[^>]*?DbId="([^"]+)"/g)].map((m) => m[1]);
+  assert.equal(ids.length, 2);
+  await drpFormat.injectGrades(src, [{ clipId: ids[0], drxContent: makeSyntheticDrx(INJECTED_BODY) }], { outputPath: out });
+  const after = await readSeqContainer(out);
+  const clipBlock = (xml, id) => {
+    const i = xml.indexOf(`DbId="${id}"`);
+    const j = xml.indexOf('</Sm2TiVideoClip>', i);
+    return xml.slice(i, j);
+  };
+  assert.match(clipBlock(after, ids[0]), /<HasCorrection>true<\/HasCorrection>/, 'targeted clip is now marked corrected');
+  assert.match(clipBlock(after, ids[0]), new RegExp(`<Body>${INJECTED_BODY}</Body>`));
+  assert.match(clipBlock(after, ids[1]), /<HasCorrection>false<\/HasCorrection>/, 'untouched clip keeps its flag');
+  assert.doesNotMatch(clipBlock(after, ids[1]), /<HasCorrection>true/);
+  // Null control: injecting into an already-corrected version changes nothing but the body.
+  const already = await readSeqContainer(src);
+  assert.equal((already.match(/<HasCorrection>/g) || []).length, 2);
+});

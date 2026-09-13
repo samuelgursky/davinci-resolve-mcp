@@ -56,7 +56,8 @@ function extractDrxBodyHex(drxContent) {
  *
  * Scoping: the regex anchors on `<Sm2TiVideoClip ... DbId="<id>"` and
  * runs forward to the matching `</Sm2TiVideoClip>`. Inside that range we
- * replace exactly one <Body>HEX</Body>. If a clip has no Body yet (a
+ * replace exactly one <Body>HEX</Body> and flip the owning version's
+ * <HasCorrection> to true. If a clip has no Body yet (a
  * brand-new clip with no grade) we don't synthesize the surrounding
  * LmVersionTable scaffolding — that's a builder responsibility, not an
  * injector one. Callers wanting to add grades to clean clips should
@@ -100,11 +101,31 @@ function replaceBodyForClip(seqXml, targetDbId, newBodyHex) {
   // 3. Within the clip's range, replace exactly one <Body>...</Body>.
   const clipRange = seqXml.slice(openStart, clipEnd);
   const bodyRe = /<Body>([\s\S]*?)<\/Body>/;
-  if (!bodyRe.test(clipRange)) return null;
-  const newClipRange = clipRange.replace(
+  const bodyAt = clipRange.search(bodyRe);
+  if (bodyAt < 0) return null;
+  let newClipRange = clipRange.replace(
     bodyRe,
     `<Body>${newBodyHex}</Body>`,
   );
+
+  // 4. Mark the owning version as corrected. Resolve keeps a per-version
+  //    <HasCorrection> flag beside the Body and its UI reads THAT (clip strip
+  //    "graded"/"ungraded", clip filters), not the body bytes — a body
+  //    injected into a version left at false renders the grade but shows the
+  //    clip as ungraded (JREG2, 2026-09-13). The version element lists
+  //    HasCorrection before Body, so the last HasCorrection preceding the
+  //    replaced Body is the owner's.
+  const head = newClipRange.slice(0, bodyAt);
+  const hcAt = head.lastIndexOf('<HasCorrection>');
+  if (hcAt >= 0) {
+    const hcEnd = head.indexOf('</HasCorrection>', hcAt);
+    if (hcEnd > hcAt) {
+      newClipRange =
+        head.slice(0, hcAt) +
+        '<HasCorrection>true</HasCorrection>' +
+        newClipRange.slice(hcEnd + '</HasCorrection>'.length);
+    }
+  }
 
   return seqXml.slice(0, openStart) + newClipRange + seqXml.slice(clipEnd);
 }
