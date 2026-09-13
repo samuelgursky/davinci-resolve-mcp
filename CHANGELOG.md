@@ -2,6 +2,45 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v3.4.0 — review a bin one frame at a time in the control panel
+
+Contributed by @tpellet (#230), their first contribution here.
+
+### Added
+
+- **Serial source review in the control panel.** Reviewing a bin meant opening
+  each clip separately. The review bin now has an **Enlarge / review** button
+  per card that opens a full-size frame with previous/next navigation, so a bin
+  is walked once rather than clicked through a card at a time.
+- **Include / Exclude / Unreviewed per clip, and an independent star rating.**
+  Keyboard-driven — `I`, `X`, `U` and the arrow keys — with Include and Exclude
+  advancing automatically. Selection and rating are separate fields: rating a
+  clip does not decide it, and excluding one does not discard its rating.
+- **A selection filter** — all / non-excluded / excluded — alongside the
+  existing bin filter, and a selection chip on every card, so the state of a
+  pass is visible without opening anything.
+- **Decisions survive a reload.** Both fields go through the existing
+  correction store, so they persist the way clip notes already did and are
+  visible to everything else that reads corrections. Notes are untouched.
+
+### Changed
+
+- **Review thumbnails are letterboxed rather than cropped** (`object-fit:
+  cover` → `contain`). A cropped thumbnail hides exactly what a source review
+  is for: framing, headroom, and what is at the edges of frame.
+
+### Gating
+
+- **Every save is verified, not assumed.** The panel re-reads the clip after
+  each write and refuses to advance if the value it reads back is not the one
+  it sent, so a failed save cannot be walked past. `apply_clip_correction`
+  validates server-side as well: `user.selection` must be one of the three
+  literals, and `user.rating` must be an `int` from 0 to 5 — `type(value) is
+  not int` deliberately, so a JSON `true` is rejected rather than silently
+  stored as a rating of 1.
+- **No source media is touched and no Resolve edit is made.** Previews are
+  analyzed frames that already exist on disk; there is no conversion step.
+
 ## What's New in v3.3.0 — ask the server what the native Resolve API contains
 
 Contributed by @legionsound (#229), the second of the two branches queued in #207.
