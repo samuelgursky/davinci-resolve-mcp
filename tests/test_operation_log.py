@@ -66,6 +66,51 @@ class OperationLogRecords(unittest.TestCase):
         self.assertEqual(record["changes"], {"items_added": 2})
         self.assertIn("items_added=2", record["summary"])
 
+    def test_build_record_coerces_dry_run_strings(self) -> None:
+        for value, expected in (
+            ("true", True),
+            ("1", True),
+            ("yes", True),
+            ("on", True),
+            ("false", False),
+            ("0", False),
+            ("no", False),
+            ("off", False),
+        ):
+            with self.subTest(value=value):
+                record = operation_log.build_record(
+                    tool_name="timeline_markers",
+                    action="add",
+                    params={"dry_run": value},
+                    result={"success": True, "dry_run": value},
+                    risk={"level": "low", "recognised": True},
+                )
+                self.assertEqual(record["dry_run"], expected)
+
+    def test_build_record_marks_successful_dry_run_summary_as_preview(self) -> None:
+        record = operation_log.build_record(
+            tool_name="timeline_markers",
+            action="add",
+            params={"dryRun": "true"},
+            result={"success": True, "dry_run": True},
+            risk={"level": "low", "recognised": True},
+        )
+
+        self.assertTrue(record["dry_run"])
+        self.assertEqual(record["summary"], "timeline_markers.add dry-run preview")
+
+    def test_exception_record_coerces_dry_run_false_string(self) -> None:
+        record = operation_log.build_exception_record(
+            tool_name="timeline_markers",
+            action="add",
+            params={"dry_run": "false"},
+            exc=RuntimeError("Resolve bridge closed"),
+            risk={"level": "low", "recognised": True},
+            duration_ms=2,
+        )
+
+        self.assertFalse(record["dry_run"])
+
     def test_lifecycle_writes_mutating_operation_record(self) -> None:
         pipeline = LifecyclePipeline()
         ctx = ToolCallContext(
