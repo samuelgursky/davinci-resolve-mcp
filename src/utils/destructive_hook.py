@@ -33,6 +33,7 @@ import uuid
 from typing import Any, Callable, Dict, FrozenSet, Optional, Tuple
 
 from src.utils import analysis_runs, brain_edits, media_pool_changes, timeline_versioning
+from src.utils.api_truth import traps_for, trap_notice
 from src.utils.execution_lifecycle import RiskAssessment, RiskLevel, classify_operation_risk
 
 logger = logging.getLogger("resolve-mcp.destructive-hook")
@@ -793,6 +794,79 @@ def _extract_metric(params: Optional[Dict[str, Any]]) -> Tuple[Optional[str], Op
 # ── Decorator ────────────────────────────────────────────────────────────────
 
 
+#: Set truthy to disable the trap guard entirely (both the refusal and the
+#: advisory push). Exists because the refusal is a behaviour change for callers
+#: that previously got a bare `{"success": true}` from a destructive copy.
+TRAP_GUARD_ENV = "RESOLVE_MCP_DISABLE_TRAP_GUARD"
+
+
+def _trap_guard_disabled() -> bool:
+    return os.environ.get(TRAP_GUARD_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+#: Actions that already make the caller confirm, so the trap guard must NOT also
+#: refuse them.
+#:
+#: `destroys_prior_work` is a property of the SYMBOL (TimelineItem.CopyGrades),
+#: but four actions call that symbol and two of them already own a confirmation
+#: path. Refusing those means the caller is told to add `acknowledge_trap`, and
+#: only after retrying discovers they also need a confirm token — two
+#: acknowledgements for one operation, found serially. Worse, it lands hardest on
+#: `safe_copy_grade`, whose whole name promises it is the careful route; making
+#: it the most irritating to call pushes people toward the raw `copy_grades` the
+#: guard exists to protect them from.
+#:
+#: Two mechanisms enforcing one rule drift apart. The confirm-token flow is older
+#: and more specific, so it wins and this guard stands down. These actions still
+#: get the advisory `known_limitation` — the fact is worth having, the second
+#: refusal is not.
+TRAP_REFUSAL_EXEMPT_ACTIONS: FrozenSet[Tuple[str, str]] = frozenset({
+    # Issues a confirm_token whose preview names the exact risk: "Replaces the
+    # entire node graph on every successfully resolved target item."
+    ("timeline_item_color", "safe_copy_grade"),
+    # Dry-run-by-default in the handler (`p.get("dry_run", True)`), then
+    # confirm_token to execute. A first call with no params mutates nothing.
+    ("timeline_item_color", "bulk_match_to_hero"),
+})
+
+
+def _trap_acknowledged(params: Optional[Dict[str, Any]]) -> bool:
+    """Did the caller explicitly accept a known-destructive behaviour?"""
+    return bool(isinstance(params, dict) and params.get("acknowledge_trap"))
+
+
+def _trap_block_response(
+    tool_name: str, action: str, blocking: list,
+) -> Dict[str, Any]:
+    """Refuse a call whose verified behaviour destroys unrecoverable work.
+
+    The point is not to forbid the operation — it is to make the caller say out
+    loud that they know what it does. `CopyGrades` returns True while replacing
+    a hand-built grade wholesale and leaving no version to go back to, so a
+    caller who did not know that cannot tell success from loss.
+    """
+    return {
+        "success": False,
+        "error": (
+            f"'{tool_name}.{action}' is refused: its verified behaviour destroys "
+            "existing work that cannot be recovered afterwards. Read "
+            "`known_limitation`, then re-send with acknowledge_trap=true if that "
+            "is genuinely what you want."
+        ),
+        "known_limitation": [trap_notice(e) for e in blocking],
+        "retry_with": {"acknowledge_trap": True},
+        "override_env": TRAP_GUARD_ENV,
+    }
+
+
+def _attach_trap_notices(result: Any, traps: list) -> Any:
+    """Ride the verified fact along on the result, without overwriting one."""
+    if not traps or not isinstance(result, dict):
+        return result
+    result.setdefault("known_limitation", [trap_notice(e) for e in traps])
+    return result
+
+
 def destructive_op(tool_name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Wrap a top-level tool function with the version-on-mutate hook.
 
@@ -802,8 +876,7 @@ def destructive_op(tool_name: str) -> Callable[[Callable[..., Any]], Callable[..
     """
 
     def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
-        @functools.wraps(fn)
-        def wrapper(action: str, params: Optional[Dict[str, Any]] = None, *args, **kwargs) -> Any:
+        def _inner(action: str, params: Optional[Dict[str, Any]] = None, *args, **kwargs) -> Any:
             if lacks_native_dry_run(tool_name, action, params):
                 # An explicit dry-run request this handler would silently
                 # execute for real. Refuse before archive, state lookup, or the
@@ -1150,6 +1223,29 @@ def destructive_op(tool_name: str) -> Callable[[Callable[..., Any]], Callable[..
                 risk_level=risk_level,
                 recognised=risk_recognised,
             )
+
+        @functools.wraps(fn)
+        def wrapper(action: str, params: Optional[Dict[str, Any]] = None, *args, **kwargs) -> Any:
+            # Trap push. `_inner` has a dozen return paths (dry-run refusal,
+            # safe-mode block, pending-confirm, strict/no-context, normal); one
+            # outer attach point covers all of them and cannot drift as those
+            # paths change.
+            traps = traps_for(tool_name, action)
+            if traps and not _trap_guard_disabled():
+                blocking = [t for t in traps if t.get("destroys_prior_work")]
+                # A dry run destroys nothing, so there is nothing to acknowledge
+                # — and preempting `_inner` here would swallow its
+                # DRY_RUN_UNAVAILABLE refusal, which is the more important
+                # answer: it tells the caller this action cannot be previewed
+                # at all. The advisory push still rides along on that refusal.
+                if (
+                    blocking
+                    and (tool_name, action) not in TRAP_REFUSAL_EXEMPT_ACTIONS
+                    and not _trap_acknowledged(params)
+                    and not _explicit_dry_run_requested(params)
+                ):
+                    return _trap_block_response(tool_name, action, blocking)
+            return _attach_trap_notices(_inner(action, params, *args, **kwargs), traps)
 
         wrapper.__wrapped_tool_name__ = tool_name  # type: ignore[attr-defined]
         wrapper.__is_destructive_wrapped__ = True  # type: ignore[attr-defined]

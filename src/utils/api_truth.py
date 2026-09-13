@@ -24,7 +24,7 @@ When you add or change a ``submit``-tagged entry, regenerate the report
 (``venv/bin/python scripts/gen_api_limitations.py``) or the
 ``tests.test_api_limitations_doc`` drift guard fails.
 """
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 VERIFIED_ON = "DaVinci Resolve Studio 21.0.2"
 
@@ -116,6 +116,10 @@ API_TRUTH: List[Dict[str, Any]] = [
                        "which does exactly that.",
         "tags": ["unreliable-return", "project", "flaky", "session-lock"],
         "submit": "bug",
+        "verified_on": "DaVinci Resolve Studio 21.1.0.14",
+        "reconfirmed": "2026-09-09: still true on 21.1.0.14. Delete with another "
+                       "project current returned False; CloseProject on the target "
+                       "then delete returned True, first attempt.",
     },
     {
         "symbol": "Project.SetSetting('timelinePlaybackFrameRate')",
@@ -3272,6 +3276,76 @@ API_TRUTH: List[Dict[str, Any]] = [
         "tags": ["dctl", "validation", "unreliable-return", "version-gated", "reported"],
         "submit": "bug",
     },
+    # ── Measured on Studio 21.1.0.14, 2026-09-09 (trap-aware execution work) ──
+    {
+        "symbol": "TimelineItem.CopyGrades",
+        "object": "TimelineItem",
+        "signature": "(tgtTimelineItems) -> bool",
+        "reality": "REPLACES the target's grade wholesale; it does not merge. "
+                   "Measured by exporting a 33-point LUT from the target before "
+                   "and after: after the copy the target's LUT is byte-identical "
+                   "to the source's and differs from the grade the target had. "
+                   "Returns True while doing it. It creates NO grade version - "
+                   "GetVersionNameList is unchanged across the call - so the "
+                   "overwritten grade cannot be recovered.",
+        "recommended": "Never call this on clips carrying hand-work. Prove the "
+                       "targets are uniform first by exporting each one's LUT "
+                       "(Color page) and comparing bytes. If the prior grade has "
+                       "any value, call TimelineItem.AddVersion() first - the "
+                       "copy will not make a restore point for you.",
+        "tags": ["destructive", "unrecoverable", "grade", "no-version"],
+        "destroys_prior_work": True,
+        "verified_on": "DaVinci Resolve Studio 21.1.0.14",
+    },
+    {
+        "symbol": "TimelineItem.ApplyGradeFromStill",
+        "object": "TimelineItem",
+        "reality": "Does not exist. There is no ApplyGradeFromStill on "
+                   "TimelineItem or on Graph in 21.1, and it is absent from the "
+                   "typed stubs. Code calling it raises AttributeError, and any "
+                   "wrapper that swallows that reports success for a grade it "
+                   "never applied.",
+        "recommended": "Use Graph.ApplyGradeFromDRX(path, gradeMode) against a "
+                       "'.drx' (gradeMode 0=no keyframes, 1=source-timecode "
+                       "aligned, 2=start-frame aligned).",
+        "tags": ["missing-method", "grade"],
+        "verified_on": "DaVinci Resolve Studio 21.1.0.14",
+    },
+    {
+        "symbol": "TimelineItem.ExportLUT",
+        "object": "TimelineItem",
+        "signature": "(exportType, path) -> bool",
+        "reality": "Gated on the Color page. Measured on all six pages: returns "
+                   "False from media, edit, fusion, fairlight and deliver, and "
+                   "True only from color. The refusal is a bare False with no "
+                   "reason. It does at least fail cleanly - no file is written "
+                   "on the failing pages, so there is no stale-file trap here.",
+        "recommended": "resolve.OpenPage('color') before the call and restore "
+                       "the prior page afterwards. Treat a False as 'you were on "
+                       "the wrong page' before suspecting the path.",
+        "tags": ["page-gated", "silent-failure", "lut"],
+        "submit": "bug",
+        "verified_on": "DaVinci Resolve Studio 21.1.0.14",
+    },
+    {
+        "symbol": "Timeline.DuplicateTimeline",
+        "object": "Timeline",
+        "signature": "(timelineName) -> Timeline",
+        "reality": "Silently moves the project's current-timeline pointer to the "
+                   "new duplicate. The return value is the duplicate and nothing "
+                   "signals that 'current' changed, so every subsequent mutation "
+                   "lands in the copy while the caller believes it is still "
+                   "editing the original.",
+        "recommended": "Capture GetCurrentTimeline() before the call and "
+                       "SetCurrentTimeline() back after it, checking the return "
+                       "- SetCurrentTimeline restores it and returns True. "
+                       "Never discard that boolean. "
+                       "src/utils/timeline_versioning.py:archive_current_timeline "
+                       "already does this and fails loudly if the restore fails.",
+        "tags": ["side-effect", "silent-failure", "timeline"],
+        "verified_on": "DaVinci Resolve Studio 21.1.0.14",
+    },
+
 ]
 
 
@@ -3308,3 +3382,64 @@ def submittable_limitations() -> Dict[str, List[Dict[str, Any]]]:
         if kind in groups:
             groups[kind].append(e)
     return groups
+
+
+# ── Action → Resolve symbol registry ─────────────────────────────────────────
+#
+# Which Resolve symbols a compound (tool, action) actually calls. Used to push
+# the relevant fact to the caller at the moment of the call instead of waiting
+# for someone to think to query this file.
+#
+# Every mapping is declared explicitly and matched by exact symbol equality.
+# Substring or fuzzy matching is forbidden here for the reason given in
+# `server._setting_limitation`: attaching an unrelated explanation to a call
+# reads as a diagnosis, and a wrong diagnosis is worse than none. A guard
+# (`tests/test_action_symbol_registry.py`) asserts every symbol named below is a
+# real API_TRUTH entry and every action is a real handler.
+ACTION_SYMBOLS: Dict[Tuple[str, str], List[str]] = {
+    ("timeline_item_color", "copy_grades"): ["TimelineItem.CopyGrades"],
+    ("timeline_item_color", "safe_copy_grade"): ["TimelineItem.CopyGrades"],
+    ("timeline_item_color", "bulk_match_to_hero"): ["TimelineItem.CopyGrades"],
+    ("timeline", "apply_look_to_items"): ["TimelineItem.CopyGrades"],
+    ("timeline_item_color", "export_lut"): ["TimelineItem.ExportLUT"],
+    ("timeline_item_color", "safe_export_lut"): ["TimelineItem.ExportLUT"],
+    ("timeline", "duplicate"): ["Timeline.DuplicateTimeline"],
+}
+
+
+def _entry_for_symbol(symbol: str) -> Optional[Dict[str, Any]]:
+    """The single entry whose `symbol` is exactly `symbol`."""
+    for entry in API_TRUTH:
+        if entry.get("symbol") == symbol:
+            return entry
+    return None
+
+
+def traps_for(tool: str, action: str) -> List[Dict[str, Any]]:
+    """Verified facts for the symbols this (tool, action) actually calls.
+
+    Exact matches only — an action with no declared mapping returns nothing
+    rather than guessing.
+    """
+    out: List[Dict[str, Any]] = []
+    for symbol in ACTION_SYMBOLS.get((tool, action), ()):
+        entry = _entry_for_symbol(symbol)
+        if entry is not None:
+            out.append(entry)
+    return out
+
+
+def trap_notice(entry: Dict[str, Any]) -> Dict[str, str]:
+    """The compact push form: what it does, what to do instead.
+
+    Deliberately three fields. A full entry carries signature, tags, submit
+    status and mitigation lists that cost tokens on every single call and tell
+    the caller nothing they can act on at the callsite. Response weight is a
+    real cost on long grading sessions, so the push stays small and the full
+    entry stays one `resolve_control(action="api_truth")` away.
+    """
+    return {
+        "symbol": entry.get("symbol", ""),
+        "reality": entry.get("reality", ""),
+        "recommended": entry.get("recommended", ""),
+    }

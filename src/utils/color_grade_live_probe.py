@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import platform
@@ -139,6 +140,192 @@ def _redact_file_payloads(result: Dict[str, Any]) -> Dict[str, Any]:
     if "files" in redacted:
         redacted["files"] = files
     return redacted
+
+
+
+# ── api_truth re-verification ────────────────────────────────────────────────
+#
+# The entries these confirm were measured on Studio 21.1.0.14. A fact nobody can
+# re-measure decays into folklore the moment Blackmagic ships a build, so each
+# check below re-derives the behaviour and records `drifted` when what it sees
+# stops matching what api_truth claims. The point is not to pass; it is to
+# notice when the answer changes.
+
+_LUT_PAGES = ("media", "edit", "fusion", "fairlight", "deliver", "color")
+
+
+def _lut_digest(path: Path) -> Optional[str]:
+    try:
+        return hashlib.md5(path.read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def _verify_copygrades_replaces_wholesale(recorder, resolve, items, work_dir: Path) -> None:
+    """TimelineItem.CopyGrades: does it still replace, and still leave no version?
+
+    Measured by baking each state to a 33-point LUT and comparing bytes. There is
+    no GetCDL to read back, and GetToolsInNode reports only which tools exist —
+    it returns the same list either way — so the exported LUT is the only handle
+    on what the grade actually became.
+    """
+    if len(items) < 2:
+        recorder.record("api_truth", "CopyGrades_replaces_wholesale", "not_applicable",
+                        details={"reason": "probe timeline has fewer than two items"})
+        return
+
+    src, tgt = items[0], items[1]
+    lut_type = resolve.EXPORT_LUT_33PTCUBE
+    hand = work_dir / "trap_target_handwork.cube"
+    source = work_dir / "trap_source_grade.cube"
+    after = work_dir / "trap_target_after_copy.cube"
+
+    # Every return here is checked. SetCDL and ExportLUT both report refusal as a
+    # bare False, and a probe that grades nothing, exports nothing, and then
+    # compares two identical empty LUTs would conclude "no replacement" with
+    # total confidence. A measurement built on unchecked setup is worse than no
+    # measurement, because it gets written down as a fact.
+    setup: Dict[str, bool] = {}
+    try:
+        setup["target_reset"] = bool(tgt.GetNodeGraph().ResetAllGrades())
+        setup["target_setcdl"] = bool(tgt.SetCDL(
+            {"NodeIndex": "1", "Slope": "0.5 0.5 1.5", "Offset": "0.1 0.1 0.1",
+             "Power": "1.0 1.0 1.0", "Saturation": "0.3"}))
+        versions_before = list(tgt.GetVersionNameList(0) or [])
+        setup["export_handwork"] = bool(tgt.ExportLUT(lut_type, str(hand)))
+
+        setup["source_reset"] = bool(src.GetNodeGraph().ResetAllGrades())
+        setup["source_setcdl"] = bool(src.SetCDL(
+            {"NodeIndex": "1", "Slope": "2.0 1.0 1.0", "Offset": "0.0 0.0 0.0",
+             "Power": "1.0 1.0 1.0", "Saturation": "1.0"}))
+        setup["export_source"] = bool(src.ExportLUT(lut_type, str(source)))
+
+        returned = bool(src.CopyGrades([tgt]))
+        setup["export_after"] = bool(tgt.ExportLUT(lut_type, str(after)))
+        versions_after = list(tgt.GetVersionNameList(0) or [])
+    except Exception as exc:  # noqa: BLE001 - a probe reports, it does not raise
+        recorder.record_exception("api_truth", "CopyGrades_replaces_wholesale", exc)
+        return
+
+    # Only the calls the measurement actually depends on can abort it. The two
+    # resets are best-effort tidying: the stubs type ResetAllGrades as -> bool,
+    # but "nothing to reset" plausibly returns False on an already-clean graph,
+    # and gating on that would abort every run. Their returns are still recorded
+    # rather than dropped.
+    required = ("target_setcdl", "export_handwork",
+                "source_setcdl", "export_source", "export_after")
+    failed_setup = sorted(k for k in required if not setup.get(k))
+    if failed_setup:
+        recorder.record(
+            "api_truth", "CopyGrades_replaces_wholesale", "error",
+            details={"setup": setup, "failed_setup": failed_setup,
+                     "reason": "probe setup did not take, so nothing below would be "
+                               "a measurement of CopyGrades"},
+        )
+        _cleanup_exported_files([{"path": str(f)} for f in (hand, source, after)])
+        return
+
+    d_hand, d_source, d_after = _lut_digest(hand), _lut_digest(source), _lut_digest(after)
+    replaced = d_after is not None and d_after == d_source and d_after != d_hand
+    made_version = versions_after != versions_before
+
+    details = {
+        "setup": setup,
+        "copygrades_returned": returned,
+        "handwork_digest": d_hand,
+        "source_digest": d_source,
+        "target_after_copy_digest": d_after,
+        "target_became_byte_identical_to_source": replaced,
+        "versions_before": versions_before,
+        "versions_after": versions_after,
+        "created_a_recovery_version": made_version,
+        "api_truth_claims": "replaces wholesale, returns True, creates no version",
+    }
+    # api_truth says: replaced and unrecoverable. Anything else is news.
+    if replaced and not made_version:
+        recorder.record("api_truth", "CopyGrades_replaces_wholesale", "supported", details=details)
+    else:
+        details["drifted"] = (
+            "CopyGrades no longer matches its api_truth entry — re-read the entry "
+            "and the destroys_prior_work flag before trusting either."
+        )
+        recorder.record("api_truth", "CopyGrades_replaces_wholesale", "error", details=details)
+
+    _cleanup_exported_files([{"path": str(f)} for f in (hand, source, after)])
+
+
+def _verify_exportlut_page_gate(recorder, server, resolve, items, work_dir: Path) -> None:
+    """TimelineItem.ExportLUT: still Color-page only, still no stale file?"""
+    if not items:
+        recorder.record("api_truth", "ExportLUT_page_gated", "not_applicable",
+                        details={"reason": "no timeline items"})
+        return
+
+    item = items[0]
+    lut_type = resolve.EXPORT_LUT_33PTCUBE
+    by_page = {}
+    written = []
+    try:
+        for page in _LUT_PAGES:
+            server.resolve_control("open_page", {"page": page})
+            out = work_dir / f"trap_lut_{page}.cube"
+            returned = bool(item.ExportLUT(lut_type, str(out)))
+            exists = out.exists()
+            by_page[page] = {"returned": returned, "wrote_file": exists}
+            if exists:
+                written.append({"path": str(out)})
+        server.resolve_control("open_page", {"page": "color"})
+    except Exception as exc:  # noqa: BLE001
+        recorder.record_exception("api_truth", "ExportLUT_page_gated", exc)
+        return
+
+    off_page = [p for p in _LUT_PAGES if p != "color"]
+    gated = (
+        by_page.get("color", {}).get("returned") is True
+        and all(by_page[p]["returned"] is False for p in off_page)
+    )
+    stale = [p for p in off_page if by_page[p]["wrote_file"]]
+
+    details = {"by_page": by_page, "stale_files_written_on_failure": stale,
+               "api_truth_claims": "True only on color; no file written elsewhere"}
+    if gated and not stale:
+        recorder.record("api_truth", "ExportLUT_page_gated", "version_or_page_dependent", details=details)
+    else:
+        details["drifted"] = "ExportLUT page behaviour no longer matches its api_truth entry."
+        recorder.record("api_truth", "ExportLUT_page_gated", "error", details=details)
+
+    _cleanup_exported_files(written)
+
+
+def _verify_duplicatetimeline_moves_pointer(recorder, project, timeline) -> None:
+    """Timeline.DuplicateTimeline: does it still silently steal `current`?"""
+    try:
+        before_id = timeline.GetUniqueId()
+        dup = timeline.DuplicateTimeline("Trap Probe Duplicate")
+        if dup is None:
+            recorder.record("api_truth", "DuplicateTimeline_moves_current", "error",
+                            details={"reason": "DuplicateTimeline returned None"})
+            return
+        current = project.GetCurrentTimeline()
+        moved = bool(current) and current.GetUniqueId() != before_id
+        restored, _ = set_current_timeline(project, timeline)
+    except Exception as exc:  # noqa: BLE001
+        recorder.record_exception("api_truth", "DuplicateTimeline_moves_current", exc)
+        return
+
+    details = {
+        "current_moved_to_duplicate": moved,
+        "setcurrenttimeline_restored_it": bool(restored),
+        "api_truth_claims": "the pointer moves to the duplicate; SetCurrentTimeline restores it",
+    }
+    if moved and restored:
+        recorder.record("api_truth", "DuplicateTimeline_moves_current", "supported", details=details)
+    else:
+        details["drifted"] = (
+            "DuplicateTimeline pointer behaviour changed — timeline_versioning "
+            "compensates for it, so check that code too."
+        )
+        recorder.record("api_truth", "DuplicateTimeline_moves_current", "error", details=details)
 
 
 def run_probe(server, output_dir: Path, keep_open: bool = False) -> Dict[str, Any]:
@@ -414,6 +601,12 @@ def run_probe(server, output_dir: Path, keep_open: bool = False) -> Dict[str, An
             "grade_boundary_report",
             server.timeline_item_color("grade_boundary_report", {**scope, "include_timeline_graph": True}),
         )
+
+        # Re-measure the api_truth entries this probe is the home for. Runs last:
+        # it deliberately overwrites grades on the probe clips.
+        _verify_copygrades_replaces_wholesale(recorder, resolve, items, work_dir)
+        _verify_exportlut_page_gate(recorder, server, resolve, items, work_dir)
+        _verify_duplicatetimeline_moves_pointer(recorder, project, timeline)
 
         if keep_open:
             server.project_manager("save")
