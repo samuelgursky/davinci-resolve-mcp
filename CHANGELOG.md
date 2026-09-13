@@ -2,6 +2,39 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v3.2.1 — three correctness fixes to the LUT tool
+
+Contributed by @Dev-next-gen (#225, #226, #227), each found by reading the v3.2.0
+`lut` tool rather than by hitting it in use.
+
+### Fixed
+
+- **`install` reported `overwritten: true` on a fresh write.** The flag was
+  `bool(overwrite and payload is not None)`, and `payload` can never be `None`
+  where that line runs, so the field handed the caller's own `overwrite`
+  argument back instead of an observation. An install passing `overwrite=true`
+  for idempotence, landing on an empty `MCP/`, was reported as having replaced
+  existing work. `execution_lifecycle` rates `lut install` MEDIUM precisely
+  because it "can replace with overwrite=true", so this flag is what a caller
+  and the execution trace read to learn whether an install destroyed anything.
+  It is now the `os.path.exists` observation already taken one line above — the
+  measured pre-state, not the permission. (#225)
+- **`install(source_path=...)` could not copy a binary LUT.** The copy went
+  through a UTF-8 text round-trip, so the two binary extensions this server
+  advertises — `.dat` and `.olut` — raised `UnicodeDecodeError` before anything
+  was written, surfacing as `LUT_ERROR`. So did an ordinary `.cube` whose vendor
+  wrote its `TITLE` line in latin-1. The file-copy branch is now byte-exact; the
+  text branch (`source=`) is unchanged. (#226)
+- **`list` marked siblings of the writable subdir as writable.** The `writable`
+  flag used `realpath(current).startswith(writable_root)`, a string prefix with
+  no separator, so `MCP_old/` left by a hand backup or a vendor pack unpacking
+  as `MCPresets/` cleared it. The listing then contradicted the only tool that
+  consumes the flag: `remove` resolves names inside `MCP/` and refused the very
+  `set_lut_path` the listing had just handed out. It now compares by path
+  segment with `commonpath`, which is what `_is_relative_to` and `resolve_writable`
+  already use elsewhere in this repo. Nothing that worked before stops working —
+  the flag only flips for paths `remove` was already refusing. (#227)
+
 ## What's New in v3.2.0 — LUT files: find them, install them, remove them, gated
 
 Contributed by @legionsound (#223), live-validated on Studio 21.1.0.14.
