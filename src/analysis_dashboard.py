@@ -1658,7 +1658,7 @@ HTML = r"""<!doctype html>
       aspect-ratio: 16 / 9;
       background: var(--lab-workspace-letterbox);
       border-radius: var(--radius-sm);
-      object-fit: cover;
+      object-fit: contain;
       display: block;
     }
     .review-thumb.placeholder {
@@ -4264,6 +4264,11 @@ HTML = r"""<!doctype html>
           </label>
           <select id="reviewBinFilter" aria-label="Filter by bin">
             <option value="">All bins</option>
+          </select>
+          <select id="sourceSelectionFilter" aria-label="Filter by source selection">
+            <option value="all">All selections</option>
+            <option value="non-excluded">Non-excluded</option>
+            <option value="excluded">Excluded</option>
           </select>
           <div class="review-view-toggle" role="tablist" aria-label="View mode">
             <button id="reviewViewGridBtn" class="active" data-view-mode="grid" type="button">Grid</button>
@@ -8822,11 +8827,159 @@ HTML = r"""<!doctype html>
         sorted.map(b => `<option value="${escapeHtml(b)}" ${b === current ? 'selected' : ''}>${escapeHtml(b)}</option>`).join('');
     }
 
+    let sourceSelectionFilter = 'all';
+    function matchesSourceSelection(clip) {
+      const selection = clip.user_selection || 'Unreviewed';
+      return sourceSelectionFilter === 'all'
+        || (sourceSelectionFilter === 'excluded' ? selection === 'Exclude' : selection !== 'Exclude');
+    }
+
+    // Source preview reviews the current bin/filter order using persisted corrections.
+    const sourcePreview = document.createElement('dialog');
+    sourcePreview.setAttribute('aria-label', 'Source preview');
+    sourcePreview.style.cssText = 'max-width:96vw;max-height:96vh;background:var(--bg-elevated-1);color:var(--text-primary)';
+    sourcePreview.innerHTML = `<button type="button" data-preview-close>Close</button>
+      <h3 data-preview-title></h3><div data-preview-controls>
+      <button type="button" data-preview-step="-1">← Previous</button>
+      <button type="button" data-preview-selection="Include">Include & next (I)</button>
+      <button type="button" data-preview-selection="Exclude">Exclude & next (X)</button>
+      <button type="button" data-preview-selection="Unreviewed">Unreviewed (U)</button>
+      <button type="button" data-preview-step="1">Next →</button>
+      <span>Rating:</span>${[0,1,2,3,4,5].map(n => `<button type="button" data-preview-rating="${n}" aria-label="${n ? n + ' stars' : 'Clear stars'}">${n ? '★'.repeat(n) : 'Clear'}</button>`).join('')}
+      </div><p data-preview-status role="status"></p>
+      <img data-preview-image alt="" style="display:block;max-width:90vw;max-height:70vh;object-fit:contain">`;
+    document.body.append(sourcePreview);
+    const previewImage = sourcePreview.querySelector('[data-preview-image]');
+    const previewStatus = sourcePreview.querySelector('[data-preview-status]');
+    let previewQueue = [], previewIndex = -1, previewBusy = false, previewReady = false, previewGeneration = 0;
+
+    function lockSourcePreview(busy) {
+      previewBusy = busy;
+      sourcePreview.querySelectorAll('[data-preview-controls] button').forEach(button => {
+        button.disabled = busy || (!button.dataset.previewStep && !previewReady);
+      });
+    }
+
+    function displaySourceReview(data, clip) {
+      const selection = readCorrectionValue(data.corrections, 'clip', clip.clip_id, 'user.selection') || 'Unreviewed';
+      const rating = readCorrectionValue(data.corrections, 'clip', clip.clip_id, 'user.rating') || 0;
+      clip.user_selection = selection;
+      sourcePreview.querySelectorAll('[data-preview-rating]').forEach(button => {
+        button.setAttribute('aria-pressed', String(Number(button.dataset.previewRating) === rating));
+      });
+      sourcePreview.querySelectorAll('[data-preview-selection]').forEach(button => {
+        button.setAttribute('aria-pressed', String(button.dataset.previewSelection === selection));
+      });
+      previewStatus.textContent = `${selection} · ${rating} stars — saved. ←/→ navigate; I include; X exclude; U clear selection.`;
+    }
+
+    async function showSourcePreview(index) {
+      if (previewBusy || index < 0 || index >= previewQueue.length) return;
+      previewIndex = index;
+      previewReady = false;
+      const clip = previewQueue[index], generation = ++previewGeneration;
+      lockSourcePreview(true);
+      sourcePreview.querySelector('[data-preview-title]').textContent = `${index + 1} / ${previewQueue.length} — ${clip.clip_name || clip.clip_id}`;
+      previewStatus.textContent = 'Loading preview and saved review…';
+      previewImage.style.visibility = 'hidden';
+      previewImage.alt = clip.clip_name || clip.clip_id;
+      try {
+        if (!clip.representative_frame_index) throw new Error('No analyzed frame available. Use Previous/Next to continue.');
+        const loaded = new Promise((resolve, reject) => {
+          previewImage.onload = resolve;
+          previewImage.onerror = () => reject(new Error('Preview unavailable. Use Previous/Next to continue.'));
+        });
+        previewImage.src = `/api/clips/${encodeURIComponent(clip.clip_id)}/frames/${clip.representative_frame_index}`;
+        const [data] = await Promise.all([api(`/api/clips/${encodeURIComponent(clip.clip_id)}`, {cache:'no-store'}), loaded]);
+        if (generation !== previewGeneration) return;
+        if (!data.success) throw new Error(data.error || 'Could not load saved review');
+        displaySourceReview(data, clip);
+        previewImage.style.visibility = 'visible';
+        previewReady = true;
+      } catch (error) {
+        if (generation === previewGeneration) previewStatus.textContent = error.message;
+      } finally {
+        if (generation === previewGeneration) lockSourcePreview(false);
+      }
+    }
+
+    async function saveSourceReview(field, value) {
+      if (previewBusy || !previewReady || previewIndex < 0) return;
+      const clip = previewQueue[previewIndex], generation = previewGeneration;
+      lockSourcePreview(true);
+      previewStatus.textContent = 'Saving…';
+      try {
+        const result = await api(`/api/clips/${encodeURIComponent(clip.clip_id)}/corrections`, {
+          method:'POST', body:JSON.stringify({entity_type:'clip', entity_uuid:clip.clip_id,
+            field_path:field, new_value:value, author:'control_panel', reason:'source preview review'})});
+        if (!result.success) throw new Error(result.error || 'Save failed');
+        const data = await api(`/api/clips/${encodeURIComponent(clip.clip_id)}`, {cache:'no-store'});
+        if (!data.success || readCorrectionValue(data.corrections, 'clip', clip.clip_id, field) !== value) {
+          throw new Error('Saved review could not be verified; retry before continuing.');
+        }
+        clip.user_selection = readCorrectionValue(data.corrections, 'clip', clip.clip_id, 'user.selection') || 'Unreviewed';
+        const listedClip = state.review.clipList?.clips?.find(item => item.clip_id === clip.clip_id);
+        if (listedClip) listedClip.user_selection = clip.user_selection;
+        renderReviewBin();
+        if (generation !== previewGeneration) return;
+        displaySourceReview(data, clip);
+        lockSourcePreview(false);
+        if (field === 'user.selection') {
+          if (!matchesSourceSelection(clip)) {
+            previewQueue.splice(previewIndex, 1);
+            if (previewQueue.length) await showSourcePreview(Math.min(previewIndex, previewQueue.length - 1));
+            else sourcePreview.close();
+          } else if (value !== 'Unreviewed' && previewIndex + 1 < previewQueue.length) {
+            await showSourcePreview(previewIndex + 1);
+          }
+        }
+      } catch (error) {
+        if (generation === previewGeneration) previewStatus.textContent = 'Save failed: ' + error.message;
+      } finally {
+        if (generation === previewGeneration) lockSourcePreview(false);
+      }
+    }
+
+    sourcePreview.querySelector('[data-preview-close]').onclick = () => sourcePreview.close();
+    sourcePreview.addEventListener('close', () => {
+      ++previewGeneration;
+      previewReady = false;
+      lockSourcePreview(false);
+      renderReviewBin();
+    });
+    sourcePreview.addEventListener('click', event => {
+      const button = event.target.closest('button');
+      if (!button) return;
+      if (button.dataset.previewStep) showSourcePreview(previewIndex + Number(button.dataset.previewStep));
+      if (button.dataset.previewSelection) saveSourceReview('user.selection', button.dataset.previewSelection);
+      if (button.dataset.previewRating != null) saveSourceReview('user.rating', Number(button.dataset.previewRating));
+    });
+    sourcePreview.addEventListener('keydown', event => {
+      if (event.target.matches('input,textarea,select') || event.ctrlKey || event.metaKey || event.altKey) return;
+      const actions = {
+        ArrowLeft: () => showSourcePreview(previewIndex - 1),
+        ArrowRight: () => showSourcePreview(previewIndex + 1),
+        i: () => saveSourceReview('user.selection', 'Include'),
+        x: () => saveSourceReview('user.selection', 'Exclude'),
+        u: () => saveSourceReview('user.selection', 'Unreviewed'),
+      };
+      const action = actions[event.key] || actions[event.key.toLowerCase()];
+      if (action) { event.preventDefault(); event.stopPropagation(); if (!event.repeat) action(); }
+    });
+    $('reviewBinGrid').addEventListener('click', event => {
+      const button = event.target.closest('[data-source-preview]');
+      if (!button) return;
+      event.stopImmediatePropagation();
+      previewQueue = filteredClips().slice();
+      sourcePreview.showModal();
+      showSourcePreview(previewQueue.findIndex(clip => clip.clip_id === button.dataset.sourcePreview));
+    }, true);
+
     function filteredClips() {
       const data = state.review.clipList;
       if (!data || !data.clips) return [];
       const binFilter = state.review.binFilter || '';
-      return data.clips.filter(c => !binFilter || c.bin_path === binFilter);
+      return data.clips.filter(c => (!binFilter || c.bin_path === binFilter) && matchesSourceSelection(c));
     }
 
     function renderReviewBin() {
@@ -8850,8 +9003,8 @@ HTML = r"""<!doctype html>
       }
       const clips = filteredClips();
       if (!clips.length) {
-        if (state.review.binFilter) {
-          if (summary) summary.textContent = `No analyzed clips in bin "${state.review.binFilter}".`;
+        if (state.review.binFilter || sourceSelectionFilter !== 'all') {
+          if (summary) summary.textContent = 'No analyzed clips match these filters.';
           if (grid) grid.innerHTML = '';
         } else {
           if (summary) summary.textContent = 'Nothing analyzed yet.';
@@ -8868,8 +9021,8 @@ HTML = r"""<!doctype html>
       Array.from(selected).forEach(id => { if (!visibleIds.has(id)) selected.delete(id); });
       if (summary) {
         const total = data.clips.length;
-        const base = state.review.binFilter
-          ? `${clips.length} of ${total} analyzed clip${total === 1 ? '' : 's'} · bin: ${state.review.binFilter}`
+        const base = state.review.binFilter || sourceSelectionFilter !== 'all'
+          ? `${clips.length} of ${total} analyzed clip${total === 1 ? '' : 's'}${state.review.binFilter ? ' · bin: ' + state.review.binFilter : ''}`
           : `${total} analyzed clip${total === 1 ? '' : 's'} in this project\u2019s analysis root.`;
         if (selected.size > 0) {
           summary.innerHTML = `<span>${escapeHtml(base)}</span>
@@ -8901,8 +9054,9 @@ HTML = r"""<!doctype html>
               <span class="select-box">${isSelected ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>' : ''}</span>
             </button>
             ${thumb}
+            <button type="button" class="secondary" data-source-preview="${escapeHtml(clip.clip_id || '')}">Enlarge / review</button>
             <div class="review-clip-card-name">${escapeHtml(clip.clip_name || '')}</div>
-            <div class="review-clip-card-meta"><span>${dur}</span><span>${shots}</span>${primaryUse}${chip}</div>
+            <div class="review-clip-card-meta"><span>${dur}</span><span>${shots}</span>${primaryUse}${chip}<span class="review-chip">${escapeHtml(clip.user_selection || 'Unreviewed')}</span></div>
             ${clip.clip_summary_oneliner ? `<div class="review-clip-card-oneliner">${escapeHtml(clip.clip_summary_oneliner)}</div>` : ''}
           </div>`;
         }).join('');
@@ -11481,6 +11635,7 @@ HTML = r"""<!doctype html>
       openClipDetail(card.dataset.clipId).catch(alertError);
     });
     $('reviewBinGrid').addEventListener('keydown', event => {
+      if (event.target.closest('[data-source-preview]')) return;
       if (event.key !== 'Enter' && event.key !== ' ') return;
       const card = event.target.closest('.review-clip-card');
       if (card && card.dataset.clipId) {
@@ -11885,6 +12040,10 @@ HTML = r"""<!doctype html>
     $('reviewSemanticCheckbox')?.addEventListener('change', () => {
       const q = $('reviewSearchInput').value.trim();
       if (q) runReviewSearch(q).catch(alertError);
+    });
+    $('sourceSelectionFilter').addEventListener('change', event => {
+      sourceSelectionFilter = event.target.value;
+      renderReviewBin();
     });
     // Bin dropdown.
     $('reviewBinFilter').addEventListener('change', event => {
@@ -13433,7 +13592,10 @@ def _v2_clip_summary_card(clip_slug: str, clip_dir: str, report: Dict[str, Any])
     if not isinstance(oneliner, str) or not oneliner:
         oneliner = summary[:140] + ("…" if len(summary) > 140 else "")
     rep_index = _v2_pick_representative_frame_index(report)
+    corrections = _v2_read_corrections_for_dir(clip_dir).get("current", {})
+    selection = corrections.get(f"clip:{clip_block.get('clip_id')}:user.selection", {}).get("value", "Unreviewed")
     return {
+        "user_selection": selection,
         "clip_id": clip_block.get("clip_id"),
         "clip_slug": clip_slug,
         "clip_dir": clip_dir,
@@ -13938,6 +14100,12 @@ def apply_clip_correction(project_root: str, clip_id: str, body: Dict[str, Any])
     clip_dir = _v2_find_clip_dir(project_root, clip_id)
     if not clip_dir:
         return {"success": False, "error": f"No analyzed clip found for id={clip_id}"}
+    field_path = body.get("field_path") or body.get("fieldPath")
+    value = body.get("new_value") if "new_value" in body else body.get("newValue", body.get("value"))
+    if field_path == "user.selection" and value not in ("Include", "Exclude", "Unreviewed"):
+        return {"success": False, "error": "Selection must be Include, Exclude, or Unreviewed"}
+    if field_path == "user.rating" and (type(value) is not int or not 0 <= value <= 5):
+        return {"success": False, "error": "Rating must be an integer from 0 to 5"}
     from src.server import _v2_update_field
     entity_type = body.get("entity_type") or body.get("entityType") or "shot"
     params: Dict[str, Any] = dict(body)

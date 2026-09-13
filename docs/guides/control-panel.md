@@ -101,6 +101,19 @@ detection has run (`detect_entities` + a one-frame-per-cluster confirmation
 in chat), a `Recurring across this bin` card lists the labeled people,
 places, and objects with their shot counts.
 
+Use **Enlarge / review** on a card to inspect its complete analyzed frame without
+cropping. Previous/Next (or arrow keys) follow the visible bin order. **Include**
+(`I`) and **Exclude** (`X`) save the selection and advance after readback;
+**Unreviewed** (`U`) clears the decision without advancing. Ratings save independently
+and do not clear exclusions. The selection filter can show all, non-excluded,
+or excluded clips; it applies to the bin browser, not search results.
+
+Selections are stored as `user.selection` corrections alongside existing notes
+and ratings. They express review preferences, not automatic timeline edits.
+Previews use existing analyzed frames, so their resolution depends on the analysis;
+this does not generate proxies or stream original media. Existing clip detail
+controls remain available for notes and metadata edits.
+
 ### Clip detail
 
 ![Clip detail with shot strip](../images/control-panel/03-clip-detail.png)
