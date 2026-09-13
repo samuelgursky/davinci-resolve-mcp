@@ -1,6 +1,8 @@
 """Resolve control resources, inspection helpers, and app-level tools."""
 
 from src.granular.common import *  # noqa: F401,F403
+import os
+from src.utils import typed_api_search
 
 resolve = ResolveProxy()
 
@@ -719,3 +721,48 @@ def export_user_preferences_preset(preset_name: str, export_path: str) -> Dict[s
         return missing
     result = resolve.ExportUserPreferencesPreset(preset_name, export_path)
     return {"success": bool(result), "preset_name": preset_name, "export_path": export_path}
+
+
+_PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+@mcp.tool(annotations=READ_ONLY_TOOL)
+def search_resolve_api(pattern: str, kind: str = "all", limit: int = 50) -> Dict[str, Any]:
+    """Search the shipped Resolve 21.1 typed API stub. Needs no connection.
+
+    `api_truth` answers what is broken; this answers what exists. Each hit also
+    reports whether THIS server references the method and in which files, so a
+    search doubles as a parity check.
+
+    Args:
+        pattern: Case-insensitive regular expression, e.g. "marker" or "(Get|Set)Setting".
+        kind: 'all' (default), 'methods', or 'options' for TypedDicts only.
+        limit: Maximum results per section (capped at 200).
+    """
+    try:
+        return typed_api_search.search(_PROJECT_DIR, pattern, kind=kind, limit=limit)
+    except typed_api_search.TypedApiError as exc:
+        return {"error": str(exc)}
+
+
+@mcp.tool(annotations=READ_ONLY_TOOL)
+def describe_resolve_api(symbol: str) -> Dict[str, Any]:
+    """Full typed detail for one Resolve API symbol. Needs no connection.
+
+    Args:
+        symbol: 'Class.Method' (e.g. "Project.GetName"), a bare method name when
+            it is unambiguous, or a TypedDict name (e.g. "RenderSettings").
+    """
+    try:
+        return typed_api_search.describe(_PROJECT_DIR, symbol)
+    except typed_api_search.TypedApiError as exc:
+        return {"error": str(exc)}
+
+
+@mcp.tool(annotations=READ_ONLY_TOOL)
+def get_resolve_api_surface() -> Dict[str, Any]:
+    """Counts and object list for the shipped typed stub. Needs no connection."""
+    try:
+        return typed_api_search.summary(_PROJECT_DIR)
+    except typed_api_search.TypedApiError as exc:
+        return {"error": str(exc)}
