@@ -2,6 +2,90 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.1.3 — every live harness could no longer start, and a probe that could never pass
+
+Reported and measured by [@legionsound](https://github.com/legionsound) in
+[#207](https://github.com/samuelgursky/davinci-resolve-mcp/issues/207) while
+running `color_grade_live_probe` on Studio 21.1.0.14. No server behaviour
+changes; the harnesses that verify Resolve's behaviour do.
+
+### Fixed
+
+- **Every hand-run live harness failed at import, on every machine**, with
+  `ImportError: cannot import name 'Context' from 'mcp.server.fastmcp'` at
+  `src/server.py:240`. Seventeen harnesses each carried a private copy of a stub
+  installer, and the copies were wrong in two independent ways:
+
+  - They called `sys.modules.setdefault("mcp", stub)` *before* anything had
+    imported `mcp`, so the stand-ins displaced the **real, working SDK** on
+    machines that had it. The stub set was never a fallback in practice; it was
+    always what ran.
+  - `src/server.py` grew `Context`, `Image` and `mcp.types`; fifteen of the
+    seventeen copies still offered only `FastMCP`. Each harness died at whichever
+    import its own copy had never been taught about.
+
+  There is now one installer, `src/utils/mcp_import_stubs.py`, which **imports
+  the real package first and leaves it alone**, and only stands in when the SDK
+  is genuinely absent. All seventeen call it; 648 lines of divergent copies are
+  gone. `tests/test_mcp_import_stubs.py` reads the SDK imports back out of
+  `src/server.py` and fails when the stub set falls behind, or when a harness
+  hand-rolls its own again — both regressions were re-introduced deliberately to
+  confirm the guard catches them.
+
+- **`safe_copy_grade` and `safe_apply_drx` could never pass in the probe.** Both
+  are rated destructive, so the first call returns `CONFIRMATION_REQUIRED` and a
+  one-time token *instead of acting*. The probe predates confirm tokens, called
+  once, and recorded the prompt as the action's outcome — two permanent errors in
+  a report whose purpose is to notice change. It now answers the gate and records
+  what the action actually did, repeating the params the token's fingerprint is
+  bound to.
+
+### Changed
+
+- **`TimelineItem.ApplyGradeFromStill` is now re-measured rather than trusted.**
+  It was the one #217 entry the probe never exercised — a claim that a method
+  does *not* exist, which nothing would notice Blackmagic reversing. The check
+  uses `dir()` membership and sanity-checks the enumeration against a method
+  known to exist before treating an absence as evidence.
+
+- **Corrected an api_truth entry that implied `hasattr` is safe on Resolve's own
+  objects.** It is not. Measured here on Studio 19.1.3.7:
+  `hasattr(timeline_item, 'TotallyMadeUpName')` returns `True`, as does `hasattr`
+  for `ApplyGradeFromStill`, while `dir()` on the same object lists 84 real names
+  and neither of those. Resolve fabricates a callable for **any** attribute name
+  on **every** object, not only Fusion Tools; what is special about Fusion Tools
+  is that `dir()` is unreliable there too, leaving no usable probe at all. A
+  capability check written on `hasattr` reports every method as present.
+
+### Reconfirmed
+
+Three of the four trap entries from
+[#217](https://github.com/samuelgursky/davinci-resolve-mcp/pull/217) were
+independently re-measured on Studio 21.1.0.14 by a second contributor, and now
+carry it. This matters most for `TimelineItem.CopyGrades`, which is the entry
+that makes a mapped action refuse without `acknowledge_trap`:
+
+- **`TimelineItem.CopyGrades`** — returned `True`; the target's exported grade
+  became byte-identical to the source's; `GetVersionNameList` read
+  `['Version 1']` before and after, so there is still no recovery version.
+- **`TimelineItem.ExportLUT`** — wrote a file only from `color`; `deliver`,
+  `edit`, `fairlight`, `fusion` and `media` all returned `False` and left no
+  stale files.
+- **`Timeline.DuplicateTimeline`** — the current-timeline pointer moved to the
+  duplicate, and `SetCurrentTimeline` put it back.
+
+`TimelineItem.ApplyGradeFromStill` stays **reported**, not reconfirmed — that
+probe run did not exercise it. The check added above closes that gap for the
+next run.
+
+### Validation
+
+Full suite green: 3,616 passed, 1 skipped, 1,257 subtests. The count rises by
+exactly the three new guard tests. No live Resolve run beyond the read-only
+attribute measurement quoted above, taken on Studio 19.1.3.7 — the harness
+changes are import-path and gate-protocol fixes, verified against the real
+token machinery offline.
+
 ## What's New in v4.1.2 — the installer's healthy-branch test stops depending on a live Resolve
 
 Test-only. No behaviour change to the server or the installer.

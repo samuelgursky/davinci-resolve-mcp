@@ -109,7 +109,6 @@ import subprocess
 import sys
 import tempfile
 import time
-import types
 from pathlib import Path
 
 # A real change must move PSNR well below this; an ignored write reads as inf.
@@ -117,69 +116,17 @@ PSNR_APPLIED_MAX_DB = 35.0
 
 
 def _install_mcp_stubs() -> None:
-    """Allow importing src.server when MCP deps are absent (harness idiom)."""
+    """Stand in for the MCP SDK only when it is genuinely absent.
 
-    class FastMCP:
-        def __init__(self, *args, **kwargs):
-            pass
+    Delegates to the shared installer so this harness cannot drift behind the
+    imports `src.server` actually makes; see `src/utils/mcp_import_stubs.py`.
+    """
+    repo_root = str(Path(__file__).resolve().parents[1])
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
+    from src.utils.mcp_import_stubs import install_mcp_stubs
 
-        def tool(self, *args, **kwargs):
-            def decorate(func):
-                return func
-
-            return decorate
-
-        def resource(self, *args, **kwargs):
-            def decorate(func):
-                return func
-
-            return decorate
-
-        def prompt(self, *args, **kwargs):
-            def decorate(func):
-                return func
-
-            return decorate
-
-    def stdio_server(*args, **kwargs):
-        raise RuntimeError("stdio_server is not used by this live harness")
-
-    anyio = types.ModuleType("anyio")
-    anyio.run = lambda func: func()
-
-    mcp = types.ModuleType("mcp")
-    server = types.ModuleType("mcp.server")
-    fastmcp = types.ModuleType("mcp.server.fastmcp")
-    stdio = types.ModuleType("mcp.server.stdio")
-
-    class Context:
-        pass
-
-    class Image:
-        def __init__(self, *args, **kwargs):
-            pass
-
-    class ToolAnnotations:
-        def __init__(self, *args, **kwargs):
-            pass
-
-    fastmcp.FastMCP = FastMCP
-    fastmcp.Context = Context
-    fastmcp.Image = Image
-    stdio.stdio_server = stdio_server
-
-    mcp_types = types.ModuleType("mcp.types")
-    mcp_types.ToolAnnotations = ToolAnnotations
-    mcp_types.ImageContent = object
-    mcp_types.TextContent = object
-    mcp.types = mcp_types
-
-    sys.modules.setdefault("anyio", anyio)
-    sys.modules.setdefault("mcp", mcp)
-    sys.modules.setdefault("mcp.server", server)
-    sys.modules.setdefault("mcp.server.fastmcp", fastmcp)
-    sys.modules.setdefault("mcp.server.stdio", stdio)
-    sys.modules.setdefault("mcp.types", mcp_types)
+    install_mcp_stubs(stdio_note="stdio_server is not used by this live harness")
 
 
 

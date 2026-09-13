@@ -16,32 +16,11 @@ import time
 PROJECT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT)
 
-# Stub MCP imports so we can use src.server functions without spinning up the
-# full MCP server.
-import types
+# Stand in for the MCP SDK only when it is genuinely absent, so this smoke test
+# can reach src.server functions without spinning up the full MCP server.
+from src.utils.mcp_import_stubs import install_mcp_stubs  # noqa: E402
 
-class _FastMCP:
-    def __init__(self, *a, **k): pass
-    def tool(self, *a, **k):
-        def deco(fn): return fn
-        return deco
-    def resource(self, *a, **k):
-        def deco(fn): return fn
-        return deco
-
-mcp_mod = types.ModuleType("mcp")
-sub = types.ModuleType("mcp.server")
-fast = types.ModuleType("mcp.server.fastmcp")
-stdio = types.ModuleType("mcp.server.stdio")
-fast.FastMCP = _FastMCP
-stdio.stdio_server = lambda *a, **k: None
-anyio = types.ModuleType("anyio")
-anyio.run = lambda f: f()
-sys.modules.setdefault("anyio", anyio)
-sys.modules.setdefault("mcp", mcp_mod)
-sys.modules.setdefault("mcp.server", sub)
-sys.modules.setdefault("mcp.server.fastmcp", fast)
-sys.modules.setdefault("mcp.server.stdio", stdio)
+install_mcp_stubs(stdio_note="stdio_server is not used by this live harness")
 
 from src.utils.platform import get_resolve_paths  # noqa: E402
 

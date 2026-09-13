@@ -422,11 +422,23 @@ API_TRUTH: List[Dict[str, Any]] = [
                    "evidence of absence that exists — which makes an omitted "
                    "name unrecoverable by probing. Any capability detection "
                    "built on dir()/hasattr will therefore report a real Fusion "
-                   "method as missing. Resolve's own API objects do not have "
-                   "this problem: Timeline (60), TimelineItem (88) and "
-                   "Composition (92) all enumerate correctly.",
-        "recommended": "Do not treat dir()/hasattr as authoritative for Fusion "
-                       "Tool objects. Keep a curated set of documented Fusion "
+                   "method as missing. Resolve's own API objects enumerate "
+                   "correctly — Timeline (60), TimelineItem (88) and "
+                   "Composition (92) — so the INCOMPLETE ENUMERATION is Fusion's "
+                   "alone. The fabrication is not: measured on Studio 19.1.3.7, "
+                   "`hasattr(timeline_item, \'TotallyMadeUpName\')` returns True, "
+                   "and so does hasattr for a method that genuinely does not "
+                   "exist (ApplyGradeFromStill), while dir() on the same object "
+                   "lists 84 real names and neither of those. So hasattr/getattr "
+                   "is worthless for absence on EVERY Resolve object, Fusion or "
+                   "not; what is special about Fusion Tools is that dir() is "
+                   "wrong there too, leaving no reliable probe at all.",
+        "recommended": "Never use hasattr/getattr to test whether ANY Resolve "
+                       "object has a method — it always says yes. Use dir() "
+                       "membership, and sanity-check the enumeration with a "
+                       "method you know exists before trusting an absence. For "
+                       "Fusion Tool objects not even dir() is authoritative: "
+                       "keep a curated set of documented Fusion "
                        "methods that the enumeration omits, and identify a "
                        "Fusion object positively (ConnectInput / FindMainInput "
                        "/ GetControlPageNames on a Tool, AddTool / FindTool / "
@@ -3296,6 +3308,14 @@ API_TRUTH: List[Dict[str, Any]] = [
         "tags": ["destructive", "unrecoverable", "grade", "no-version"],
         "destroys_prior_work": True,
         "verified_on": "DaVinci Resolve Studio 21.1.0.14",
+        "reconfirmed": "2026-09-13: independently re-measured on 21.1.0.14 by a "
+                       "second contributor running color_grade_live_probe. "
+                       "CopyGrades returned True; the target's exported grade "
+                       "became byte-identical to the source's (same digest on "
+                       "both); GetVersionNameList read ['Version 1'] before and "
+                       "after, so there is still no recovery version. This is the "
+                       "entry that makes acknowledge_trap refuse, so it is the one "
+                       "that most needed a second pair of hands.",
     },
     {
         "symbol": "TimelineItem.ApplyGradeFromStill",
@@ -3326,6 +3346,11 @@ API_TRUTH: List[Dict[str, Any]] = [
         "tags": ["page-gated", "silent-failure", "lut"],
         "submit": "bug",
         "verified_on": "DaVinci Resolve Studio 21.1.0.14",
+        "reconfirmed": "2026-09-13: independently re-measured on 21.1.0.14 by a "
+                       "second contributor. Returned True and wrote a file only "
+                       "from color; deliver, edit, fairlight, fusion and media all "
+                       "returned False and wrote nothing, with no stale files left "
+                       "behind on the failing pages.",
     },
     {
         "symbol": "Timeline.DuplicateTimeline",
@@ -3344,6 +3369,9 @@ API_TRUTH: List[Dict[str, Any]] = [
                        "already does this and fails loudly if the restore fails.",
         "tags": ["side-effect", "silent-failure", "timeline"],
         "verified_on": "DaVinci Resolve Studio 21.1.0.14",
+        "reconfirmed": "2026-09-13: independently re-measured on 21.1.0.14 by a "
+                       "second contributor. The current-timeline pointer moved to "
+                       "the duplicate, and SetCurrentTimeline put it back.",
     },
 
 ]

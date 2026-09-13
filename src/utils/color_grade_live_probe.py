@@ -61,6 +61,35 @@ def _record_tool_result(
     recorder.record(category, name, expected_status or "supported", evidence=result)
 
 
+def _call_confirmed(tool, action: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    """Call a destructive action, answering the confirmation gate if it fires.
+
+    Actions rated destructive answer the first call with
+    `status="confirmation_required"` and a one-time token instead of acting. This
+    probe is an operator-run harness whose whole purpose is to perform these
+    mutations on a disposable project, so it answers the prompt rather than
+    recording the prompt as the action's outcome — which is what it used to do,
+    leaving `safe_copy_grade` and `safe_apply_drx` permanently unpassable.
+
+    The token is minted against a fingerprint of (action, params) with
+    `confirm_token` stripped, so the second call must repeat the same params.
+    """
+    result = tool(action, params)
+    if not isinstance(result, dict):
+        return result
+    token = result.get("confirm_token")
+    if result.get("status") != "confirmation_required" or not token:
+        return result
+
+    confirmed = tool(action, {**params, "confirm_token": token})
+    if isinstance(confirmed, dict):
+        confirmed["confirmation_gate"] = {
+            "fired": True,
+            "preview": result.get("preview"),
+        }
+    return confirmed
+
+
 def _run_ffmpeg(args: list[str]) -> None:
     subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", *args], check=True)
 
@@ -328,6 +357,62 @@ def _verify_duplicatetimeline_moves_pointer(recorder, project, timeline) -> None
         recorder.record("api_truth", "DuplicateTimeline_moves_current", "error", details=details)
 
 
+def _verify_applygradefromstill_absent(recorder, items) -> None:
+    """TimelineItem.ApplyGradeFromStill: is it still absent?
+
+    The entry for this one is a claim that a method does NOT exist, and a probe
+    that only re-measures behaviours leaves it as folklore — nothing notices the
+    day Blackmagic ships it. An absence is cheap to re-measure, so it is checked
+    here rather than trusted.
+
+    Measured with `dir()`, never `hasattr`. Resolve fabricates a callable for any
+    attribute name you ask for, on its own API objects and not just Fusion ones:
+    on Studio 19.1.3.7 `hasattr(item, "TotallyMadeUpName")` is True. A hasattr
+    check here would report this method "restored" on every run, forever. `dir()`
+    on a TimelineItem enumerates honestly (84 real names on that build), so it is
+    the only usable evidence of absence.
+    """
+    if not items:
+        recorder.record("api_truth", "ApplyGradeFromStill_absent", "not_applicable",
+                        details={"reason": "probe timeline has no items"})
+        return
+
+    item = items[0]
+    try:
+        names = dir(item)
+        present = "ApplyGradeFromStill" in names
+        control = "CopyGrades" in names
+    except Exception as exc:  # noqa: BLE001
+        recorder.record_exception("api_truth", "ApplyGradeFromStill_absent", exc)
+        return
+
+    details = {
+        "present_on_timelineitem": present,
+        "enumerated_names": len(names),
+        "control_copygrades_enumerated": control,
+        "measured_with": "dir() — hasattr fabricates callables on Resolve objects",
+        "api_truth_claims": "TimelineItem.ApplyGradeFromStill does not exist",
+    }
+    if not control:
+        # dir() stopped enumerating usefully; absence proves nothing here.
+        details["reason"] = (
+            "CopyGrades is missing from dir() too, so this object is not "
+            "enumerating — the absence of ApplyGradeFromStill is not evidence."
+        )
+        recorder.record("api_truth", "ApplyGradeFromStill_absent", "not_applicable", details=details)
+        return
+    if not present:
+        recorder.record("api_truth", "ApplyGradeFromStill_absent", "supported", details=details)
+        return
+
+    details["drifted"] = (
+        "ApplyGradeFromStill now exists on TimelineItem. The api_truth entry "
+        "calling it missing is stale — measure what it does before anyone "
+        "relies on it."
+    )
+    recorder.record("api_truth", "ApplyGradeFromStill_absent", "error", details=details)
+
+
 def run_probe(server, output_dir: Path, keep_open: bool = False) -> Dict[str, Any]:
     output_dir.mkdir(parents=True, exist_ok=True)
     work_dir = Path(tempfile.mkdtemp(prefix="mcp_color_grade_probe_"))
@@ -478,7 +563,11 @@ def run_probe(server, output_dir: Path, keep_open: bool = False) -> Dict[str, An
                 recorder,
                 "copy",
                 "safe_copy_grade",
-                server.timeline_item_color("safe_copy_grade", {**scope, "target_ids": [target_id]}),
+                _call_confirmed(
+                    server.timeline_item_color,
+                    "safe_copy_grade",
+                    {**scope, "target_ids": [target_id]},
+                ),
             )
         else:
             recorder.record("copy", "safe_copy_grade", "not_applicable", details={"reason": "No second video item"})
@@ -590,7 +679,7 @@ def run_probe(server, output_dir: Path, keep_open: bool = False) -> Dict[str, An
                 recorder,
                 "drx",
                 "safe_apply_drx",
-                server.timeline_item_color("safe_apply_drx", apply_params),
+                _call_confirmed(server.timeline_item_color, "safe_apply_drx", apply_params),
             )
         else:
             recorder.record("drx", "safe_apply_drx", "not_applicable", details={"reason": "No DRX was exported by gallery probe"})
@@ -607,6 +696,7 @@ def run_probe(server, output_dir: Path, keep_open: bool = False) -> Dict[str, An
         _verify_copygrades_replaces_wholesale(recorder, resolve, items, work_dir)
         _verify_exportlut_page_gate(recorder, server, resolve, items, work_dir)
         _verify_duplicatetimeline_moves_pointer(recorder, project, timeline)
+        _verify_applygradefromstill_absent(recorder, items)
 
         if keep_open:
             server.project_manager("save")
