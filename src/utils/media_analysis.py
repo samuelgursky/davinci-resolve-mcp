@@ -7057,7 +7057,21 @@ def cleanup_artifacts(project_root: str, *, frames_only: bool = True) -> Dict[st
                     shutil.rmtree(full, ignore_errors=True)
                     removed.append(full)
     else:
+        # The whole root goes, including `_soul/timeline_brain.sqlite`. That DB
+        # is kept open in a process-wide cache, so let go of it first: on
+        # Windows the open handle makes the file undeletable, and rmtree's
+        # ignore_errors=True would hide that and report a root we never removed.
+        from src.utils import timeline_brain_db as _brain_db
+
+        _brain_db.close(root)
         shutil.rmtree(root, ignore_errors=True)
+        if os.path.isdir(root):
+            return {
+                "success": False,
+                "error": f"Could not fully remove the project analysis root: {root}",
+                "removed": removed,
+                "frames_only": frames_only,
+            }
         removed.append(root)
     return {"success": True, "removed": removed, "frames_only": frames_only}
 

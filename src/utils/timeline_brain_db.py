@@ -250,6 +250,25 @@ def close_all() -> None:
         _CONNECTIONS.clear()
 
 
+def close(project_root: str) -> None:
+    """Drop and close the cached connection for `project_root`, if any.
+
+    Callers that are about to delete or move a project's analysis root need
+    this. On Windows the open handle makes `_soul/timeline_brain.sqlite`
+    undeletable; on POSIX the cache would otherwise hand the next writer a
+    connection to a file that no longer has a directory entry, so the write
+    lands nowhere.
+    """
+    path = db_path_for_project(project_root)
+    with _CONNECTION_LOCK:
+        conn = _CONNECTIONS.pop(path, None)
+    if conn is not None:
+        try:
+            conn.close()
+        except sqlite3.Error:
+            pass
+
+
 @contextmanager
 def transaction(project_root: str) -> Iterator[sqlite3.Connection]:
     """Context manager wrapping a write transaction.
@@ -292,13 +311,7 @@ def transaction(project_root: str) -> Iterator[sqlite3.Connection]:
 def reset_for_test(project_root: str) -> None:
     """Drop + recreate every table. Tests only."""
     path = db_path_for_project(project_root)
-    with _CONNECTION_LOCK:
-        conn = _CONNECTIONS.pop(path, None)
-        if conn is not None:
-            try:
-                conn.close()
-            except sqlite3.Error:
-                pass
+    close(project_root)
     for suffix in ("", "-wal", "-shm"):
         try:
             os.remove(path + suffix)
