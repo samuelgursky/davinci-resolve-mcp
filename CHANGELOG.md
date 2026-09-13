@@ -2,6 +2,63 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.1.2 — the installer's healthy-branch test stops depending on a live Resolve
+
+Test-only. No behaviour change to the server or the installer.
+
+### Fixed
+
+- **`SetupExitStatusTests.test_a_working_install_still_reports_ready_and_exits_zero`
+  failed roughly once per full-suite run** while passing in isolation and on an
+  immediate re-run. It was not the shared-state bug class this repo has seen
+  before: it asserted the healthy branch by running the **real** probe, which
+  spawns a subprocess asking a live GUI application to answer over IPC within
+  10 seconds and returns `False, "Connection timed out"` if it does not.
+  Resolve can be mid-launch, showing a modal, loading a project, or simply slow
+  while the rest of the suite saturates the machine — none of which is a defect
+  in the installer, which is the only thing the test exists to catch.
+
+  What it actually guards — *a successful verification must print
+  `Environment ready!` and return 0* — is a property of `main()`'s reporting,
+  not of the host. It is now asserted against a **pinned** verification result,
+  so it is deterministic and runs everywhere, including on CI with no Resolve
+  installed. Its mirror (*a stated failure is never reported ready*) is pinned
+  the same way.
+
+- **The live probe is still exercised, as an integration check**, by
+  `test_the_live_probe_agrees_with_the_summary`. It asserts the summary and
+  exit status **agree with whatever the probe said** — and skips, naming the
+  probe's own message, when the probe did not answer. It is not an assertion
+  that the probe succeeds, because that is not something a unit suite can
+  guarantee. A probe that answers and a summary that contradicts it still
+  fails, which is the regression that matters.
+
+- **The skip gate admitted machines the test could not pass.**
+  `_resolve_is_installed()` checked only for a `fusionscript` library, but
+  `main()` sets `verification_failed` when `api_path` is falsy — printing
+  `Skipped — Resolve API path not detected` — *before* the probe runs. On a
+  machine with the app installed but no `Developer/Scripting` directory (Studio's
+  installer can omit that component; on Linux it may sit outside the defaults),
+  the test therefore failed **deterministically**, for a reason unrelated to
+  what it pins. The gate now requires both halves, and it expands `{user}` the
+  way `find_resolve_paths()` does.
+
+### Guards
+
+- Every reporting test in `SetupExitStatusTests` is re-run with
+  `verify_resolve_connection` booby-trapped to raise, so any test that reaches
+  a live Resolve — by dropping its pin, by letting discovery find the host's
+  install, or by being added without one — fails at authoring time instead of
+  once a fortnight in someone's suite run. Exactly one test is exempt, named in
+  `LIVE_TEST`.
+- The ready assertion is re-asserted against a dead `RESOLVE_PATHS`, pinning
+  that the summary follows the verification result rather than the machine.
+- A pinned verification is asserted to actually replace the probe rather than
+  shadow it, so pinning the wrong symbol cannot quietly reacquire the flake.
+- The gate is asserted to reject a library with no API directory beside it.
+
+All four fail when the defect they pin is reintroduced.
+
 ## What's New in v4.1.1 — drift detection stops comparing two different timelines
 
 Reported by @V2arK (#224), with the root cause correctly diagnosed in the report.
