@@ -2,6 +2,90 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.0.0 — verified API facts reach the caller, and one of them refuses
+
+Contributed by @Grimthereapper (#217). **Major**, because a call that previously
+returned `{"success": true}` from `copy_grades` or `apply_look_to_items` can now
+refuse.
+
+### Breaking
+
+- **Actions that call `TimelineItem.CopyGrades` refuse until the caller passes
+  `acknowledge_trap: true`.** That symbol replaces the target's grade wholesale
+  rather than merging, returns `True` while doing it, and creates no grade
+  version — so applied to a clip carrying hand-work it is unrecoverable loss
+  reported as success. `copy_grades` and `apply_look_to_items` refuse;
+  `safe_copy_grade` and `bulk_match_to_hero` do not, because each already owns a
+  confirmation path (see *Why two actions are exempt* below). The refusal names
+  the behaviour, carries the recommendation, and tells the caller what to
+  re-send. Dry runs are exempt — a preview destroys nothing.
+- **`RESOLVE_MCP_DISABLE_TRAP_GUARD=1` turns the whole mechanism off**, refusal
+  and advisory push alike.
+
+### Added
+
+- **`api_truth` became a push, not only a pull.** The ledger answered
+  `resolve_control(action="api_truth")` and was otherwise a file nobody greps
+  mid-job; exactly one callsite pushed proactively. An action mapped to a symbol
+  with a recorded fact now carries a compact `known_limitation` on its result —
+  symbol, reality, recommendation, nothing else, because response weight is a
+  real cost on a long session and the full entry is one lookup away.
+- **`ACTION_SYMBOLS`** declares which Resolve symbols each compound `(tool,
+  action)` actually calls, matched on exact symbol equality only. Nothing is
+  inferred from a similar name: an unrelated explanation stapled to a failure
+  reads as a diagnosis, and a wrong diagnosis is worse than none.
+- **Four new `api_truth` entries**, in the places the ledger was thinnest —
+  `TimelineItem.CopyGrades` (replaces wholesale, no version),
+  `TimelineItem.ApplyGradeFromStill` (does not exist on `TimelineItem` or
+  `Graph`; `Graph.ApplyGradeFromDRX` is the real symbol),
+  `TimelineItem.ExportLUT` (Color-page gated, bare `False` elsewhere, no stale
+  file written) and `Timeline.DuplicateTimeline` (silently moves the
+  current-timeline pointer). The existing `ProjectManager.DeleteProject` entry
+  was reconfirmed rather than duplicated. Each carries a per-entry
+  `verified_on`; the stale module-level `VERIFIED_ON` constant was deliberately
+  left alone rather than globally bumped to assert 113 re-measurements that did
+  not happen.
+- **`color_grade_live_probe`** re-derives three of these against a live build
+  and records `drifted` when Resolve stops agreeing. A fact nobody can
+  re-measure decays into folklore the moment Blackmagic ships a build — and one
+  of these now refuses calls, so a stale entry would block legitimate work
+  rather than merely mislead.
+
+### Why two actions are exempt
+
+`destroys_prior_work` is a property of the symbol, but four actions call
+`CopyGrades` and two already make the caller confirm. Refusing those too would
+cost a caller two acknowledgements discovered serially — add `acknowledge_trap`,
+retry, then find a `confirm_token` is also needed — and it would land hardest on
+`safe_copy_grade`, whose name promises it is the careful route. Making the
+careful route the most irritating to call pushes people toward the raw
+`copy_grades` the guard exists to protect them from. The confirm-token flow is
+older and more specific, so it wins and the guard stands down; those actions
+still get the advisory `known_limitation`.
+
+### Guards
+
+- Every mapped symbol is a real `API_TRUTH` entry, and every mapped action a
+  real handler.
+- Every `destroys_prior_work` entry is reachable from some action, or the
+  refusal it powers can never fire.
+- Every `destroys_prior_work` entry is named by a live probe, or it becomes a
+  superstition.
+- An exempt action's handler still mentions `confirm_token`, so deleting that
+  gate fails loudly instead of silently becoming no confirmation at all.
+- No still-refusing action defaults `dry_run` to `True`.
+
+### Measurement provenance
+
+The four new entries were measured by the contributor on **DaVinci Resolve
+Studio 21.1.0.14** and are recorded with that `verified_on`. They were **not**
+re-measured for this release — no 21.1 machine was available — so they are this
+server's record of a contributor's measurement, not a maintainer reconfirmation.
+The `ExportLUT` page-gating finding is independently consistent with this
+repository's own recorded behaviour of grade calls off the Color page on Studio
+19.1.3.7. `color_grade_live_probe` exists precisely so anyone on 21.1 can
+re-derive them and see `drifted` if Resolve has changed.
+
 ## What's New in v3.4.0 — review a bin one frame at a time in the control panel
 
 Contributed by @tpellet (#230), their first contribution here.
