@@ -2,6 +2,44 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v3.3.0 — ask the server what the native Resolve API contains
+
+Contributed by @legionsound (#229), the second of the two branches queued in #207.
+
+### Added
+
+- **`resolve_control`: `search_api`, `describe_api`, `api_surface`**, plus
+  granular twins `search_resolve_api`, `describe_resolve_api` and
+  `get_resolve_api_surface`. `resolve_control api_truth` already answered *what
+  is broken*; nothing answered *what exists*. #205 shipped Blackmagic's typed
+  `DaVinciResolveScript.pyi` and `scripts/audit_typed_api.py` could inventory
+  it, but only from a shell — an agent talking to this server had no way to ask.
+  This is the equivalent of Blackmagic's own `search_scripting_api`. Tool count
+  37/384 → 37/387.
+- **All three are read-only and none needs a Resolve connection.** They parse
+  the stub that already ships in `docs/reference/`, so they answer with Resolve
+  closed, and they describe the stub checked into this repository — currently
+  21.1.0.14 — not whatever build happens to be installed. A missing stub is
+  reported as missing rather than guessed around.
+- **Every result carries `referenced_in_this_server` and the files that
+  reference the method**, so a lookup doubles as a parity check: does the native
+  API have it, and do we wrap it? The flag counts executable syntax only —
+  attribute access, calls, `getattr(obj, "Name")` — never docstrings or
+  comments, built the same way `audit_typed_api.py` builds its source
+  references. A method named in prose is not coverage.
+- **Ambiguity is reported, not guessed.** A bare `GetName` lists its candidates
+  instead of picking one. An invalid regex is refused rather than raised.
+  Results are capped with an explicit `truncated` flag rather than silently cut.
+
+### Guards
+
+- The parser independently reports **410 methods, 46 TypedDicts, 513 fields**,
+  and `tests/test_typed_api_search.py` asserts that equality against the
+  inventory recorded in `resolve-211-typed-api.md`. A future stub refresh that
+  changes the surface now fails the suite instead of drifting quietly. The same
+  file checks both interfaces agree on surface, search and describe, and that
+  neither needs a connection.
+
 ## What's New in v3.2.2 — an analysis root that is deleted is actually let go of
 
 Contributed by @Dev-next-gen (#228), generalised to the second site and to the
