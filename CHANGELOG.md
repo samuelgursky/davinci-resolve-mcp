@@ -2,6 +2,53 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.1.0 — `timeline_markers add` can be previewed, and "false" stops meaning true
+
+Contributed by @Rohitkanithi (#218), adapted onto v4.0.0.
+
+### Added
+
+- **`timeline_markers add` accepts `dry_run` / `dryRun` natively.** The preview
+  resolves the marker frame through the same path as a real add — including the
+  current-playhead default when frame and timecode are both omitted —
+  normalizes the colour through the existing validator, applies the same
+  defaults for name, note, duration and custom data, and returns a
+  `would_change` block with `executed: false` without calling Resolve's
+  `AddMarker`. It sits *after* payload resolution and *before* the write, so
+  the preview reports the values that would actually have been sent rather than
+  a synthesized guess, and a payload the real handler would reject is rejected
+  here too instead of previewing a success that could not happen.
+- Registered in `NATIVE_DRY_RUN_ACTIONS`, so an explicit dry run is treated as
+  plan-only: no timeline archive and no versioning row for a request that
+  mutates nothing. A normal add keeps the full safety and versioning path, and
+  marker actions *without* a native preview still refuse with
+  `DRY_RUN_UNAVAILABLE` rather than pretending to simulate.
+
+### Fixed
+
+- **`dry_run="false"` meant true.** Both the destructive hook and the operation
+  log tested the flag with a bare `bool(...)`, and every non-empty string is
+  truthy — so a caller passing the string `"false"`, which is what several MCP
+  clients send for a boolean, got the dry-run path when they had explicitly
+  asked not to. The mutation silently did not happen. Both now share
+  `src/utils/bool_params.py`, which reads `"true"/"1"/"yes"/"on"` and
+  `"false"/"0"/"no"/"off"`, so the safety layer and the log cannot drift on the
+  question of whether a dry run was actually requested.
+- **This also closes a bypass in the v4.0.0 trap guard.** That guard exempts an
+  explicit dry run from the `CopyGrades` refusal, on the correct grounds that a
+  preview destroys nothing — but it decided "explicit dry run" with the same
+  truthy test. A call carrying `dry_run="false"` therefore read as a dry run and
+  skipped the refusal. It was caught downstream by `lacks_native_dry_run`, which
+  shared the same flaw and refused with `DRY_RUN_UNAVAILABLE`, so nothing
+  destructive got through — but the guard was being answered by a bug rather
+  than by its own logic. Both now go through the shared helper.
+
+### Changed
+
+- Successful dry-run entries in the operation log summarize as previews
+  (`timeline_markers.add dry-run preview`), so a JSONL scan distinguishes a
+  preview from a mutation without parsing the payload.
+
 ## What's New in v4.0.0 — verified API facts reach the caller, and one of them refuses
 
 Contributed by @Grimthereapper (#217). **Major**, because a call that previously
