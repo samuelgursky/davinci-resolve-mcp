@@ -4384,6 +4384,35 @@ class CleanupArtifactsTests(unittest.TestCase):
             probe.close()
         self.assertEqual([r[0] for r in rows], ["run-after-cleanup"])
 
+    def test_session_only_cleanup_releases_the_timeline_brain_connection(self):
+        """The same rule at the second site: a session-only run ingests reports
+        into <output_root>/_soul/timeline_brain.sqlite and then deletes that
+        root, so it has to drop the cached connection too. Each run gets a
+        fresh temp root, so a leak here accumulates across runs."""
+        from src.utils import timeline_brain_db
+
+        self.addCleanup(timeline_brain_db.close_all)
+        tmp = tempfile.mkdtemp(prefix="session_only_cleanup_test_")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        output_root = os.path.join(tmp, "davinci-resolve-mcp-analysis-session-abc")
+        os.makedirs(output_root)
+        db_path = timeline_brain_db.db_path_for_project(output_root)
+        self._log_one_edit(output_root, "run-before-cleanup")
+        self.assertTrue(os.path.isfile(db_path))
+
+        manifest = {"clips": [], "artifacts_cleaned_up": False}
+        removed = _media_analysis_module._release_session_root(
+            manifest, output_root, output_root
+        )
+
+        self.assertTrue(removed, manifest)
+        self.assertFalse(
+            os.path.isdir(output_root),
+            msg=f"session root still on disk after cleanup: {output_root}",
+        )
+        self._log_one_edit(output_root, "run-after-cleanup")
+        self.assertTrue(os.path.isfile(db_path), msg=f"write went nowhere: {db_path}")
+
 
 class MediaAnalysisCoverageTests(unittest.TestCase):
     """Pre-flight coverage_report assessment used by editorial / color / online guardrails."""

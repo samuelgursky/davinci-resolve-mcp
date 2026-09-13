@@ -2590,6 +2590,48 @@ def _read_json(path: str) -> Dict[str, Any]:
         return json.load(f)
 
 
+def _drop_brain_db_and_rmtree(project_root: str, cleanup_root: str) -> bool:
+    """Delete `cleanup_root`, releasing `project_root`'s brain DB first.
+
+    `<project_root>/_soul/timeline_brain.sqlite` is held open in a
+    process-wide cache for the life of the server, and nothing else lets go of
+    it. Deleting the root underneath that handle fails differently on each
+    platform and silently on both, because rmtree runs with
+    ``ignore_errors=True``:
+
+    - Windows refuses to delete the open file, so the root survives with
+      `_soul/` and the brain-edit history still in it while the caller is told
+      it is gone.
+    - POSIX unlinks it, but the cache then hands the next writer a connection
+      to a file with no directory entry, so the write lands nowhere.
+
+    Returns whether `cleanup_root` is actually gone afterwards, so callers can
+    report a removal that happened rather than one they attempted.
+    """
+    from src.utils import timeline_brain_db as _brain_db
+
+    _brain_db.close(project_root)
+    shutil.rmtree(cleanup_root, ignore_errors=True)
+    return not os.path.isdir(cleanup_root)
+
+
+def _release_session_root(manifest: Dict[str, Any], project_root: str,
+                          cleanup_root: str) -> bool:
+    """Session-only artifact cleanup: same rule as `cleanup_artifacts`.
+
+    A session-only run ingests every report into the brain DB under
+    `project_root` and then throws the root away, and each run gets a fresh
+    temp root -- so without the release the cache accumulates one dead
+    connection per run.
+    """
+    removed = _drop_brain_db_and_rmtree(project_root, cleanup_root)
+    if not removed:
+        manifest.setdefault("memory_layer_warnings", []).append(
+            f"Could not fully remove the session analysis root: {cleanup_root}"
+        )
+    return removed
+
+
 def _ingest_report_into_db(project_root: str, report: Dict[str, Any], clip_dir: Optional[str]) -> Dict[str, Any]:
     """C1 — write a report into the DB-canonical store (rows in a transaction).
 
@@ -5971,8 +6013,9 @@ async def execute_plan_async(
                     and _is_relative_to(output_root, candidate)
                 ):
                     cleanup_root = candidate
-            shutil.rmtree(cleanup_root, ignore_errors=True)
-            manifest["artifacts_cleaned_up"] = True
+            manifest["artifacts_cleaned_up"] = _release_session_root(
+                manifest, output_root, cleanup_root
+            )
             manifest["artifact_cleanup_root"] = cleanup_root
 
     return manifest
@@ -7057,15 +7100,8 @@ def cleanup_artifacts(project_root: str, *, frames_only: bool = True) -> Dict[st
                     shutil.rmtree(full, ignore_errors=True)
                     removed.append(full)
     else:
-        # The whole root goes, including `_soul/timeline_brain.sqlite`. That DB
-        # is kept open in a process-wide cache, so let go of it first: on
-        # Windows the open handle makes the file undeletable, and rmtree's
-        # ignore_errors=True would hide that and report a root we never removed.
-        from src.utils import timeline_brain_db as _brain_db
-
-        _brain_db.close(root)
-        shutil.rmtree(root, ignore_errors=True)
-        if os.path.isdir(root):
+        # The whole root goes, including `_soul/timeline_brain.sqlite`.
+        if not _drop_brain_db_and_rmtree(root, root):
             return {
                 "success": False,
                 "error": f"Could not fully remove the project analysis root: {root}",

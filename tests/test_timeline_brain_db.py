@@ -6,6 +6,7 @@ No Resolve required.
 from __future__ import annotations
 
 import os
+import shutil
 import tempfile
 import unittest
 
@@ -224,6 +225,48 @@ class ConcurrencyHardening(unittest.TestCase):
             "SELECT 1 FROM timeline_versions WHERE timeline_name='Concurrent'"
         ).fetchone()
         self.assertIsNotNone(row, msg="row didn't land after busy retry")
+
+
+class ConnectionCacheKeying(unittest.TestCase):
+    """The cache must key on the resolved DB path, not the caller's spelling.
+
+    `close()` exists so a caller can let go of the DB before deleting the root
+    it lives in. It pops by key, so if two spellings of one root produce two
+    keys, `close()` silently releases nothing -- and on macOS that is the
+    default case, because every temp root under /var/folders is reached through
+    a symlink while `media_analysis` realpath's the root before using it.
+    """
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.mkdtemp(prefix="brain_db_keying_")
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.addCleanup(timeline_brain_db.close_all)
+        self.real = os.path.join(os.path.realpath(self.tmp), "project")
+        os.makedirs(self.real, exist_ok=True)
+        link = os.path.join(self.tmp, "via-symlink")
+        os.symlink(self.real, link)
+        self.aliased = link
+
+    def test_one_root_two_spellings_is_one_connection(self):
+        a = timeline_brain_db.connect(self.real)
+        b = timeline_brain_db.connect(self.aliased)
+        self.assertIs(a, b, "a symlinked spelling opened a second connection to one file")
+
+    def test_close_releases_a_connection_opened_under_another_spelling(self):
+        timeline_brain_db.connect(self.aliased)
+        timeline_brain_db.close(self.real)
+        # Compare resolved, not as spelled: with the keys unnormalised the
+        # stale entry is still there under the symlinked spelling, and a
+        # literal key comparison would not see it.
+        target = os.path.realpath(timeline_brain_db.db_path_for_project(self.real))
+        still_open = [
+            key for key in timeline_brain_db._CONNECTIONS
+            if os.path.realpath(key) == target
+        ]
+        self.assertEqual(
+            still_open, [],
+            msg="close() left the connection it was called to release",
+        )
 
 
 if __name__ == "__main__":

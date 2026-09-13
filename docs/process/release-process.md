@@ -75,7 +75,7 @@ venv/bin/python scripts/audit_api_parity.py
 venv/bin/python scripts/gen_api_limitations.py --check
 venv/bin/python scripts/audit_readwrite_symmetry.py --check
 node scripts/agent-rules/generate.mjs --check
-venv/bin/python -m unittest tests.test_static_undefined_names tests.test_duplicate_definitions tests.test_action_list_drift tests.test_panel_docs_drift tests.test_doc_tool_counts tests.test_agent_rules_drift
+venv/bin/python -m unittest tests.test_static_undefined_names tests.test_duplicate_definitions tests.test_action_list_drift tests.test_panel_docs_drift tests.test_doc_tool_counts tests.test_agent_rules_drift tests.test_release_surface_drift
 node bin/davinci-resolve-mcp.mjs --help
 node bin/davinci-resolve-mcp.mjs --version
 npm pack --dry-run
@@ -88,6 +88,13 @@ lockfile: it asserts both version fields and the root dependency blocks match
 regeneration is in the working tree when the test reads it — that ordering is why
 the check is a regeneration followed by a test, not a `git diff --exit-code`,
 which would fire on the release bump's own legitimate change.
+
+`test_release_surface_drift` is the gate on the version bump itself: it asserts
+the README badge, the `README.zh-CN.md` badge and its `本翻译对应 vX.Y.Z` line, and
+a `CHANGELOG.md` entry all match `package.json`. It was not in this list until
+v3.2.2, and v3.2.1 shipped with a zh-CN badge still reading v3.2.0 as a direct
+result — every other gate passed, because none of them looks at a version
+surface. Run it before tagging, not after.
 
 `test_duplicate_definitions` asserts no module-level name is defined twice under
 `src/`. A second `def foo` silently replaces the first, and in a module the size

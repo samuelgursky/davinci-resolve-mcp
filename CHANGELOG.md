@@ -2,6 +2,53 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v3.2.2 — an analysis root that is deleted is actually let go of
+
+Contributed by @Dev-next-gen (#228), generalised to the second site and to the
+connection cache underneath both.
+
+### Fixed
+
+- **`cleanup_artifacts(frames_only=false)` reported success whether or not it
+  removed anything.** The analysis root contains
+  `_soul/timeline_brain.sqlite`, which `timeline_brain_db` keeps open in a
+  process-wide cache for the life of the server. Nothing let go of it before
+  the `shutil.rmtree`, and the rmtree runs with `ignore_errors=True`, so both
+  failure modes were swallowed. On Windows the open handle makes the DB
+  undeletable: the root survives with `_soul/` and the brain-edit history still
+  in it while the tool returns `{"success": true}`. On POSIX the root is
+  removed but the stale connection stays cached, so the next write for that
+  project goes to a file with no directory entry and is lost — the dashboard,
+  which opens the path fresh, sees nothing. `timeline_brain_db.close()` now
+  releases one project's connection, and the cleanup returns `success: false`
+  if the root is still on disk afterwards. (#228)
+- **The same bug at a second site.** A `session_only` run without
+  `keep_artifacts` ingests every report into the brain DB under its output root
+  and then deletes that root, with the connection still cached. Because each
+  such run gets a fresh temp root, the cache accumulated one dead connection
+  per run. Both sites now go through one helper, and
+  `artifacts_cleaned_up` reports whether the removal happened rather than that
+  it was attempted.
+- **`close()` released nothing when the root was spelled differently.** The
+  connection cache keyed on the caller's spelling of the path, and callers
+  disagree by construction: `media_analysis` realpaths a root before using it,
+  while its own callers pass what the user typed. On macOS that alone was
+  enough — every temp root under `/var/folders` is a symlink to
+  `/private/var/folders` — so `close()` computed a key that was never in the
+  cache, popped nothing, and the fix above silently did not apply. Two
+  spellings of one root also opened two connections to one SQLite file. The
+  cache now keys on the resolved DB path.
+
+### Release process
+
+- **`tests.test_release_surface_drift` is now in the documented gate list.** It
+  asserts the README badge, the `README.zh-CN.md` badge and translation line,
+  and a `CHANGELOG.md` entry all match `package.json` — and it was the one
+  version-surface check missing from `docs/process/release-process.md`. v3.2.1
+  shipped with a zh-CN badge still reading v3.2.0 because every documented gate
+  passed while none of them looks at a version surface. That badge is corrected
+  here.
+
 ## What's New in v3.2.1 — three correctness fixes to the LUT tool
 
 Contributed by @Dev-next-gen (#225, #226, #227), each found by reading the v3.2.0

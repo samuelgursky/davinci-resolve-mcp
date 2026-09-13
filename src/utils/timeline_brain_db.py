@@ -50,6 +50,26 @@ def db_path_for_project(project_root: str) -> str:
     return os.path.join(project_root, SOUL_DIRNAME, DB_FILENAME)
 
 
+def _cache_key(project_root: str) -> str:
+    """The connection-cache key for a project root: its DB path, realpath'd.
+
+    Two spellings of one root must not become two cached connections to one
+    file. They do without this, because callers disagree about spelling by
+    construction -- `media_analysis` normalizes a root through `realpath`
+    before using it, while its own callers pass whatever the user typed. On
+    macOS that alone is enough: every temp root under `/var/folders/...` is a
+    symlink to `/private/var/folders/...`.
+
+    The damage is not just a duplicate. `close()` pops by key, so a mismatch
+    makes it silently no-op and leave the connection it was called to release
+    -- which is the whole point of calling it before deleting the root.
+
+    `realpath` on a path that does not exist yet resolves the ancestors that do
+    and leaves the rest literal, which is what a not-yet-created DB needs.
+    """
+    return os.path.realpath(db_path_for_project(project_root))
+
+
 def _ensure_parent_dir(path: str) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
 
@@ -224,7 +244,7 @@ def connect(project_root: str) -> sqlite3.Connection:
     """
     if not project_root:
         raise ValueError("project_root is required")
-    path = db_path_for_project(project_root)
+    path = _cache_key(project_root)
     with _CONNECTION_LOCK:
         existing = _CONNECTIONS.get(path)
         if existing is not None:
@@ -259,7 +279,7 @@ def close(project_root: str) -> None:
     connection to a file that no longer has a directory entry, so the write
     lands nowhere.
     """
-    path = db_path_for_project(project_root)
+    path = _cache_key(project_root)
     with _CONNECTION_LOCK:
         conn = _CONNECTIONS.pop(path, None)
     if conn is not None:
@@ -310,7 +330,7 @@ def transaction(project_root: str) -> Iterator[sqlite3.Connection]:
 
 def reset_for_test(project_root: str) -> None:
     """Drop + recreate every table. Tests only."""
-    path = db_path_for_project(project_root)
+    path = _cache_key(project_root)
     close(project_root)
     for suffix in ("", "-wal", "-shm"):
         try:
