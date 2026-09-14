@@ -2,6 +2,63 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.2.0 — the raw grade-copy asks before it overwrites, and an injected grade shows as graded
+
+Contributed by [@Rohitkanithi](https://github.com/Rohitkanithi) in
+[#231](https://github.com/samuelgursky/davinci-resolve-mcp/pull/231), plus a
+fix to the offline `.drp` grade-injection tier.
+
+### Added
+
+- **`timeline_item_color copy_grades` now takes a `confirm_token` and requires
+  one before it calls `TimelineItem.CopyGrades`.** The raw action reaches an API
+  that replaces the target's entire node graph with the source's, with no
+  recovery version — reconfirmed on Studio 21.1.0.14 in
+  [#207](https://github.com/samuelgursky/davinci-resolve-mcp/issues/207), where
+  the target's exported grade became byte-identical to the source and the
+  version list stayed `['Version 1']` throughout. Until now the trap
+  acknowledgement was the only barrier, and acknowledging a trap is a statement
+  about understanding the API, not about the clips in front of you.
+
+  The first call now returns `confirmation_required` with a preview built from
+  the targets it actually resolved — how many, which IDs, and which IDs were not
+  found on any video track — and a one-time token bound to the action and a
+  fingerprint of the params. Change `target_ids` after receiving the token and
+  the token no longer matches. The trap gate still runs first, so the sequence is
+  acknowledge, inspect the resolved targets, then commit. The safe siblings
+  (`safe_copy_grade`, `bulk_match_to_hero`) already gated their own writes; this
+  closes the raw path that bypassed them.
+
+  A side effect of routing target resolution through the existing
+  `_timeline_items_for_grade_copy` helper: IDs that resolve to nothing are now
+  **reported** rather than silently dropped, which is the "No target existence
+  check" the action's own docstring had been warning about.
+
+### Fixed
+
+- **An injected grade rendered correctly but the Color page listed the clip as
+  ungraded.** Resolve decides "graded" from the per-version `<HasCorrection>`
+  element beside the `Body`, not from the body bytes. `injectGrades` replaced the
+  `Body` and left the flag as it found it, so on a 352-clip balance pass the
+  grades were live while the page showed them missing. The version element lists
+  `HasCorrection` before `Body`, so the last `HasCorrection` preceding the
+  replaced `Body` is the owner's; it is now flipped to true and untouched clips
+  keep their flag. The test builds an ungraded two-clip DRP, injects one, and
+  asserts the target reads true while the sibling still reads false, with an
+  already-corrected fixture as the null control.
+
+### Validation
+
+- Full offline suite on the merged result: **3,620 passed, 1 skipped,
+  1,257 subtests passed, zero failures.** The `drp-format` Node tests pass
+  (8 passed, 1 skipped), including the new `HasCorrection` case.
+- All release drift guards green, including `test_write_enforcement_ratchet`,
+  `test_doc_tool_counts`, `test_action_list_drift` and
+  `test_release_surface_drift`.
+- No Resolve live run: the confirm-token gate is server-side control flow, and
+  the `.drp` change is offline file authoring covered by its own round-trip test.
+  Neither alters what Resolve is asked to do once a call is allowed through.
+
 ## What's New in v4.1.3 — every live harness could no longer start, and a probe that could never pass
 
 Reported and measured by [@legionsound](https://github.com/legionsound) in
