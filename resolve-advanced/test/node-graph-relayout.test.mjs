@@ -83,7 +83,7 @@ test('relayoutBody rewrites positions and preserves the grade byte-for-byte in p
 });
 
 test('relayoutBody guards: bad magic, zero-size positions list, non-integer positions', async () => {
-  await assert.rejects(() => layout.relayoutBody(Buffer.from([0x00, 0x01])), /0x81 magic/);
+  await assert.rejects(() => layout.relayoutBody(Buffer.from([0x00, 0x01])), /magic/);
   const body = Buffer.from(bodyHex(await scatteredDrx()), 'hex');
   await assert.rejects(() => layout.relayoutBody(body, { positions: [[1, 1]] }), /positions has 1/);
   await assert.rejects(() => layout.relayoutBody(body, { positions: [[1.5, 1], [2, 2], [3, 3]] }), /non-negative integers/);

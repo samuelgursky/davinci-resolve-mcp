@@ -79,6 +79,14 @@ Each dispatches on an `action`. Highlights:
 - **`drx`** — per-clip grade (`.drx`) codec: `parse`, `generate`, `generate_from_request`,
   `export_cdl`, `merge`, plus the **grading/QC catalog** below.
 - **`drp` / `drt`** — project / timeline file authoring + editing + grade injection + structural diff.
+  `drp` `relayout_node_graphs` is the whole-project **Cleanup Node Graph** (the UI command has
+  no API): every node graph an exported `.drp` carries — every LOCAL version of every clip,
+  remote versions, group pre/post, timeline-level — relaid out to Resolve's clean row with the
+  grade bytes untouched and `HasCorrection` as found; scoped by timeline / track / clip id /
+  name / media / frame range / clip position / color group / version / node count / node
+  label; dry-run report, read-back verify. Round trip: `export_project` → `relayout_node_graphs`
+  → `import_project` as a sibling. Single `.drx`: `drx` `relayout`; closed `Project.db`:
+  `project_db` `relayout_node_graphs`.
 - **`conform`** — offline conform/relink QC engine (frame-oracle math, not filename matching),
   reverse-clip DB repair, sequence lineage store + diff, per-cut frame QC (sampled clear of
   transition windows; ingests Resolve's own FCP7 export — `-1` edges → junctions, no ticks needed).

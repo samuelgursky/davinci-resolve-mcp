@@ -403,7 +403,14 @@ Operating rules an agent must know:
   has no API). Single clip, live: `gallery_stills.grab_and_export` → advanced
   `drx(action="relayout")` → `graph.reset_all_grades` → `safe_apply_drx` with
   EXPLICIT item indices (the reset is required — a same-structure apply keeps
-  the old layout). Whole project, offline: `project_db(action="relayout_node_graphs")`.
+  the old layout). Whole project, offline: `project_db(action="relayout_node_graphs")`
+  (closed project + quit/relaunch). Whole project or ANY SUBSET **without closing it**:
+  `project_manager.export_project` → advanced `drp(action="relayout_node_graphs")`
+  (scope by timeline/track/clip id/name/media/frames/clip position/group/version/node
+  count/node label; covers every LOCAL version of every clip, remote versions, group
+  pre/post and timeline graphs; dry-run first, read-back verified on write) →
+  `project_manager.import_project` as a sibling `<name>_CLEANED`, then re-export THAT
+  and dry-run again to prove the effect. BPA's "Node Graph Cleanup" job is this loop.
 - **project_db patches** require the project CLOSED in Resolve plus
   `iConfirmProjectClosed:true`; every write auto-backs-up and read-back
   verifies. Resolve caches open projects in memory: after patching, fully QUIT

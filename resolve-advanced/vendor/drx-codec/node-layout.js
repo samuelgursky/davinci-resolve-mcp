@@ -2,7 +2,8 @@
  * Node-graph LAYOUT rewriter — repositions nodes in a DRX/LmVersion grade Body
  * without touching any grade content.
  *
- * A grade Body is [0x81] + zstd(protobuf). Inside the protobuf, each F1 container
+ * A grade Body is [0x81] + zstd(protobuf), or [0x80] + protobuf STORED uncompressed
+ * (how Resolve serialises small/default graphs in .drp exports). Inside the protobuf, each F1 container
  * holds F7 node messages whose F4 (xPos) / F5 (yPos) varints are the node-editor
  * layout. Resolve's own "Cleanup Node Graph" rewrites ONLY those two fields
  * (verified by before/after Project.db diff, 2026-07): its clean layout is an
@@ -63,6 +64,28 @@ async function getZstd() {
     },
   };
   return backend;
+}
+
+// ---- Body container: 0x81 = zstd-compressed, 0x80 = stored (uncompressed) ----
+
+const MAGIC_ZSTD = 0x81;
+const MAGIC_STORED = 0x80;
+
+/** Split a Body into its container kind and the raw protobuf. */
+async function unwrapBody(body) {
+  if (body[0] === MAGIC_ZSTD) {
+    const zstd = await getZstd();
+    return { magic: MAGIC_ZSTD, proto: zstd.decompress(body.subarray(1)) };
+  }
+  if (body[0] === MAGIC_STORED) return { magic: MAGIC_STORED, proto: Buffer.from(body.subarray(1)) };
+  throw new Error('not a grade Body (missing 0x81/0x80 magic)');
+}
+
+/** Re-wrap a protobuf in the SAME container kind it came from (lossless in kind). */
+async function wrapBody(magic, proto) {
+  if (magic === MAGIC_STORED) return Buffer.concat([Buffer.from([MAGIC_STORED]), proto]);
+  const zstd = await getZstd();
+  return Buffer.concat([Buffer.from([MAGIC_ZSTD]), zstd.compress(proto)]);
 }
 
 // ---- minimal protobuf walker (varint + length-delimited only, as the Body uses) ----
@@ -169,9 +192,7 @@ function rewriteNodeMessage(nodeBuf, x, y) {
  */
 async function relayoutBody(body, options = {}) {
   if (!Buffer.isBuffer(body)) body = Buffer.from(body);
-  if (body[0] !== 0x81) throw new Error('not a grade Body (missing 0x81 magic)');
-  const zstd = await getZstd();
-  const proto = zstd.decompress(body.subarray(1));
+  const { magic, proto } = await unwrapBody(body);
 
   // First pass: count nodes so the default layout can be sized.
   const top = fields(proto);
@@ -213,7 +234,7 @@ async function relayoutBody(body, options = {}) {
     }
   }
 
-  const out = Buffer.concat([Buffer.from([0x81]), zstd.compress(Buffer.concat(rebuilt))]);
+  const out = await wrapBody(magic, Buffer.concat(rebuilt));
   return { body: out, nodeCount, positions: positions.slice(0, nodeCount) };
 }
 
@@ -226,9 +247,7 @@ async function relayoutBodyHex(bodyHex, options = {}) {
 /** Decode just the node positions from a Body (for dry runs / verification). */
 async function readNodePositions(body) {
   if (!Buffer.isBuffer(body)) body = Buffer.from(body);
-  if (body[0] !== 0x81) throw new Error('not a grade Body (missing 0x81 magic)');
-  const zstd = await getZstd();
-  const proto = zstd.decompress(body.subarray(1));
+  const { proto } = await unwrapBody(body);
   const positions = [];
   for (const t of fields(proto)) {
     if (t.f !== 1 || t.wt !== 2) continue;
@@ -246,4 +265,4 @@ async function readNodePositions(body) {
   return positions;
 }
 
-module.exports = { relayoutBody, relayoutBodyHex, readNodePositions, cleanRowPositions };
+module.exports = { relayoutBody, relayoutBodyHex, readNodePositions, cleanRowPositions, unwrapBody, wrapBody };

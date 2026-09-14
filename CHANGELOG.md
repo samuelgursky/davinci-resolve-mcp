@@ -2,6 +2,39 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## Unreleased
+
+### Added
+
+- **`drp` `relayout_node_graphs` — whole-project Cleanup Node Graph on an exported `.drp`.**
+  The UI command has no scripting API and the two existing paths each had a gap: `drx`
+  `relayout` is one clip at a time, and `project_db` `relayout_node_graphs` needs the
+  project closed plus a full Resolve quit. This one runs on `ExportProject` output and
+  round-trips through `ImportProject` as a sibling, so the open project is never touched.
+  - Indexes **every** node graph the export carries: every LOCAL version of every timeline
+    clip (a clip with three versions is three graphs — the earlier `extract_node_graphs` /
+    `inject_grades` only ever saw the first `<Body>`), remote versions on media-pool clips,
+    group pre/post graphs (`project.xml`), timeline-level graphs.
+  - Scope by anything the `.drp` can name: timeline globs, video track, clip id, clip name /
+    media globs, absolute frame range (overlap), clip position range, color group (a group
+    = its clips + its own graphs), graph kind, active-only / version-name globs, node count,
+    node label. Several scopes union. Unknown selectors are refused (zod `.strict()`), never
+    ignored — an ignored selector would silently widen the sweep to the whole project.
+  - Byte-preserving: only the position varints move (node-layout.js); `HasCorrection` is
+    left exactly as found (this is not a grade change). Resolve's 0x80 **STORED** body
+    container (how it serialises small/default graphs in exports) is now decoded and
+    re-wrapped in kind — before this every ungraded clip read as "not a grade Body".
+  - The default body carries no node message at all (Resolve creates the node lazily in
+    the UI): reported as `empty`, not skipped, not an error. Measured on a 737-clip
+    export: 746 empty, 3 real graphs, 0 skipped.
+  - Write path re-indexes the written file from scratch: same graph count, every rewritten
+    body at the target positions with its node count intact, every untouched body
+    byte-identical, every flag unchanged — a failed read-back deletes the output and throws.
+  - Tests: `test/drp-node-graph-relayout.test.mjs` — fixture in the measured Resolve 19.1.3
+    shapes with a two-version clip, a remote version, group graphs, an empty default, an
+    undecodable body; the full scope matrix incl. a null control; write + idempotence +
+    layout tuning.
+
 ## What's New in v4.5.2 — granular safety stops guessing, and the audit log stops lying
 
 Two findings from a review of the v4.5.0 enforcement hook, both measured before and

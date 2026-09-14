@@ -7,7 +7,7 @@
  * Place: place_fusion_title, place_generator, place_transition
  * Edit: move_clip, delete_clip, trim_clip, trim_clip_head, split_clip, ripple_timeline
  * Media: relink_media, repoint_media
- * Grade: inject_grades, extract_node_graphs, diff
+ * Grade: inject_grades, extract_node_graphs, relayout_node_graphs, diff
  * Nested: list_nested, read_nested, read_nested_titles, set_nested_title_text (compounds + nested timelines)
  */
 
@@ -15,6 +15,7 @@ import fs from 'node:fs/promises';
 import { z } from 'zod';
 import { drp } from '../libs.mjs';
 import { decodeGroupGrades } from '../group-grade-read.mjs';
+import { relayoutDrpNodeGraphs, GRAPH_KINDS } from '../drp-node-graph-relayout.mjs';
 
 const xmlEscape = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
 
@@ -30,6 +31,29 @@ const io = {
   drpPath: z.string().describe('Absolute path to the source.drp'),
   outputPath: z.string().describe('Absolute path for the written .drp'),
 };
+
+const strList = z.union([z.string(), z.array(z.string())]);
+const graphScope = z
+  .object({
+    timelines: strList.optional().describe('Timeline name(s), exact or glob. Clip graphs only — group/remote graphs never match a timeline selector.'),
+    tracks: z.array(z.number().int().positive()).optional().describe('1-based video track indices'),
+    clipIds: z.array(z.string()).optional().describe('Timeline-item DbIds (= the scripting API unique ids)'),
+    excludeClipIds: z.array(z.string()).optional(),
+    names: strList.optional().describe('Clip name glob(s), e.g. "A0*.mov"'),
+    media: strList.optional().describe('Media file name or full path glob(s)'),
+    frames: z.tuple([z.number().int(), z.number().int()]).optional().describe('Record-frame range [in, out] (absolute timeline frames, as the .drp stores them); any overlapping clip matches'),
+    clipRange: z.tuple([z.number().int().positive(), z.number().int().positive()]).optional().describe('1-based clip position range on the track [from, to]'),
+    groups: z.array(z.string()).optional().describe('Color group name glob(s) — clip graphs in the group plus the group graphs themselves'),
+    excludeGroups: z.array(z.string()).optional(),
+    kinds: z.array(z.enum(GRAPH_KINDS)).optional().describe('local (clip versions), remote (media-pool versions), group (pre/post clip), sequence (timeline-level). Default all.'),
+    versions: z.enum(['all', 'active']).optional().describe('all versions of a clip (default) or only the active one'),
+    versionNames: strList.optional().describe('Version name glob(s), e.g. "Version 2" or "Pre*"'),
+    gradedOnly: z.boolean().optional().describe('Default true: HasCorrection set OR ≥2 nodes. false sweeps single-node ungraded graphs too'),
+    minNodes: z.number().int().nonnegative().optional(),
+    maxNodes: z.number().int().nonnegative().optional(),
+    nodeLabels: strList.optional().describe('Match graphs containing a node whose label matches the glob(s)'),
+  })
+  .strict();
 
 const S = {
   create_empty_project: z.object({ outputPath: io.outputPath, timelineName: z.string().optional() }),
@@ -107,6 +131,21 @@ const S = {
     style: z.string().optional(),
     size: z.number().optional(),
   }),
+  relayout_node_graphs: z.object({
+    drpPath: io.drpPath,
+    outputPath: z.string().optional().describe('Where to write the relaid-out .drp (never the source). Omit for a dry run.'),
+    dryRun: z.boolean().optional().describe('Report without writing (default: true when outputPath is omitted)'),
+    scope: z.union([graphScope, z.array(graphScope)]).optional().describe('One scope (selectors AND) or several (rows union). Omit = every graded graph in the project.'),
+    layout: z
+      .object({
+        originX: z.number().int().optional().describe('Clean-row start x (default 290 — matches native Cleanup Node Graph)'),
+        originY: z.number().int().optional().describe('Clean-row y (default 428)'),
+        spacingX: z.number().int().optional().describe('Clean-row x spacing (default 495)'),
+      })
+      .optional(),
+    includeLabels: z.boolean().optional().describe('Decode node labels into every item (slower; implied by scope.nodeLabels)'),
+    itemLimit: z.number().int().positive().optional().describe('Cap on report items (default 2000)'),
+  }),
   extract_group_grades: z.object({
     drpPath: io.drpPath,
     groups: z.array(z.string()).optional().describe('Color group names; default = all groups in the project'),
@@ -129,7 +168,7 @@ async function writeOp(fnName, drpPath, opts, outputPath) {
 export const drpTool = {
   name: 'drp',
   description:
-    'DaVinci Resolve project (.drp) authoring + editing — offline, no Resolve required. Actions: create_empty_project, assemble_timeline, add_media_clip, place_fusion_title, place_generator, place_transition, move_clip, delete_clip, trim_clip, trim_clip_head, split_clip, ripple_timeline, relink_media, repoint_media, inject_grades, extract_node_graphs, extract_group_grades, diff, extract_lut_refs, list_nested, read_nested, read_nested_titles, set_nested_title_text.',
+    'DaVinci Resolve project (.drp) authoring + editing — offline, no Resolve required. Actions: create_empty_project, assemble_timeline, add_media_clip, place_fusion_title, place_generator, place_transition, move_clip, delete_clip, trim_clip, trim_clip_head, split_clip, ripple_timeline, relink_media, repoint_media, inject_grades, extract_node_graphs, relayout_node_graphs (whole-project "Cleanup Node Graph" on an exported .drp — every node graph the project carries: every LOCAL version of every clip, remote versions, group pre/post, timeline-level; scoped by timeline/track/clip id/name/media/frame range/clip position/color group/version/node count/node label; grade content byte-preserved, HasCorrection untouched, dry-run report + read-back verify; round trip: project_manager.export_project → relayout_node_graphs → project_manager.import_project as a sibling project), extract_group_grades, diff, extract_lut_refs, list_nested, read_nested, read_nested_titles, set_nested_title_text.',
   async handler({ action, args }) {
     const gen = drp();
 
@@ -261,6 +300,10 @@ export const drpTool = {
       const p = S.set_nested_title_text.parse(args);
       const { drpPath, outputPath, ...opts } = p;
       return writeOp('setNestedTitleText', drpPath, opts, outputPath);
+    }
+    if (action === 'relayout_node_graphs') {
+      const p = S.relayout_node_graphs.parse(args);
+      return relayoutDrpNodeGraphs(p.drpPath, p);
     }
     if (action === 'extract_group_grades') {
       const p = S.extract_group_grades.parse(args);

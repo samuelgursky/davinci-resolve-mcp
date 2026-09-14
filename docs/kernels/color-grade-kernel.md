@@ -155,6 +155,9 @@ Cross-server rules an agent must know:
   `drx(action="relayout")` → `graph.reset_all_grades` → `safe_apply_drx` with
   explicit indices (a same-structure apply keeps the OLD layout — the reset is
   required). Whole project, offline: `project_db(action="relayout_node_graphs")`.
+  Any scope, open project: export → `drp(action="relayout_node_graphs")` (every
+  version of every clip + group/timeline graphs; dry-run, read-back verify) →
+  import as a sibling → re-export the sibling and dry-run again.
 - **Deps.** The grading catalog needs `sharp`; call the advanced `capabilities`
   tool for live status and install hints.
 
