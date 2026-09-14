@@ -2,6 +2,72 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.3.0 — the granular grade-copy stops replacing grades on clips nobody named
+
+v4.2.0 gated the compound `timeline_item_color copy_grades`. Its granular twin,
+`ti_copy_grades` on the `--full` server, reached the identical
+`TimelineItem.CopyGrades` with no guard at all — and on a surface that addresses
+clips by bare 0-based index rather than by unique ID, which made it the more
+dangerous of the two.
+
+### Fixed
+
+- **`ti_copy_grades` accepted negative indices as valid targets.** The bounds check
+  was `i < len(items)`, which every negative integer passes, so `-1` reached
+  `items[-1]` and confidently graded the **last clip in the track**. An off-by-one
+  did not fail; it replaced the node graph of a clip the caller never named, and
+  `CopyGrades` leaves no version to restore. Indices are now range-checked at both
+  ends, and `bool` is refused explicitly — `True` is an `int` subclass and would
+  otherwise have indexed item 1.
+
+- **Out-of-range indices were silently dropped.** `[i for i in indices if i < len(items)]`
+  discarded anything past the end and reported `success: true` for a copy that
+  reached fewer clips than asked for. They are now refused, with the track's real
+  item count in the response.
+
+### Added
+
+- **`ti_copy_grades` requires `acknowledge_trap`, then a `confirm_token`.** The same
+  two-step gate the compound action got in v4.2.0: the first call refuses with the
+  verified fact about `CopyGrades`, and the second returns a preview naming the
+  source and every resolved target — index, clip name, unique ID and start frame —
+  with a one-time token bound to those exact targets. Change the target list and the
+  token no longer matches.
+
+  **This is a breaking change for existing `ti_copy_grades` callers**, deliberately:
+  a call that used to replace grades now refuses until the caller says twice that it
+  means to. It is versioned as a minor to match v4.2.0, which made the identical
+  change to the compound action.
+
+- **`ti_copy_grades` is now annotated `destructiveHint=True`.** Granular tools infer
+  their MCP safety hint from a name prefix, and `ti_` matches none of the read,
+  write or destructive prefix lists, so every `ti_*` tool falls through to the plain
+  write default. A client that gates on that hint was being told this tool was safe.
+
+### Changed
+
+- **One confirm-token implementation, in `src/utils/confirm_tokens.py`.** The
+  compound and granular servers are separate processes and each holds its own token
+  table — a token from one is not honoured by the other, which is what the
+  `CONFIRM_TOKEN_INVALID` message already said. What is now shared is the mechanism
+  and the on/off policy, rather than a second hand-rolled copy of both. `src/server.py`
+  keeps every private name it had and delegates; the error builder is injected,
+  because the granular tools return plain dicts and the compound server an envelope.
+
+### Validation
+
+- Full offline suite: **3,635 passed, 1 skipped, 0 failed**, 1,257 subtests — the
+  same 3,620 as v4.2.0 plus the 15 new tests, so the token extraction cost no
+  coverage. All release drift guards green.
+- **Live on Studio 19.1.3.7**, against real `TimelineItem` objects: every refusal and
+  preview path — negative index, out-of-range index, `bool` index, empty target list,
+  source listed as its own target — plus the clip-summary reads that build the
+  preview. None of these reach `CopyGrades`, and nothing in the project was mutated.
+- **Not validated live: the accepted-token path itself**, where a valid token is
+  redeemed and `CopyGrades` runs. That needs a disposable two-clip project and was
+  covered offline only. The call it makes is byte-for-byte the one v4.2.0 shipped;
+  what is unproven live is the redemption in front of it.
+
 ## What's New in v4.2.0 — the raw grade-copy asks before it overwrites, and an injected grade shows as graded
 
 Contributed by [@Rohitkanithi](https://github.com/Rohitkanithi) in
