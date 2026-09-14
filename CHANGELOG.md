@@ -34,6 +34,28 @@ Release history for the DaVinci Resolve MCP Server. The latest release is summar
     shapes with a two-version clip, a remote version, group graphs, an empty default, an
     undecodable body; the full scope matrix incl. a null control; write + idempotence +
     layout tuning.
+- **Topology-aware relayout (node-layout.js, all three relayout paths).** Positions now
+  come from the graph's own wiring: F8 connection messages (from/to node id, ports —
+  64 = RGB path, 16 = key link — input slot, creation order) and the F9/F10 markers
+  naming the chain's first and last node. Nodes are ranked by longest RGB path (x), a
+  fan-out stacks its branches into lanes ordered by the mixer input slot they feed (y),
+  a merge returns to its lowest input lane, key links never move a node, and an
+  unrankable graph (cycle) falls back to a row in index order and says so in `meta`.
+  - Fixes a latent bug in the row layout: it placed nodes in LIST order, and Resolve
+    lists nodes by id, so any chain with a node inserted mid-way (every traced KICK
+    graph: index order 4,3,6,5,2,7,8,9,1) was laid out scrambled. A chain now lands on
+    the measured row in chain order; generator chains are byte-identical to before.
+  - New options everywhere (`drx` `relayout`, `drp` `relayout_node_graphs`,
+    `project_db` `relayout_node_graphs`): `spacingY` (lane pitch, default 178 —
+    Resolve's own vertical placement grid seen in every stacked export) and
+    `layout`/`mode` = `topology` (default) | `row` (the old behaviour). Every result
+    carries `layout: {kind: chain|dag|row, ranks, lanes, keyLinks}`; the sweep report
+    counts `stackedGraphs`.
+  - NOT yet measured: native Cleanup Node Graph on a graph with a parallel/layer
+    mixer (the lane pitch and how Resolve orders branches). The x row is measured;
+    the lane pitch is a documented default until a mixer graph is cleaned natively
+    and read back. `test/node-layout-topology.test.mjs` pins the planner on rewired
+    real bodies (fan-out + merge, slot order, key link, cycle, row mode, single node).
 
 ## What's New in v4.5.2 — granular safety stops guessing, and the audit log stops lying
 

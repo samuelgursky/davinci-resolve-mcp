@@ -141,6 +141,8 @@ const S = {
         originX: z.number().int().optional().describe('Clean-row start x (default 290 — matches native Cleanup Node Graph)'),
         originY: z.number().int().optional().describe('Clean-row y (default 428)'),
         spacingX: z.number().int().optional().describe('Clean-row x spacing (default 495)'),
+        spacingY: z.number().int().optional().describe('Lane pitch for stacked branches (default 178 — Resolve\'s vertical placement grid; not yet measured against native Cleanup on a mixer graph)'),
+        mode: z.enum(['topology', 'row']).optional().describe('topology (default): rank by wiring, stack branches into lanes; row: one row in list order (pre-2026-09-14 behaviour)'),
       })
       .optional(),
     includeLabels: z.boolean().optional().describe('Decode node labels into every item (slower; implied by scope.nodeLabels)'),

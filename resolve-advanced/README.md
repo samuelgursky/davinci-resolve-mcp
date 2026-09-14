@@ -86,7 +86,9 @@ Each dispatches on an `action`. Highlights:
   name / media / frame range / clip position / color group / version / node count / node
   label; dry-run report, read-back verify. Round trip: `export_project` → `relayout_node_graphs`
   → `import_project` as a sibling. Single `.drx`: `drx` `relayout`; closed `Project.db`:
-  `project_db` `relayout_node_graphs`.
+  `project_db` `relayout_node_graphs`. All three are topology-aware: nodes rank by their
+  RGB wiring (chain order, not list order), branches stack into lanes, key links stay put;
+  `layout: row` is the old single-row mode.
 - **`conform`** — offline conform/relink QC engine (frame-oracle math, not filename matching),
   reverse-clip DB repair, sequence lineage store + diff, per-cut frame QC (sampled clear of
   transition windows; ingests Resolve's own FCP7 export — `-1` edges → junctions, no ticks needed).

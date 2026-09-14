@@ -128,6 +128,8 @@ const relayoutSchema = z
     originX: z.number().int().optional().describe('Clean-row start x (default 290 — matches native Cleanup Node Graph)'),
     originY: z.number().int().optional().describe('Clean-row y (default 428)'),
     spacingX: z.number().int().optional().describe('Clean-row x spacing (default 495)'),
+    spacingY: z.number().int().optional().describe('Lane pitch for stacked branches (default 178; unmeasured against native Cleanup on mixers)'),
+    layout: z.enum(['topology', 'row']).optional().describe('topology (default): rank by wiring, stack branches; row: single row in list order'),
   })
   .refine((a) => a.drxPath || a.content, { message: 'provide drxPath or content' });
 
@@ -815,6 +817,8 @@ export const drxTool = {
         originX: p.originX,
         originY: p.originY,
         spacingX: p.spacingX,
+        spacingY: p.spacingY,
+        layout: p.layout,
       });
       // Splice the new Body into the ORIGINAL envelope (byte-lossless outside the
       // position varints — labels, keyframes, OFX, still metadata all pass through).
@@ -826,9 +830,9 @@ export const drxTool = {
       }
       if (p.outPath) {
         await fs.writeFile(p.outPath, out);
-        return { outPath: p.outPath, nodeCount: r.nodeCount, positionsBefore: before, positions: r.positions };
+        return { outPath: p.outPath, nodeCount: r.nodeCount, positionsBefore: before, positions: r.positions, layout: r.meta };
       }
-      return { content: out, nodeCount: r.nodeCount, positionsBefore: before, positions: r.positions };
+      return { content: out, nodeCount: r.nodeCount, positionsBefore: before, positions: r.positions, layout: r.meta };
     }
 
     if (action === 'contrast_normalize') {

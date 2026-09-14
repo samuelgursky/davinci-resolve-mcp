@@ -411,6 +411,9 @@ Operating rules an agent must know:
   pre/post and timeline graphs; dry-run first, read-back verified on write) →
   `project_manager.import_project` as a sibling `<name>_CLEANED`, then re-export THAT
   and dry-run again to prove the effect. BPA's "Node Graph Cleanup" job is this loop.
+  Layout is topology-aware (rank by RGB wiring, branches stacked into lanes at
+  `spacingY`, key links untouched); the lane pitch is NOT measured against native
+  Cleanup on a mixer graph yet — the x row is.
 - **project_db patches** require the project CLOSED in Resolve plus
   `iConfirmProjectClosed:true`; every write auto-backs-up and read-back
   verifies. Resolve caches open projects in memory: after patching, fully QUIT

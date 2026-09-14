@@ -315,16 +315,17 @@ export function graphInScope(g, s, decoded) {
 const DRX_ENVELOPE = (hex) =>
   `<?xml version="1.0" encoding="UTF-8"?>\n<Resolve_Color_Exchange>\n <Label>x</Label>\n <Width>1920</Width>\n <Height>1080</Height>\n <Body>${hex}</Body>\n</Resolve_Color_Exchange>\n`;
 
-async function decodeGraph(g, { labels }) {
+async function decodeGraph(g, { labels, layoutOpts }) {
   if (!g.bodyHex) return { error: 'no <Body>' };
   const body = Buffer.from(g.bodyHex, 'hex');
-  let positions;
+  let topo;
   try {
-    positions = await layout().readNodePositions(body);
+    topo = await layout().readTopology(body, layoutOpts);
   } catch (e) {
     return { error: e.message };
   }
-  const out = { nodeCount: positions.length, positions };
+  const positions = topo.nodes.map((n) => [n.x, n.y]);
+  const out = { nodeCount: positions.length, positions, planned: topo.planned, meta: topo.meta, edges: topo.edges.length };
   if (labels) {
     try {
       const parsed = await drxParser().parseDRXContent(DRX_ENVELOPE(g.bodyHex));
@@ -363,7 +364,13 @@ export async function relayoutDrpNodeGraphs(drpPath, opts = {}) {
     throw new Error('refusing to overwrite the source .drp — write to a new outputPath');
   }
   const scopes = asList(opts.scope).length ? asList(opts.scope) : [{}];
-  const layoutOpts = { originX: opts.layout?.originX, originY: opts.layout?.originY, spacingX: opts.layout?.spacingX };
+  const layoutOpts = {
+    originX: opts.layout?.originX,
+    originY: opts.layout?.originY,
+    spacingX: opts.layout?.spacingX,
+    spacingY: opts.layout?.spacingY,
+    layout: opts.layout?.mode,
+  };
   const wantLabels = Boolean(opts.includeLabels) || scopes.some((s) => asList(s.nodeLabels).length);
 
   const { zip, entries } = await loadZip(drpPath);
@@ -380,6 +387,7 @@ export async function relayoutDrpNodeGraphs(drpPath, opts = {}) {
     byKind[kind][key] += 1;
   };
   const versionNames = new Set();
+  let stacked = 0;
   const nodeCountByTimeline = {};
 
   for (const g of index.graphs) {
@@ -392,7 +400,7 @@ export async function relayoutDrpNodeGraphs(drpPath, opts = {}) {
       t.tracks = Math.max(t.tracks, g.track);
       t.clips.add(g.clipId);
     }
-    const decoded = await decodeGraph(g, { labels: wantLabels });
+    const decoded = await decodeGraph(g, { labels: wantLabels, layoutOpts });
     if (decoded.error) {
       // Undecodable bodies are reported, never rewritten — and never fail the sweep.
       skipped.push({ key: g.versionId, kind: g.kind, label: g.label, reason: decoded.error });
@@ -414,7 +422,8 @@ export async function relayoutDrpNodeGraphs(drpPath, opts = {}) {
     }
     totals.matched += 1;
     bump(g.kind, 'matched');
-    const target = lay.cleanRowPositions(decoded.nodeCount, layoutOpts);
+    if ((decoded.meta.lanes || 1) > 1) stacked += 1;
+    const target = decoded.planned;
     const clean = isClean(decoded.positions, target);
     const item = {
       key: g.versionId,
@@ -434,6 +443,7 @@ export async function relayoutDrpNodeGraphs(drpPath, opts = {}) {
       active: g.active,
       hasCorrection: g.hasCorrection,
       nodes: decoded.nodeCount,
+      layout: decoded.meta,
       ...(decoded.labels ? { nodeLabels: decoded.labels } : {}),
       before: decoded.positions,
       after: target,
@@ -471,6 +481,7 @@ export async function relayoutDrpNodeGraphs(drpPath, opts = {}) {
     versionNames: [...versionNames].sort(),
     kinds: Object.fromEntries(GRAPH_KINDS.map((k) => [k, byKind[k]?.graphs || 0])),
     multiVersionClips: new Set(index.graphs.filter((x) => x.kind === 'local' && x.versionCount > 1).map((x) => x.clipId)).size,
+    stackedGraphs: stacked,
   };
 
   const limit = opts.itemLimit ?? 2000;
@@ -478,7 +489,13 @@ export async function relayoutDrpNodeGraphs(drpPath, opts = {}) {
     dryRun,
     drpPath,
     outputPath: dryRun ? null : opts.outputPath,
-    layout: { originX: layoutOpts.originX ?? 290, originY: layoutOpts.originY ?? 428, spacingX: layoutOpts.spacingX ?? 495 },
+    layout: {
+      originX: layoutOpts.originX ?? 290,
+      originY: layoutOpts.originY ?? 428,
+      spacingX: layoutOpts.spacingX ?? 495,
+      spacingY: layoutOpts.spacingY ?? 178,
+      mode: layoutOpts.layout ?? 'topology',
+    },
     scope: scopes,
     totals: {
       graphs: totals.graphs,

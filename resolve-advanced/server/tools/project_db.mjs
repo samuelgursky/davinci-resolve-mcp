@@ -62,6 +62,8 @@ const relayoutSchema = z.object({
   originX: z.number().int().optional().describe('Clean-row start x (default 290 — matches native Cleanup Node Graph)'),
   originY: z.number().int().optional().describe('Clean-row y (default 428)'),
   spacingX: z.number().int().optional().describe('Clean-row x spacing (default 495)'),
+  spacingY: z.number().int().optional().describe('Lane pitch for stacked branches (default 178)'),
+  layout: z.enum(['topology', 'row']).optional().describe('topology (default) or row'),
   iConfirmProjectClosed: confirm,
 });
 
@@ -172,7 +174,7 @@ export const projectDbTool = {
     if (action === 'relayout_node_graphs') {
       const p = relayoutSchema.parse(args);
       const layout = require('../../vendor/drx-codec/node-layout.js');
-      const layoutOpts = { originX: p.originX, originY: p.originY, spacingX: p.spacingX };
+      const layoutOpts = { originX: p.originX, originY: p.originY, spacingX: p.spacingX, spacingY: p.spacingY, layout: p.layout };
       const dbPath = await resolveDbPath(p);
       const write = !p.dryRun;
       if (write) requireClosed(p);

@@ -120,7 +120,7 @@ test('inventory: every graph kind, every local version, with timeline/track/posi
   const a2 = r.items.find((i) => i.key === 'a2');
   assert.deepEqual(
     { ...a2, before: undefined, after: undefined },
-    { key: 'a2', kind: 'local', label: 'REEL_01 V1 #1 A001.mov · Version 2', timeline: 'REEL_01', track: 1, clipIndex: 1, clipId: 'a', clipName: 'A001.mov', start: 100, end: 149, mediaName: 'A001.mov', group: 'Wide', versionId: 'a2', versionName: 'Version 2', active: true, hasCorrection: true, nodes: 2, nodeLabels: ['AI Generated Grade', 'Skin'], status: 'would-relayout', before: undefined, after: undefined },
+    { key: 'a2', kind: 'local', label: 'REEL_01 V1 #1 A001.mov · Version 2', timeline: 'REEL_01', track: 1, clipIndex: 1, clipId: 'a', clipName: 'A001.mov', start: 100, end: 149, mediaName: 'A001.mov', group: 'Wide', versionId: 'a2', versionName: 'Version 2', active: true, hasCorrection: true, nodes: 2, layout: { kind: 'chain', ranks: 2, lanes: 1, keyLinks: 0 }, nodeLabels: ['AI Generated Grade', 'Skin'], status: 'would-relayout', before: undefined, after: undefined },
   );
   assert.equal(r.items.find((i) => i.key === 'a1').active, false, 'the non-active local version is its own graph');
   assert.equal(r.items.find((i) => i.key === 'r1').kind, 'remote');
