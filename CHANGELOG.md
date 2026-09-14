@@ -2,6 +2,54 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.4.2 — a refused option now says which one, and why
+
+Reported as [#232](https://github.com/samuelgursky/davinci-resolve-mcp/issues/232):
+`timeline.normalize_audio_level` "rejects every documented option schema". It does
+not, and a test now pins all seven documented `NormalizeAudioOptions` shapes reaching
+the native call. The defect was the refusal itself.
+
+### Fixed
+
+- **One error message covered two unrelated failures.** `Unknown normalization
+  options or non-dictionary options` named neither the offending key nor the type
+  actually received, and listed nothing that *would* have been accepted — so a typo
+  and a malformed payload were indistinguishable, to the caller and to the bug
+  report. The only way to produce that message while passing documented keys is an
+  `options` that arrived as a **JSON string**, which some MCP clients produce when
+  they serialise a nested object. That caller is looking at a payload that appears
+  correct, so the refusal now says so in as many words:
+
+  ```
+  normalization options must be an object with any of normalizationMode,
+  targetLevel, targetLoudness, setLevelMode; received a string. It looks like a
+  JSON string — send options as a nested object, not as encoded text.
+  ```
+
+  An unknown key reads differently, because the cause and the fix are different:
+
+  ```
+  Unknown normalization option 'normalisationMode'; accepted keys are
+  normalizationMode, targetLevel, targetLoudness, setLevelMode.
+  ```
+
+- **`auto_align_clips` carried the identical conflation** and now shares the same
+  builder, `src/utils/option_errors.py`.
+
+### Validation
+
+- Full offline suite: **3,655 passed, 1 skipped, 0 failed**, 1,276 subtests.
+- **No behaviour change to accepted input.** The same options are accepted and reach
+  the same native call; a test asserts each of the seven documented shapes arrives at
+  `NormalizeAudioLevel`, and that a JSON-string payload is refused *without* reaching
+  it. No Resolve live run: nothing about the native call changed.
+
+### Still unconfirmed
+
+The reporter has not replied, so the JSON-string diagnosis remains the most likely
+cause rather than a measured one. If their payload was something else, the new
+message will now say what — which is the actual fix here.
+
 ## What's New in v4.4.1 — the safety ratchet stops scanning only half the project
 
 The write-enforcement ratchet read `src/server.py` and nothing else. The granular
