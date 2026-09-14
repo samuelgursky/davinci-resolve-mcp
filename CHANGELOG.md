@@ -2,6 +2,49 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.5.1 — the safe-mode refusal reaches the caller on 27 more tools
+
+v4.5.0 gave the granular server a working safe-mode gate. On 27 tools it then threw
+the answer away.
+
+### Fixed
+
+- **A blocked call raised `ToolError` instead of returning the refusal.** FastMCP
+  builds an output schema from a tool's return annotation and validates against it,
+  so handing the block dict to a tool annotated `-> str` failed validation:
+
+  ```
+  ToolError: ...Output / result / Input should be a valid string
+  ```
+
+  The caller received a generic execution error carrying none of the
+  `SAFE_MODE_BLOCKED` code, reason or remediation — the gate fired correctly and its
+  answer was destroyed on the way out. Measured on the real `--full` entry path
+  against shipped v4.5.0: `clear_folder_transcription` raised rather than refusing.
+
+  It lands hardest exactly where it matters. The HIGH-rated string-returning tools
+  are the calls safe mode exists to stop: `clear_folder_transcription`,
+  `unlink_proxy_media`, `replace_clip`, `delete_keyframe`, `quit_app`, `restart_app`.
+
+  A `-> str` tool is now refused with the message and its remediation as text,
+  prefixed with the code. That loses the machine-readable field, which is a real
+  cost and worth stating plainly — but a refusal the client can read beats a
+  `ToolError` that discards it, and it is the only shape that tool's own schema will
+  accept. The 105 tools annotated `-> Dict[str, Any]` or `-> dict` keep the
+  structured envelope unchanged.
+
+### Validation
+
+- Full offline suite: **3,684 passed, 1 skipped, 0 failed**, 1,412 subtests.
+- Both new assertions were confirmed to **fail with the fix reverted**, then pass on
+  restore — the guard is not vacuous.
+- Verified end-to-end through the real registry with `destructive.safe_mode` on: a
+  `-> str` tool returns readable refusal text, a `-> dict` tool returns the full
+  envelope, and `allow_risky_operation=true` still lets a permitted call through on
+  both paths.
+- A static check now walks every destructive-decorated tool annotated `-> str` and
+  asserts the hook would hand it a string, so tool number 28 cannot reintroduce this.
+
 ## What's New in v4.5.0 — safe mode and the audit log reach the granular server
 
 v4.4.1 froze 131 destructive-hinted granular tools in a backlog and said plainly
