@@ -145,65 +145,112 @@ EXTERNAL_DESTRUCTIVE_TOOL = ToolAnnotations(
 )
 
 
+#: Namespace segments that sit in FRONT of the verb in a granular tool name.
+#:
+#: The prefix heuristic below reads the leading verb, so a tool called
+#: `ti_delete_marker_at_frame` matched none of the verb lists and fell through to
+#: the plain write default — 86 tools were mis-hinted this way, 43 destructive ones
+#: advertised as ordinary writes (a client gating on `destructiveHint` was told
+#: `ti_copy_grades` was safe) and 43 pure readers advertised as writes. Every tool
+#: carrying one of these is `<namespace>_<verb>_...`, so one strip exposes the verb.
+NAMESPACE_PREFIXES = (
+    "ti_",
+    "timeline_",
+    "graph_",
+    "folder_",
+)
+
+
+def _strip_namespace(name: str) -> str:
+    """Drop one leading namespace segment so the verb heuristic can see the verb."""
+    for prefix in NAMESPACE_PREFIXES:
+        if name.startswith(prefix):
+            return name[len(prefix):]
+    return name
+
+
+def _verb_probe(tool_name: str) -> str:
+    """The stripped name, shaped so a BARE verb still matches its prefix.
+
+    Every verb prefix ends in "_", so `timeline_export` -> `export` would match
+    nothing: the tool name is exactly `<namespace>_<verb>` with no suffix. The
+    trailing "_" makes `export` match `export_` without loosening anything else.
+    """
+    return _strip_namespace((tool_name or "").lower()) + "_"
+
+
+#: Verb prefixes, checked in this order against the name AFTER its namespace is
+#: stripped. Module-level so `tests/test_granular_tool_annotations.py` can tell a
+#: deliberate write from a name that matched nothing and fell through to the default.
+READ_PREFIXES = (
+    "get_",
+    "list_",
+    "inspect_",
+    "probe_",
+    "validate_",
+    "compare_",
+    # NOT "detect_": Timeline.DetectSceneCuts adds cuts to the timeline, and the
+    # compound server rates detect_scene_cuts destructive. It only ever looked like
+    # a read because the `timeline_` namespace hid it from this list.
+    "summarize_",
+    "review_",
+    "is_",
+    "has_",
+)
+DESTRUCTIVE_PREFIXES = (
+    "delete_",
+    "remove_",
+    "clear_",
+    "reset_",
+    "replace_",
+    "unlink_",
+    "quit",
+    "restart",
+    "close_",
+    "stop_",
+    "overwrite_",
+    "lift_",
+    "set_",
+    "load_",
+    "switch_",
+)
+WRITE_PREFIXES = (
+    "add_",
+    "append_",
+    "apply_",
+    "assign_",
+    "copy_",
+    "create_",
+    "duplicate_",
+    "export_",
+    "import_",
+    "insert_",
+    "link_",
+    "move_",
+    "open_",
+    "render_",
+    "rename_",
+    "save_",
+    "start_",
+    "sync_",
+    "transcribe_",
+)
+
+
+def matches_a_verb(tool_name: str) -> bool:
+    """Did the name resolve to a verb rule, or fall through to the default?"""
+    return _verb_probe(tool_name).startswith(
+        READ_PREFIXES + DESTRUCTIVE_PREFIXES + WRITE_PREFIXES)
+
+
 def _annotations_for_tool_name(tool_name: str) -> ToolAnnotations:
     """Infer conservative MCP client-safety hints for legacy granular tools."""
-    name = (tool_name or "").lower()
-    read_prefixes = (
-        "get_",
-        "list_",
-        "inspect_",
-        "probe_",
-        "validate_",
-        "compare_",
-        "detect_",
-        "summarize_",
-        "review_",
-        "is_",
-        "has_",
-    )
-    destructive_prefixes = (
-        "delete_",
-        "remove_",
-        "clear_",
-        "reset_",
-        "replace_",
-        "unlink_",
-        "quit",
-        "restart",
-        "close_",
-        "stop_",
-        "overwrite_",
-        "lift_",
-        "set_",
-        "load_",
-        "switch_",
-    )
-    write_prefixes = (
-        "add_",
-        "append_",
-        "apply_",
-        "assign_",
-        "copy_",
-        "create_",
-        "duplicate_",
-        "export_",
-        "import_",
-        "insert_",
-        "link_",
-        "move_",
-        "open_",
-        "render_",
-        "rename_",
-        "save_",
-        "start_",
-        "sync_",
-        "transcribe_",
-    )
-    if name.startswith(read_prefixes):
+    name = _verb_probe(tool_name)
+    if name.startswith(READ_PREFIXES):
         return READ_ONLY_TOOL
-    if name.startswith(destructive_prefixes):
+    if name.startswith(DESTRUCTIVE_PREFIXES):
         return DESTRUCTIVE_TOOL
-    if name.startswith(write_prefixes):
+    if name.startswith(WRITE_PREFIXES):
         return WRITE_TOOL
     return WRITE_TOOL
 

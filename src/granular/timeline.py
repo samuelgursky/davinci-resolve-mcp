@@ -878,9 +878,12 @@ def timeline_create_subtitles_from_audio(
     return {"success": bool(result)}
 
 
-@mcp.tool()
+# Explicit: the verb heuristic has no rule for "detect", and this one restructures
+# the timeline by adding cuts. The compound server rates timeline_ai.detect_scene_cuts
+# destructive; this is the same Resolve call, so it carries the same hint.
+@mcp.tool(annotations=DESTRUCTIVE_TOOL)
 def timeline_detect_scene_cuts() -> Dict[str, Any]:
-    """Detect scene cuts in the current timeline."""
+    """Detect scene cuts in the current timeline. DESTRUCTIVE — adds cuts to the timeline."""
     _, tl, err = _get_timeline()
     if err:
         return err
