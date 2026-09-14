@@ -2,6 +2,56 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.4.1 — the safety ratchet stops scanning only half the project
+
+The write-enforcement ratchet read `src/server.py` and nothing else. The granular
+server's 387 tools were covered by no guard at all — not a risk table, not the
+destructive registry, not the ratchet. That is how `ti_copy_grades` reached
+`TimelineItem.CopyGrades`, which replaces a node graph with no recovery version,
+behind nothing. v4.3.0 fixed that one tool by hand; nothing would have caught the
+next one.
+
+### Added
+
+- **`tests/test_write_enforcement_ratchet.py` now scans both servers.** They are
+  built differently, so the granular tests claim different things and the module
+  docstring says which is which:
+
+  - **Enforcement.** A granular tool that calls a symbol the ledger marks
+    `destroys_prior_work` must be gated — `acknowledge_trap` plus a confirm token —
+    and must be hinted destructive, so a client that refuses destructive tools never
+    reaches the confirmation at all. `TRAP_METHODS` is derived from `API_TRUTH`
+    rather than written out, so flagging a new entry extends this guard without
+    anyone remembering that this file exists.
+  - **Visibility.** The other **131** destructive-hinted granular tools are frozen
+    in a backlog that can only shrink. This does **not** make them safe: the
+    granular server has no enforcement hook — `@_destructive_op` wraps an
+    `(action, params)` signature granular tools do not have — so there is no
+    archive, no safe-mode refusal and no audit row behind any of them. The backlog
+    makes the number known, and makes the 132nd fail the suite.
+
+### Fixed
+
+- **The first draft of the gate detector could be fooled by dead code.** It looked
+  for the string `CONFIRM_TOKENS` in the function body, so deleting the token
+  *redemption* while leaving the *issuance* behind still read as gated — and issuing
+  a token nobody checks is exactly the regression worth catching. Gating is now
+  detected as AST call nodes (`issue` **and** `consume` on `CONFIRM_TOKENS`) plus
+  the real `acknowledge_trap` and `confirm_token` parameters.
+
+### Validation
+
+- Five regressions re-introduced deliberately, each confirming a guard fires rather
+  than passing vacuously: delete the redemption, drop `acknowledge_trap`, drop the
+  destructive annotation, add a new ungated destructive tool, and gate a tool still
+  on the backlog. **Two of the five passed against the first draft** — the dead-code
+  hole above, and a probe that silently did nothing because `ast.unparse` drops
+  comments. Both the guard and the probes were fixed until all five failed on
+  demand and passed on restore.
+- Full offline suite: **3,644 passed, 1 skipped, 0 failed**, 1,269 subtests. All
+  release drift guards green.
+- Tests only; no server behaviour changed and no Resolve call was made.
+
 ## What's New in v4.4.0 — 85 granular tools stop lying to clients about what they do
 
 Granular tools infer their MCP safety annotation from the leading verb in the tool

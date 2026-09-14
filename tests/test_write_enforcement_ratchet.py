@@ -301,7 +301,7 @@ TRAP_METHODS = frozenset(
     if entry.get("destroys_prior_work")
 )
 
-#: Granular tools hinted destructive with no gate in front of them, as of v4.5.0.
+#: Granular tools hinted destructive with no gate in front of them, as of v4.4.1.
 #: This list may only shrink. Gating one makes the stale-entry test fail until it is
 #: removed here; adding a new ungated destructive tool fails the other test.
 #:
