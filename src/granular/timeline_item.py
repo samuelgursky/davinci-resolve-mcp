@@ -24,6 +24,28 @@ def _has_audio_type(item):
             or _item_type(item, "GetMediaType") == "audio")
 
 
+def _copy_grade_item_summary(item, index):
+    """Name a clip well enough that a caller can recognise it in a confirmation.
+
+    Every read is guarded: Resolve fabricates a callable for ANY attribute name on
+    its objects, so `getattr(item, "Whatever")` is never absent and a bad call
+    raises rather than returning None. Absent detail degrades the preview; it must
+    not break the gate that the preview exists to serve.
+    """
+    summary = {"index": index}
+    for key, method in (("name", "GetName"), ("id", "GetUniqueId"), ("start", "GetStart")):
+        getter = getattr(item, method, None)
+        if not callable(getter):
+            continue
+        try:
+            value = getter()
+        except Exception:
+            continue
+        if value is not None:
+            summary[key] = value
+    return summary
+
+
 @mcp.resource("resolve://timeline-item/{timeline_item_id}")
 def get_timeline_item_properties(timeline_item_id: str) -> Dict[str, Any]:
     """Get properties of a specific timeline item by ID.
@@ -1891,30 +1913,106 @@ def ti_finalize_take(item_index: int = 0, track_type: str = "video", track_index
     return {"success": bool(item.FinalizeTake())}
 
 
-@mcp.tool()
-def ti_copy_grades(target_item_indices: List[int], track_type: str = "video", track_index: int = 1, source_item_index: int = 0) -> Dict[str, Any]:
-    """Copy grades from one timeline item to others.
+@mcp.tool(annotations=DESTRUCTIVE_TOOL)
+def ti_copy_grades(
+    target_item_indices: List[int],
+    track_type: str = "video",
+    track_index: int = 1,
+    source_item_index: int = 0,
+    acknowledge_trap: bool = False,
+    confirm_token: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Copy grades from one timeline item to others. DESTRUCTIVE — gated.
+
+    `TimelineItem.CopyGrades` replaces each target's ENTIRE node graph with the
+    source's and creates no version to go back to, so a target's hand grade is gone
+    with no way to recover it. Two acknowledgements are required, in order:
+    `acknowledge_trap=true` (you know what the API does), then `confirm_token` from
+    the preview this returns (you have seen which clips it resolved).
 
     Args:
         target_item_indices: List of 0-based indices of target items.
         track_type: 'video' or 'audio'. Default: 'video'.
         track_index: 1-based track index. Default: 1.
         source_item_index: 0-based source item index. Default: 0.
+        acknowledge_trap: Must be true — confirms you accept that target grades are
+            replaced unrecoverably.
+        confirm_token: Token from this tool's own confirmation_required response.
     """
     _, tl, err = _get_timeline()
     if err:
         return err
-    items = tl.GetItemListInTrack(track_type, track_index)
+    items = tl.GetItemListInTrack(track_type, track_index) or []
     if not items:
         return {"error": "No items in track"}
-    source = items[source_item_index] if source_item_index < len(items) else None
-    if not source:
-        return {"error": "Source item not found"}
-    targets = [items[i] for i in target_item_indices if i < len(items)]
-    if not targets:
-        return {"error": "No target items found"}
-    result = source.CopyGrades(targets)
-    return {"success": bool(result)}
+    if not isinstance(target_item_indices, list) or not target_item_indices:
+        return {"error": "target_item_indices must be a non-empty list of 0-based indices"}
+
+    # A negative index is a real Python index: `items[-1]` silently grades the LAST
+    # clip in the track. The old bounds check (`i < len(items)`) let every negative
+    # through, so an off-by-one produced a confident success on the wrong clip.
+    out_of_range = sorted({i for i in target_item_indices
+                           if not isinstance(i, int) or isinstance(i, bool)
+                           or i < 0 or i >= len(items)})
+    if out_of_range:
+        return {"error": f"target_item_indices out of range for {len(items)} items in "
+                         f"{track_type} track {track_index}: {out_of_range}",
+                "track_item_count": len(items)}
+    if not isinstance(source_item_index, int) or isinstance(source_item_index, bool) \
+            or source_item_index < 0 or source_item_index >= len(items):
+        return {"error": f"source_item_index {source_item_index} out of range for "
+                         f"{len(items)} items in {track_type} track {track_index}",
+                "track_item_count": len(items)}
+
+    source = items[source_item_index]
+    # De-duplicate while keeping caller order: grading one clip twice is never what
+    # was meant, and it would double-count the preview the caller confirms against.
+    seen = set()
+    ordered = [i for i in target_item_indices if not (i in seen or seen.add(i))]
+    if source_item_index in seen:
+        return {"error": "source_item_index is also listed in target_item_indices; "
+                         "copying a grade onto its own source is a no-op that would "
+                         "still consume a confirmation"}
+    targets = [items[i] for i in ordered]
+
+    gate_params = {
+        "target_item_indices": ordered,
+        "track_type": track_type,
+        "track_index": track_index,
+        "source_item_index": source_item_index,
+    }
+    if not acknowledge_trap:
+        return {
+            "success": False,
+            "error": "'ti_copy_grades' is refused: TimelineItem.CopyGrades replaces "
+                     "each target's entire node graph and leaves no version to "
+                     "restore. Re-send with acknowledge_trap=true if that is "
+                     "genuinely what you want.",
+            "known_limitation": [
+                "TimelineItem.CopyGrades replaces the target grade wholesale and "
+                "creates no recovery version (measured on Studio 19.1.3.7; "
+                "reconfirmed on Studio 21.1.0.14, issue #207)."
+            ],
+            "retry_with": {"acknowledge_trap": True},
+        }
+    if confirm_token is None and CONFIRM_TOKENS.required():
+        return CONFIRM_TOKENS.issue(
+            action="ti_copy_grades",
+            params=gate_params,
+            preview={
+                "operation": "ti_copy_grades",
+                "warning": "Replaces the entire node graph on every target item.",
+                "source": _copy_grade_item_summary(items[source_item_index], source_item_index),
+                "target_count": len(targets),
+                "targets": [_copy_grade_item_summary(items[i], i) for i in ordered],
+            },
+        )
+    blocked = CONFIRM_TOKENS.consume(action="ti_copy_grades", params={
+        **gate_params, "confirm_token": confirm_token})
+    if blocked:
+        return blocked
+    return {"success": bool(source.CopyGrades(targets)),
+            "target_count": len(targets)}
 
 
 @mcp.tool()

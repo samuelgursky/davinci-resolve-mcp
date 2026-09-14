@@ -28,6 +28,11 @@ from src.utils.app_control import (
     restart_resolve_app,
 )
 from src.utils.cdl import normalize_cdl_payload
+from src.utils.confirm_tokens import (
+    ConfirmTokenStore,
+    gate_required_from,
+    plain_error as plain_confirm_error,
+)
 from src.utils.cloud_operations import (
     create_cloud_project,
     import_cloud_project,
@@ -796,5 +801,51 @@ def _ai_result_payload(returned):
     if message:
         payload["error"] = message
     return payload
+
+
+# ── Confirmation gate ────────────────────────────────────────────────────────
+#
+# The granular server is a separate process from the compound one, so it holds its
+# own token table; a token minted here is not honoured there and vice versa. What
+# is shared is the implementation and the on/off policy, from
+# src/utils/confirm_tokens.py — the granular tools return plain dicts rather than
+# the compound envelope, so the error builder is the plain one.
+
+_MEDIA_ANALYSIS_PREFS_ENV = "DAVINCI_RESOLVE_MCP_MEDIA_ANALYSIS_PREFS"
+
+
+def _media_analysis_preferences():
+    """Read the same preferences file the compound server and setup write."""
+    import json
+
+    override = os.environ.get(_MEDIA_ANALYSIS_PREFS_ENV)
+    if override:
+        path = os.path.realpath(os.path.abspath(os.path.expanduser(override)))
+    else:
+        path = os.path.join(PROJECT_DIR, "logs", "media-analysis-preferences.json")
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+        return payload if isinstance(payload, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _confirm_token_required() -> bool:
+    """Honor the setup default destructive.require_confirm_token (default True)."""
+    try:
+        prefs = _media_analysis_preferences()
+    except Exception:
+        prefs = {}
+    return gate_required_from(prefs)
+
+
+CONFIRM_TOKENS = ConfirmTokenStore(
+    err=plain_confirm_error,
+    # Resolved per call so the preference can be changed without a server restart,
+    # and so tests can patch the module-level function.
+    required=lambda: _confirm_token_required(),
+)
+
 
 __all__ = [name for name in globals() if not name.startswith("__")]

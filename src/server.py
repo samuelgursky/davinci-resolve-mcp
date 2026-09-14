@@ -73,6 +73,10 @@ from src.utils.readback import verify_by_readback, verification_stats as _verifi
 from src.utils import operation_result as _operation_result
 from src.utils import operation_log as _operation_log
 from src.utils.bool_params import explicit_bool_param as _explicit_bool_param
+from src.utils.confirm_tokens import (
+    ConfirmTokenStore as _ConfirmTokenStore,
+    gate_required_from as _gate_required_from,
+)
 from src.utils.operation_result import (
     build_operation_envelope as _build_operation_envelope,
     get_envelope_mode as _get_envelope_mode,
@@ -1838,78 +1842,47 @@ import time as _time
 import uuid as _uuid
 
 
-_CONFIRM_TOKENS: Dict[str, Dict[str, Any]] = {}
-# The control panel runs on a threaded HTTP server, so issue/consume/gc of the
-# token table run on concurrent threads. Guard every access so a GC iteration
-# can't race a write and validate-then-pop stays atomic (EX4).
-_CONFIRM_TOKENS_LOCK = threading.RLock()
-_CONFIRM_TTL_SECONDS = 300
-
-
-def _confirm_token_fingerprint(action: str, params: Optional[Dict[str, Any]]) -> str:
-    """Stable hash of (action, params) that identifies one specific mutation request."""
-    payload = {"action": action, "params": params or {}}
-    # Strip the confirm_token itself if the caller is echoing it back to us.
-    if isinstance(payload["params"], dict) and "confirm_token" in payload["params"]:
-        payload["params"] = {k: v for k, v in payload["params"].items() if k != "confirm_token"}
-    try:
-        blob = json.dumps(payload, sort_keys=True, default=str)
-    except Exception:
-        blob = repr(payload)
-    return _hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
-
-
-def _confirm_token_gc():
-    """Drop expired tokens; called on every issue/validate. Caller may already
-    hold _CONFIRM_TOKENS_LOCK (RLock makes re-entry safe)."""
-    now = _time.time()
-    with _CONFIRM_TOKENS_LOCK:
-        expired = [t for t, rec in _CONFIRM_TOKENS.items() if rec.get("expires_at", 0) < now]
-        for t in expired:
-            _CONFIRM_TOKENS.pop(t, None)
-
-
 def _confirm_token_required() -> bool:
     """Honor setup default destructive.require_confirm_token (default True)."""
     try:
         prefs = _read_media_analysis_preferences() if "_read_media_analysis_preferences" in globals() else {}
     except Exception:
         prefs = {}
-    destructive = prefs.get("destructive") if isinstance(prefs.get("destructive"), dict) else {}
-    val = destructive.get("require_confirm_token", True)
-    if isinstance(val, str):
-        return val.strip().lower() not in {"0", "false", "no", "off"}
-    return bool(val)
+    return _gate_required_from(prefs)
+
+
+#: The token machinery itself lives in src/utils/confirm_tokens.py so the granular
+#: server can run the same gate in its own process — both surfaces reach
+#: TimelineItem.CopyGrades, and a second hand-rolled copy would drift. The names
+#: below stay module-level because callers and tests reach for them directly.
+#:
+#: `required` is a lambda, not `_confirm_token_required` itself, so the global is
+#: resolved on every call: tests patch `_confirm_token_required` on this module, and
+#: binding the function object here would capture the original and make that patch
+#: invisible to the store.
+_CONFIRM_TOKEN_STORE = _ConfirmTokenStore(
+    err=_err,
+    required=lambda: _confirm_token_required(),
+    ttl_seconds=300,
+)
+_CONFIRM_TOKENS: Dict[str, Dict[str, Any]] = _CONFIRM_TOKEN_STORE.tokens
+_CONFIRM_TOKENS_LOCK = _CONFIRM_TOKEN_STORE.lock
+_CONFIRM_TTL_SECONDS = _CONFIRM_TOKEN_STORE.ttl_seconds
+
+
+def _confirm_token_fingerprint(action: str, params: Optional[Dict[str, Any]]) -> str:
+    """Stable hash of (action, params) that identifies one specific mutation request."""
+    return _CONFIRM_TOKEN_STORE.fingerprint(action, params)
+
+
+def _confirm_token_gc():
+    """Drop expired tokens; called on every issue/validate."""
+    _CONFIRM_TOKEN_STORE.gc()
 
 
 def _issue_confirm_token(*, action: str, params: Optional[Dict[str, Any]], preview: Dict[str, Any]) -> Dict[str, Any]:
     """Mint a token. Returns the pending_user_decision response shape."""
-    token = _uuid.uuid4().hex
-    fp = _confirm_token_fingerprint(action, params)
-    expires_at = _time.time() + _CONFIRM_TTL_SECONDS
-    with _CONFIRM_TOKENS_LOCK:
-        _confirm_token_gc()
-        _CONFIRM_TOKENS[token] = {
-            "action": action,
-            "fingerprint": fp,
-            "expires_at": expires_at,
-            "issued_at": _time.time(),
-        }
-    body = _err(
-        f"This action is destructive. Re-call with confirm_token to proceed.",
-        code="CONFIRMATION_REQUIRED",
-        category="pending_user_decision",
-        retryable=False,
-        remediation=f"Re-call {action} with params.confirm_token={token!r}; token expires in {_CONFIRM_TTL_SECONDS}s.",
-    )
-    body.update({
-        "status": "confirmation_required",
-        "confirm_token": token,
-        "preview": preview,
-        "expires_at_epoch": expires_at,
-        "ttl_seconds": _CONFIRM_TTL_SECONDS,
-    })
-    return body
+    return _CONFIRM_TOKEN_STORE.issue(action=action, params=params, preview=preview)
 
 
 def _consume_confirm_token(*, action: str, params: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -1917,41 +1890,7 @@ def _consume_confirm_token(*, action: str, params: Optional[Dict[str, Any]]) -> 
     If missing/expired/mismatched, return a destructive_blocked error.
     If gating is disabled, return None (proceed).
     """
-    if not _confirm_token_required():
-        return None
-    token = (params or {}).get("confirm_token") or (params or {}).get("confirmToken")
-    if not token:
-        return None  # Caller is expected to call _issue_confirm_token in this case.
-    with _CONFIRM_TOKENS_LOCK:
-        _confirm_token_gc()
-        rec = _CONFIRM_TOKENS.pop(token, None)  # one-time use, atomic with gc
-    if rec is None:
-        return _err(
-            "confirm_token is invalid, expired, or was issued by a different "
-            "server instance (tokens are valid only on the instance that "
-            "issued them — e.g. a stdio-server token is not honored by the "
-            "networked server).",
-            code="CONFIRM_TOKEN_INVALID",
-            category="destructive_blocked",
-            retryable=False,
-            remediation=f"Re-call {action} without confirm_token on this instance to receive a fresh token.",
-        )
-    if rec.get("action") != action:
-        return _err(
-            f"confirm_token issued for {rec.get('action')!r}, not {action!r}",
-            code="CONFIRM_TOKEN_ACTION_MISMATCH",
-            category="destructive_blocked",
-            retryable=False,
-        )
-    if rec.get("fingerprint") != _confirm_token_fingerprint(action, params):
-        return _err(
-            "confirm_token does not match the current params",
-            code="CONFIRM_TOKEN_FINGERPRINT_MISMATCH",
-            category="destructive_blocked",
-            retryable=False,
-            remediation="Either re-issue the token with current params or roll back the params change.",
-        )
-    return None  # OK to proceed
+    return _CONFIRM_TOKEN_STORE.consume(action=action, params=params)
 
 
 def _activate_resolve_window() -> Dict[str, Any]:
