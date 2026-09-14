@@ -28657,8 +28657,8 @@ def timeline_item_color(action: str, params: Optional[Dict[str, Any]] = None) ->
     Raw mutators (UNSAFE direct mutation — prefer the safe_* sibling):
       set_cdl(cdl, ...) -> {success}
         UNSAFE. No validation; no dry_run. Prefer safe_set_cdl.
-      copy_grades(target_ids, ...) -> {success}
-        UNSAFE. No target existence check. Prefer safe_copy_grade.
+      copy_grades(target_ids, confirm_token?, ...) -> {success}
+        UNSAFE. Replaces target grades and is confirm-token gated. Prefer safe_copy_grade.
       export_lut(type, path, ...) -> {success}
         UNSAFE. No path sandboxing. Prefer safe_export_lut.
       reset_all_node_colors(...) -> {success}
@@ -28738,14 +28738,23 @@ def timeline_item_color(action: str, params: Optional[Dict[str, Any]] = None) ->
     elif action == "copy_grades":
         # Find target items by IDs
         _, tl, _ = _get_tl()
-        targets = []
-        target_ids = set(p["target_ids"])
+        target_ids = p["target_ids"]
         if tl:
-            for tt in ["video"]:
-                for ti in range(1, tl.GetTrackCount(tt) + 1):
-                    for it in (tl.GetItemListInTrack(tt, ti) or []):
-                        if it.GetUniqueId() in target_ids:
-                            targets.append(it)
+            targets, missing = _timeline_items_for_grade_copy(tl, target_ids)
+        else:
+            targets, missing = [], sorted(set(target_ids or []))
+        if "confirm_token" not in p and "confirmToken" not in p and _confirm_token_required():
+            preview = {
+                "operation": "timeline_item_color.copy_grades",
+                "warning": "Replaces the entire node graph on every successfully resolved target item.",
+                "target_count": len(targets),
+                "target_ids": [target.GetUniqueId() for target in targets],
+                "missing": missing,
+            }
+            return _issue_confirm_token(action="timeline_item_color.copy_grades", params=p, preview=preview)
+        blocked = _consume_confirm_token(action="timeline_item_color.copy_grades", params=p)
+        if blocked:
+            return blocked
         return {"success": bool(item.CopyGrades(targets))}
     elif action == "add_version":
         return {"success": bool(item.AddVersion(p["name"], p.get("type", 0)))}
