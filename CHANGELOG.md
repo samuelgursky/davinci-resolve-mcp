@@ -2,6 +2,70 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.4.0 — 85 granular tools stop lying to clients about what they do
+
+Granular tools infer their MCP safety annotation from the leading verb in the tool
+name. `delete_marker` matched; `ti_delete_marker` did not, because the namespace sits
+in front of the verb. Every `ti_*`, `timeline_*`, `graph_*` and `folder_*` tool —
+132 of them — matched no verb rule and took the plain-write default.
+
+### Fixed
+
+- **43 destructive granular tools were advertised as ordinary writes.** Deletes,
+  clears, resets, sets and loads — `ti_delete_version`, `ti_clear_flags`,
+  `timeline_delete_track`, `timeline_delete_clips`, `folder_clear_transcription`,
+  `graph_reset_all_grades` and the rest — all carried `destructiveHint=False`. A
+  client that gates on that hint, by prompting the user or refusing in a read-only
+  mode, was told every one of them was safe. v4.3.0 fixed this for `ti_copy_grades`
+  by hand; the other 42 needed the classifier fixed instead.
+
+- **42 pure readers were advertised as writes.** Every namespaced `*_get_*` tool —
+  `ti_get_info`, `timeline_get_markers`, `graph_get_lut` — claimed it could mutate,
+  so a read-only client had to refuse work it could safely have done.
+
+- **`detect_` was a read prefix, and `Timeline.DetectSceneCuts` adds cuts.** The one
+  tool using it, `timeline_detect_scene_cuts`, was only ever classified correctly
+  because its namespace hid it from that list — teaching the classifier to see past
+  the namespace would have promoted a tool that restructures the timeline to
+  read-only. `detect_` is gone from the read list and the tool is now explicitly
+  destructive, matching how the compound server already rates it.
+
+- **A bare `<namespace>_<verb>` name matched nothing even after stripping.** Every
+  verb prefix ends in `_`, so `timeline_export` became `export`, which does not start
+  with `export_`. `timeline_export`, `folder_export` and `timeline_duplicate` fell
+  through. The verb probe now appends the separator before matching.
+
+### Added
+
+- **`tests/test_granular_tool_annotations.py` guards the classifier, not the names.**
+  Three properties, each pinning a way this failed:
+  - no tool hinted `readOnlyHint=True` calls a Resolve method outside the
+    `Get`/`Is`/`Has`/`List`/`Find`/`Export` shapes — this is what catches the next
+    `DetectSceneCuts`, and it is a property of the body, not of the name;
+  - no namespaced tool falls through to the default, checked against the verb lists
+    directly so a deliberate `WRITE` passes and a fallthrough does not;
+  - the allow-list of ruleless verbs must stay exact in both directions, so an entry
+    that later matches a verb has to be removed rather than left to rot.
+
+### Changed
+
+- The verb lists move to module level in `src/granular/common.py`
+  (`READ_PREFIXES`, `DESTRUCTIVE_PREFIXES`, `WRITE_PREFIXES`) alongside
+  `NAMESPACE_PREFIXES` and `matches_a_verb`, so the guards can tell a deliberate
+  write from a name that matched nothing — the distinction the old code could not
+  express, and the reason the bug was invisible.
+
+### Validation
+
+- Full offline suite: **3,640 passed, 1 skipped, 0 failed**, 1,269 subtests.
+- Every one of the 387 granular tools was classified before and after. 85 changed:
+  43 write→destructive, 42 write→read. The 42 that became *less* restrictive are all
+  `*_get_*` getters, and the read-only guard above independently confirms none of
+  them calls a mutating Resolve method — that check is the evidence, not the naming.
+- All release drift guards green. No Resolve behaviour changed: annotations are
+  metadata a client reads before calling, and no tool body was touched except
+  `timeline_detect_scene_cuts`, which gained a docstring warning and its annotation.
+
 ## What's New in v4.3.0 — the granular grade-copy stops replacing grades on clips nobody named
 
 v4.2.0 gated the compound `timeline_item_color copy_grades`. Its granular twin,
