@@ -21,6 +21,7 @@ def get_gallery_album_name() -> Dict[str, Any]:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def set_gallery_album_name(name: str) -> Dict[str, Any]:
     """Set the name of the current gallery album.
 
@@ -89,6 +90,7 @@ def get_current_still_album() -> Dict[str, Any]:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def set_current_still_album(album_index: int) -> Dict[str, Any]:
     """Set the current still album by index.
 
@@ -206,6 +208,7 @@ def get_still_label(album_index: int, still_index: int) -> Dict[str, Any]:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def set_still_label(album_index: int, still_index: int, label: str) -> Dict[str, Any]:
     """Set the label of a still in a gallery album.
 
@@ -281,6 +284,7 @@ def export_stills_from_album(album_index: int, folder_path: str, file_prefix: st
 
 
 @mcp.tool()
+@granular_destructive_op()
 def delete_stills_from_album(album_index: int, still_indices: List[int]) -> Dict[str, Any]:
     """Delete stills from a gallery album.
 

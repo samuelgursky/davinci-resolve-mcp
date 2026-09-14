@@ -80,6 +80,7 @@ def link_proxy_media(clip_name: str, proxy_file_path: str) -> str:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def unlink_proxy_media(clip_name: str) -> str:
     """Unlink proxy media from a clip.
     
@@ -117,6 +118,7 @@ def unlink_proxy_media(clip_name: str) -> str:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def replace_clip(clip_name: str, replacement_path: str) -> str:
     """Replace a clip with another media file.
     
@@ -209,6 +211,7 @@ def transcribe_audio(clip_name: str, use_speaker_detection: Optional[bool] = Non
 
 
 @mcp.tool()
+@granular_destructive_op()
 def clear_transcription(clip_name: str) -> str:
     """Clear audio transcription for a clip.
     
@@ -267,6 +270,7 @@ def get_clip_metadata(clip_id: str, metadata_type: str = "") -> Dict[str, Any]:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def set_clip_metadata(clip_id: str, metadata: Dict[str, str]) -> Dict[str, Any]:
     """Set metadata on a Media Pool clip.
 
@@ -306,6 +310,7 @@ def get_clip_third_party_metadata(clip_id: str, metadata_key: str = "") -> Dict[
 
 
 @mcp.tool()
+@granular_destructive_op()
 def set_clip_third_party_metadata(clip_id: str, metadata: Dict[str, str]) -> Dict[str, Any]:
     """Set third-party metadata on a clip.
 
@@ -436,6 +441,7 @@ def get_clip_marker_custom_data(clip_id: str, frame_id: int) -> Dict[str, Any]:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def delete_clip_markers_by_color(clip_id: str, color: str) -> Dict[str, Any]:
     """Delete all markers of a specific color on a clip.
 
@@ -454,6 +460,7 @@ def delete_clip_markers_by_color(clip_id: str, color: str) -> Dict[str, Any]:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def delete_clip_marker_at_frame(clip_id: str, frame_id: int) -> Dict[str, Any]:
     """Delete a marker at a specific frame on a clip.
 
@@ -472,6 +479,7 @@ def delete_clip_marker_at_frame(clip_id: str, frame_id: int) -> Dict[str, Any]:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def delete_clip_marker_by_custom_data(clip_id: str, custom_data: str) -> Dict[str, Any]:
     """Delete a marker by its custom data string.
 
@@ -525,6 +533,7 @@ def get_clip_flag_list(clip_id: str) -> Dict[str, Any]:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def clear_clip_flags(clip_id: str, color: str = "") -> Dict[str, Any]:
     """Clear flags on a clip.
 
@@ -560,6 +569,7 @@ def get_clip_color(clip_id: str) -> Dict[str, Any]:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def set_clip_color(clip_id: str, color: str) -> Dict[str, Any]:
     """Set the clip color of a Media Pool item.
 
@@ -578,6 +588,7 @@ def set_clip_color(clip_id: str, color: str) -> Dict[str, Any]:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def clear_clip_color(clip_id: str) -> Dict[str, Any]:
     """Clear the clip color of a Media Pool item.
 
@@ -595,6 +606,7 @@ def clear_clip_color(clip_id: str) -> Dict[str, Any]:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def set_clip_property(clip_id: str, property_name: str, property_value: str) -> Dict[str, Any]:
     """Set a property on a Media Pool clip.
 
@@ -635,6 +647,7 @@ def get_clip_property(clip_id: str, property_name: str = "") -> Dict[str, Any]:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def set_media_pool_clip_name(clip_id: str, new_name: str) -> Dict[str, Any]:
     """Rename a Media Pool clip.
 
@@ -695,6 +708,7 @@ def link_clip_full_resolution_media(clip_id: str, full_res_media_path: str) -> D
 
 
 @mcp.tool()
+@granular_destructive_op()
 def unlink_clip_proxy_media(clip_id: str) -> Dict[str, Any]:
     """Unlink proxy media from a clip.
 
@@ -712,6 +726,7 @@ def unlink_clip_proxy_media(clip_id: str) -> Dict[str, Any]:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def replace_media_pool_clip(clip_id: str, new_file_path: str) -> Dict[str, Any]:
     """Replace a clip with a new media file.
 
@@ -737,6 +752,7 @@ def replace_media_pool_clip(clip_id: str, new_file_path: str) -> Dict[str, Any]:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def replace_media_pool_clip_preserve_sub_clip(clip_id: str, file_path: str) -> Dict[str, Any]:
     """Replace a clip's underlying media while preserving subclip extents.
 
@@ -825,6 +841,7 @@ def transcribe_clip_audio(clip_id: str) -> Dict[str, Any]:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def clear_clip_transcription(clip_id: str) -> Dict[str, Any]:
     """Clear transcription for a specific clip.
 
@@ -876,6 +893,7 @@ def get_clip_mark_in_out(clip_id: str) -> Dict[str, Any]:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def set_clip_mark_in_out(clip_id: str, mark_in: int, mark_out: int) -> Dict[str, Any]:
     """Set mark in/out points for a clip.
 
@@ -895,6 +913,7 @@ def set_clip_mark_in_out(clip_id: str, mark_in: int, mark_out: int) -> Dict[str,
 
 
 @mcp.tool()
+@granular_destructive_op()
 def clear_clip_mark_in_out(clip_id: str) -> Dict[str, Any]:
     """Clear mark in/out points for a clip.
 
@@ -937,6 +956,7 @@ def perform_clip_audio_classification(clip_id: str) -> Dict[str, Any]:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def clear_clip_audio_classification(clip_id: str) -> Dict[str, Any]:
     """Clear a clip's audio classification (Resolve 21+).
 
@@ -1000,6 +1020,7 @@ def analyze_clip_for_slate(clip_id: str, marker_color: str = "Blue") -> Dict[str
 
 
 @mcp.tool()
+@granular_destructive_op()
 def remove_clip_motion_blur(clip_id: str, deblur_option: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Render a motion-deblurred copy of a clip (Resolve 21+).
 

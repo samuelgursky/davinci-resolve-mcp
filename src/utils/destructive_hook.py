@@ -24,16 +24,19 @@ every tool that owns destructive actions is decorated.
 
 from __future__ import annotations
 
+import ast
 import functools
+import inspect
 import json
 import logging
 import os
+import textwrap
 import time
 import uuid
 from typing import Any, Callable, Dict, FrozenSet, Optional, Tuple
 
 from src.utils import analysis_runs, brain_edits, media_pool_changes, timeline_versioning
-from src.utils.api_truth import traps_for, trap_notice
+from src.utils.api_truth import API_TRUTH, traps_for, trap_notice
 from src.utils.bool_params import coerce_bool, explicit_bool_param
 from src.utils.execution_lifecycle import RiskAssessment, RiskLevel, classify_operation_risk
 
@@ -643,6 +646,7 @@ def _security_block_response(
     action: str,
     risk_level: str,
     recognised: bool = True,
+    override_hint: str = "params.allow_risky_operation=true",
 ) -> Dict[str, Any]:
     return {
         "success": False,
@@ -659,14 +663,14 @@ def _security_block_response(
             "message": (
                 f"Safe mode blocked {risk_level}-risk action "
                 f"'{tool_name}.{action}'. "
-                "Re-call with params.allow_risky_operation=true, or disable "
+                f"Re-call with {override_hint}, or disable "
                 "destructive.safe_mode in setup defaults."
             ),
             "code": "SAFE_MODE_BLOCKED",
             "category": "destructive_blocked",
             "retryable": False,
             "remediation": (
-                "Pass allow_risky_operation=true for this call after review, or "
+                f"Pass {override_hint} for this call after review, or "
                 "set destructive.safe_mode=false if this session should allow "
                 "high-risk destructive actions."
             ),
@@ -855,6 +859,215 @@ def _attach_trap_notices(result: Any, traps: list) -> Any:
         return result
     result.setdefault("known_limitation", [trap_notice(e) for e in traps])
     return result
+
+
+# ── Granular server enforcement ──────────────────────────────────────────────
+#
+# `destructive_op` above wraps a `(action, params)` signature. Granular tools do not
+# have one: each tool IS the operation, with its own keyword arguments. For four
+# releases that meant safe mode — the setting a user turns on precisely so that a
+# HIGH-risk call is refused — did nothing whatsoever on the granular server, and no
+# granular write produced an audit row. A user running with `destructive.safe_mode`
+# on was protected on one server and not the other, with nothing saying so.
+#
+# This decorator closes that. It deliberately does NOT archive: the compound hook
+# duplicates a timeline into an Archive bin before a mutation, and doing that around
+# 130-odd granular calls would bury a project in versions for operations as small
+# as setting a clip colour. What it does is the part that was missing and cannot be
+# recovered after the fact — refuse when policy says refuse, and record what ran.
+# A granular write therefore stays UNRECOVERABLE after it runs; the docs say so
+# rather than implying parity with the compound server.
+
+#: Verb → risk level, matching how the compound tables rate the same verbs
+#: (deletes and removes HIGH, sets and loads MEDIUM). Only HIGH and CRITICAL are
+#: refused by safe mode, so this mapping is what makes the setting mean anything
+#: on this surface.
+#:
+#: Values are `RiskLevel` VALUES, not names. The first draft wrote "HIGH" here while
+#: `SAFE_MODE_BLOCKED_RISK_LEVELS` holds `RiskLevel.HIGH.value == "high"`, so nothing
+#: ever matched and safe mode was cosmetic on every decorated tool. One vocabulary.
+GRANULAR_RISK_BY_VERB: Dict[str, str] = {
+    "delete": RiskLevel.HIGH.value,
+    "remove": RiskLevel.HIGH.value,
+    "clear": RiskLevel.HIGH.value,
+    "reset": RiskLevel.HIGH.value,
+    "replace": RiskLevel.HIGH.value,
+    "unlink": RiskLevel.HIGH.value,
+    "overwrite": RiskLevel.HIGH.value,
+    "quit": RiskLevel.HIGH.value,
+    "restart": RiskLevel.HIGH.value,
+    "set": RiskLevel.MEDIUM.value,
+    "load": RiskLevel.MEDIUM.value,
+    "switch": RiskLevel.MEDIUM.value,
+    "close": RiskLevel.MEDIUM.value,
+    "stop": RiskLevel.MEDIUM.value,
+    "lift": RiskLevel.MEDIUM.value,
+}
+
+#: Namespaces stripped before reading the verb, kept in step with
+#: `src.granular.common.NAMESPACE_PREFIXES`.
+_GRANULAR_NAMESPACES = ("ti_", "timeline_", "graph_", "folder_")
+
+#: Resolve method names the ledger marks `destroys_prior_work`. Derived from
+#: `API_TRUTH` rather than written out, so flagging a new entry raises every tool
+#: that reaches it without anyone remembering this table exists.
+GRANULAR_TRAP_METHODS: FrozenSet[str] = frozenset(
+    str(entry["symbol"]).rsplit(".", 1)[-1]
+    for entry in API_TRUTH
+    if entry.get("destroys_prior_work")
+)
+
+#: Name of the per-call safe-mode override, the same one the compound server reads
+#: from `params`. Granular tools have no `params` dict, so the decorator adds it to
+#: the tool's own signature.
+GRANULAR_OVERRIDE_PARAM = "allow_risky_operation"
+
+
+def _reaches_trap_symbol(fn: Callable[..., Any]) -> bool:
+    """Does the function body call a method the ledger says destroys prior work?
+
+    Read from source with `ast`, the same way the ratchet test finds it, so the
+    rating is mechanical: a tool that reaches `TimelineItem.CopyGrades` is HIGH
+    because the ledger says so, not because someone rated it by hand.
+    """
+    if not GRANULAR_TRAP_METHODS:
+        return False
+    try:
+        source = inspect.getsource(fn)
+    except (OSError, TypeError):
+        return False
+    try:
+        tree = ast.parse(textwrap.dedent(source))
+    except SyntaxError:
+        return False
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr in GRANULAR_TRAP_METHODS):
+            return True
+    return False
+
+
+def granular_risk_level(tool_name: str, fn: Optional[Callable[..., Any]] = None) -> str:
+    """Rate a granular tool: HIGH from the ledger if it reaches a trap symbol,
+    otherwise from its verb. Unknown verbs are MEDIUM, never HIGH.
+
+    Rating an unrecognised verb HIGH would let safe mode block writes nobody has
+    assessed, which is the failure `_safe_mode_allows` documents: over-blocking
+    teaches people to switch the setting off, and a setting left off protects
+    nothing.
+    """
+    if fn is not None and _reaches_trap_symbol(fn):
+        return RiskLevel.HIGH.value
+    name = (tool_name or "").lower()
+    for prefix in _GRANULAR_NAMESPACES:
+        if name.startswith(prefix):
+            name = name[len(prefix):]
+            break
+    return GRANULAR_RISK_BY_VERB.get(name.split("_", 1)[0], RiskLevel.MEDIUM.value)
+
+
+def _with_override_param(fn: Callable[..., Any]) -> Tuple[inspect.Signature, bool]:
+    """The tool's signature plus `allow_risky_operation: bool = False`.
+
+    FastMCP builds the MCP input schema from `inspect.signature`, which honours
+    `__signature__`, so this is what makes the override callable from a client.
+    Returns (signature, added): `added` is False when the tool already declares
+    the parameter itself, in which case it is passed straight through.
+    """
+    sig = inspect.signature(fn)
+    if GRANULAR_OVERRIDE_PARAM in sig.parameters:
+        return sig, False
+    extra = inspect.Parameter(
+        GRANULAR_OVERRIDE_PARAM,
+        inspect.Parameter.KEYWORD_ONLY,
+        default=False,
+        annotation=bool,
+    )
+    params = list(sig.parameters.values())
+    # Keyword-only goes after every positional-or-keyword parameter and before
+    # **kwargs, if the tool has one.
+    tail = [p for p in params if p.kind is inspect.Parameter.VAR_KEYWORD]
+    head = [p for p in params if p.kind is not inspect.Parameter.VAR_KEYWORD]
+    return sig.replace(parameters=head + [extra] + tail), True
+
+
+def granular_destructive_op(
+    tool_name: Optional[str] = None,
+    *,
+    risk_level: Optional[str] = None,
+) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    """Apply safe-mode policy and audit logging to one granular tool.
+
+    Wraps an arbitrary keyword signature rather than `(action, params)`. The call's
+    bound arguments become the `params` every downstream helper expects, and an
+    `allow_risky_operation` parameter is added to the tool's schema so a single
+    HIGH-risk call can be let through with safe mode still on — the same override
+    the compound server reads from `params`.
+
+    No archive is taken. A granular write cannot be recovered after it runs.
+    """
+
+    def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
+        action = tool_name or getattr(fn, "__name__", "unknown")
+        level = risk_level or granular_risk_level(action, fn)
+        signature, added_override = _with_override_param(fn)
+
+        @functools.wraps(fn)
+        def _inner(*args: Any, **kwargs: Any) -> Any:
+            override = False
+            if added_override and GRANULAR_OVERRIDE_PARAM in kwargs:
+                override = _coerce_bool(kwargs.pop(GRANULAR_OVERRIDE_PARAM), False)
+            # Bind so a positionally-passed argument is still audited by name. A
+            # signature mismatch must not turn a working tool into an error, so
+            # fall back to the keywords we were given.
+            try:
+                bound = inspect.signature(fn).bind_partial(*args, **kwargs)
+                bound.apply_defaults()
+                params: Dict[str, Any] = dict(bound.arguments)
+            except Exception:
+                params = dict(kwargs)
+            if added_override:
+                params[GRANULAR_OVERRIDE_PARAM] = override
+            elif GRANULAR_OVERRIDE_PARAM in params:
+                params[GRANULAR_OVERRIDE_PARAM] = _coerce_bool(
+                    params[GRANULAR_OVERRIDE_PARAM], False)
+
+            operation_id = f"op_{uuid.uuid4().hex[:12]}"
+            if not _safe_mode_allows(level, params, True):
+                _audit_security_event(
+                    operation_id=operation_id,
+                    tool_name="granular",
+                    action=action,
+                    risk_level=level,
+                    status="blocked",
+                    params=params,
+                    reason="safe_mode",
+                )
+                return _security_block_response(
+                    operation_id=operation_id,
+                    tool_name="granular",
+                    action=action,
+                    risk_level=level,
+                    override_hint=f"{GRANULAR_OVERRIDE_PARAM}=true",
+                )
+
+            result = fn(*args, **kwargs)
+            _audit_security_event(
+                operation_id=operation_id,
+                tool_name="granular",
+                action=action,
+                risk_level=level,
+                status="allowed",
+                params=params,
+                reason="no_archive_on_granular",
+            )
+            return _annotate_security(result, operation_id=operation_id, risk_level=level)
+
+        _inner.__signature__ = signature  # type: ignore[attr-defined]
+        _inner.__granular_destructive__ = (action, level)  # type: ignore[attr-defined]
+        return _inner
+
+    return decorator
 
 
 def destructive_op(tool_name: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:

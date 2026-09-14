@@ -111,6 +111,7 @@ def transcribe_folder_audio(folder_name: str, use_speaker_detection: Optional[bo
 
 
 @mcp.tool()
+@granular_destructive_op()
 def clear_folder_transcription(folder_name: str) -> str:
     """Clear audio transcription for all clips in a folder.
     
@@ -277,6 +278,7 @@ def folder_transcribe_audio(folder_path: str = "") -> Dict[str, Any]:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def folder_clear_transcription(folder_path: str = "") -> Dict[str, Any]:
     """Clear transcription for all clips in a Media Pool folder.
 
@@ -332,6 +334,7 @@ def folder_perform_audio_classification(folder_path: str = "") -> Dict[str, Any]
 
 
 @mcp.tool()
+@granular_destructive_op()
 def folder_clear_audio_classification(folder_path: str = "") -> Dict[str, Any]:
     """Clear audio classification for all clips in a Media Pool folder (Resolve 21+).
 
@@ -395,6 +398,7 @@ def folder_analyze_for_slate(folder_path: str = "", marker_color: str = "Blue") 
 
 
 @mcp.tool()
+@granular_destructive_op()
 def folder_remove_motion_blur(folder_path: str = "", deblur_option: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Render motion-deblurred copies of all clips in a folder (Resolve 21+).
 

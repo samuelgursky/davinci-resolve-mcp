@@ -420,6 +420,7 @@ def import_timeline_from_file(file_path: str, import_options: Optional[Dict[str,
 
 
 @mcp.tool()
+@granular_destructive_op()
 def delete_timelines_by_id(timeline_ids: List[str]) -> Dict[str, Any]:
     """Delete timelines by their unique IDs.
 
@@ -441,6 +442,7 @@ def delete_timelines_by_id(timeline_ids: List[str]) -> Dict[str, Any]:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def set_current_media_pool_folder(folder_path: str) -> Dict[str, Any]:
     """Navigate to a specific folder in the Media Pool.
 
@@ -458,6 +460,7 @@ def set_current_media_pool_folder(folder_path: str) -> Dict[str, Any]:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def delete_media_pool_clips(clip_ids: List[str]) -> Dict[str, Any]:
     """Delete clips from the Media Pool by their unique IDs.
 
@@ -489,6 +492,7 @@ def import_folder_from_file(file_path: str) -> Dict[str, Any]:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def delete_media_pool_folders(folder_names: List[str]) -> Dict[str, Any]:
     """Delete folders from the current Media Pool location.
 
@@ -589,6 +593,7 @@ def get_timeline_matte_list(item_index: int = 0, track_type: str = "video", trac
 
 
 @mcp.tool()
+@granular_destructive_op()
 def delete_clip_mattes(clip_id: str, matte_paths: List[str]) -> Dict[str, Any]:
     """Delete clip mattes from a MediaPoolItem.
 
@@ -671,6 +676,7 @@ def get_selected_clips() -> Dict[str, Any]:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def set_selected_clip(clip_id: str) -> Dict[str, Any]:
     """Set a clip as selected in the Media Pool.
 

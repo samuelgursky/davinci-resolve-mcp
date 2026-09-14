@@ -231,6 +231,7 @@ def get_timeline_items() -> List[Dict[str, Any]]:
 
 
 @mcp.tool(annotations=DESTRUCTIVE_TOOL)
+@granular_destructive_op()
 def set_timeline_item_transform(timeline_item_id: str, 
                                property_name: str, 
                                property_value: float) -> str:
@@ -294,6 +295,7 @@ def set_timeline_item_transform(timeline_item_id: str,
 
 
 @mcp.tool()
+@granular_destructive_op()
 def set_timeline_item_crop(timeline_item_id: str, 
                           crop_type: str, 
                           crop_value: float) -> str:
@@ -354,6 +356,7 @@ def set_timeline_item_crop(timeline_item_id: str,
 
 
 @mcp.tool()
+@granular_destructive_op()
 def set_timeline_item_composite(timeline_item_id: str, 
                                composite_mode: str = None, 
                                opacity: float = None) -> str:
@@ -441,6 +444,7 @@ def set_timeline_item_composite(timeline_item_id: str,
 
 
 @mcp.tool()
+@granular_destructive_op()
 def set_timeline_item_retime(timeline_item_id: str, 
                             speed: float = None, 
                             process: str = None) -> str:
@@ -519,6 +523,7 @@ def set_timeline_item_retime(timeline_item_id: str,
 
 
 @mcp.tool()
+@granular_destructive_op()
 def set_timeline_item_stabilization(timeline_item_id: str, 
                                    enabled: bool = None, 
                                    method: str = None,
@@ -610,6 +615,7 @@ def set_timeline_item_stabilization(timeline_item_id: str,
 
 
 @mcp.tool()
+@granular_destructive_op()
 def set_timeline_item_audio(timeline_item_id: str, 
                            volume: float = None, 
                            pan: float = None,
@@ -1057,6 +1063,7 @@ def modify_keyframe(timeline_item_id: str, property_name: str, frame: int, new_v
 
 
 @mcp.tool()
+@granular_destructive_op()
 def delete_keyframe(timeline_item_id: str, property_name: str, frame: int) -> str:
     """Delete a keyframe at the specified frame for a timeline item property.
     
@@ -1135,6 +1142,7 @@ def delete_keyframe(timeline_item_id: str, property_name: str, frame: int) -> st
 
 
 @mcp.tool()
+@granular_destructive_op()
 def set_keyframe_interpolation(timeline_item_id: str, property_name: str, frame: int, interpolation_type: str) -> str:
     """Set the interpolation type for a keyframe.
     
@@ -1325,6 +1333,7 @@ def ti_get_info(item_index: int = 0, track_type: str = "video", track_index: int
 
 
 @mcp.tool()
+@granular_destructive_op()
 def ti_set_name(name: str, item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
     """Rename a timeline item.
 
@@ -1360,6 +1369,7 @@ def ti_get_source_start_time(item_index: int = 0, track_type: str = "video", tra
 
 
 @mcp.tool()
+@granular_destructive_op()
 def ti_set_property(property_name: str, property_value: Any, item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
     """Set a property on a timeline item.
 
@@ -1435,6 +1445,7 @@ def ti_get_markers(item_index: int = 0, track_type: str = "video", track_index: 
 
 
 @mcp.tool()
+@granular_destructive_op()
 def ti_delete_markers_by_color(color: str, item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
     """Delete markers by color on a timeline item.
 
@@ -1449,6 +1460,7 @@ def ti_delete_markers_by_color(color: str, item_index: int = 0, track_type: str 
 
 
 @mcp.tool()
+@granular_destructive_op()
 def ti_delete_marker_at_frame(frame_id: int, item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
     """Delete a marker at a frame on a timeline item.
 
@@ -1463,6 +1475,7 @@ def ti_delete_marker_at_frame(frame_id: int, item_index: int = 0, track_type: st
 
 
 @mcp.tool()
+@granular_destructive_op()
 def ti_delete_marker_by_custom_data(custom_data: str, item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
     """Delete a marker by custom data on a timeline item.
 
@@ -1547,6 +1560,7 @@ def ti_get_flag_list(item_index: int = 0, track_type: str = "video", track_index
 
 
 @mcp.tool()
+@granular_destructive_op()
 def ti_clear_flags(color: str = "", item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
     """Clear flags from a timeline item.
 
@@ -1574,6 +1588,7 @@ def ti_get_clip_color(item_index: int = 0, track_type: str = "video", track_inde
 
 
 @mcp.tool()
+@granular_destructive_op()
 def ti_set_clip_color(color: str, item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
     """Set clip color of a timeline item.
 
@@ -1613,6 +1628,7 @@ def ti_set_clip_color(color: str, item_index: int = 0, track_type: str = "video"
 
 
 @mcp.tool()
+@granular_destructive_op()
 def ti_clear_clip_color(item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
     """Clear clip color from a timeline item.
 
@@ -1671,6 +1687,7 @@ def ti_export_fusion_comp(file_path: str, comp_index: int = 1, item_index: int =
 
 
 @mcp.tool()
+@granular_destructive_op()
 def ti_delete_fusion_comp(comp_name: str, item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
     """Delete a Fusion composition by name.
 
@@ -1685,6 +1702,7 @@ def ti_delete_fusion_comp(comp_name: str, item_index: int = 0, track_type: str =
 
 
 @mcp.tool()
+@granular_destructive_op()
 def ti_load_fusion_comp(comp_name: str, item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
     """Load a Fusion composition by name.
 
@@ -1758,6 +1776,7 @@ def ti_get_current_version(item_index: int = 0, track_type: str = "video", track
 
 
 @mcp.tool()
+@granular_destructive_op()
 def ti_delete_version(version_name: str, version_type: int = 0, item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
     """Delete a color version.
 
@@ -1773,6 +1792,7 @@ def ti_delete_version(version_name: str, version_type: int = 0, item_index: int 
 
 
 @mcp.tool()
+@granular_destructive_op()
 def ti_load_version(version_name: str, version_type: int = 0, item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
     """Load a color version.
 
@@ -1818,6 +1838,7 @@ def ti_get_version_name_list(version_type: int = 0, item_index: int = 0, track_t
 
 
 @mcp.tool()
+@granular_destructive_op()
 def ti_set_cdl(cdl: Dict[str, Any], item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
     """Set CDL (Color Decision List) values on a timeline item.
 
@@ -1887,6 +1908,7 @@ def ti_select_take(take_index: int, item_index: int = 0, track_type: str = "vide
 
 
 @mcp.tool()
+@granular_destructive_op()
 def ti_delete_take(take_index: int, item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
     """Delete a take by index.
 
@@ -1914,6 +1936,7 @@ def ti_finalize_take(item_index: int = 0, track_type: str = "video", track_index
 
 
 @mcp.tool(annotations=DESTRUCTIVE_TOOL)
+@granular_destructive_op()
 def ti_copy_grades(
     target_item_indices: List[int],
     track_type: str = "video",
@@ -2016,6 +2039,7 @@ def ti_copy_grades(
 
 
 @mcp.tool()
+@granular_destructive_op()
 def ti_set_clip_enabled(enabled: bool, item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
     """Enable or disable a timeline item.
 
@@ -2043,6 +2067,7 @@ def ti_update_sidecar(item_index: int = 0, track_type: str = "video", track_inde
 
 
 @mcp.tool()
+@granular_destructive_op()
 def ti_load_burn_in_preset(preset_name: str, item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
     """Load a burn-in preset for a timeline item.
 
@@ -2146,6 +2171,7 @@ def ti_get_voice_isolation_state(item_index: int = 0, track_type: str = "audio",
 
 
 @mcp.tool()
+@granular_destructive_op()
 def ti_set_voice_isolation_state(state: Dict[str, Any], item_index: int = 0, track_type: str = "audio", track_index: int = 1) -> Dict[str, Any]:
     """Set voice isolation state for a timeline item.
 
@@ -2166,6 +2192,7 @@ def ti_set_voice_isolation_state(state: Dict[str, Any], item_index: int = 0, tra
 
 
 @mcp.tool()
+@granular_destructive_op()
 def ti_reset_all_node_colors(item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
     """Reset node colors for all nodes in the active clip version.
 
@@ -2241,6 +2268,7 @@ def ti_assign_to_color_group(group_name: str, item_index: int = 0, track_type: s
 
 
 @mcp.tool()
+@granular_destructive_op()
 def ti_remove_from_color_group(item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
     """Remove a timeline item from its color group.
 
@@ -2379,6 +2407,7 @@ def ti_get_cache_status(item_index: int = 0, track_type: str = "video", track_in
 
 
 @mcp.tool()
+@granular_destructive_op()
 def ti_set_color_output_cache(enabled: bool, item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
     """Enable/disable color output cache for a timeline item.
 
@@ -2393,6 +2422,7 @@ def ti_set_color_output_cache(enabled: bool, item_index: int = 0, track_type: st
 
 
 @mcp.tool()
+@granular_destructive_op()
 def ti_set_fusion_output_cache(enabled: bool, item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
     """Enable/disable Fusion output cache for a timeline item.
 

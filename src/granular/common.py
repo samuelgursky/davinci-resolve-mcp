@@ -28,6 +28,7 @@ from src.utils.app_control import (
     restart_resolve_app,
 )
 from src.utils.cdl import normalize_cdl_payload
+from src.utils.destructive_hook import granular_destructive_op
 from src.utils.confirm_tokens import (
     ConfirmTokenStore,
     gate_required_from,

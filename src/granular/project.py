@@ -61,6 +61,7 @@ def get_project_setting(setting_name: str) -> Dict[str, Any]:
 
 
 @mcp.tool(annotations=DESTRUCTIVE_TOOL)
+@granular_destructive_op()
 def set_project_setting(setting_name: str, setting_value: Any) -> str:
     """Set a project setting to the specified value.
     
@@ -250,6 +251,7 @@ def save_project() -> str:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def close_project() -> str:
     """Close the current project.
     
@@ -306,6 +308,7 @@ def get_cache_settings() -> Dict[str, Any]:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def set_cache_mode(mode: str) -> str:
     """Set cache mode for the current project.
     
@@ -340,6 +343,7 @@ def set_cache_mode(mode: str) -> str:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def set_optimized_media_mode(mode: str) -> str:
     """Set optimized media mode for the current project.
     
@@ -374,6 +378,7 @@ def set_optimized_media_mode(mode: str) -> str:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def set_proxy_mode(mode: str) -> str:
     """Set proxy media mode for the current project.
     
@@ -408,6 +413,7 @@ def set_proxy_mode(mode: str) -> str:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def set_proxy_quality(quality: str) -> str:
     """Set proxy media quality for the current project.
     
@@ -442,6 +448,7 @@ def set_proxy_quality(quality: str) -> str:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def set_cache_path(path_type: str, path: str) -> str:
     """Set cache file path for the current project.
     
@@ -501,6 +508,7 @@ def create_cloud_project_tool(
 
 
 @mcp.tool()
+@granular_destructive_op()
 def load_cloud_project_tool(
     project_name: Optional[str] = None,
     project_media_path: Optional[str] = None,
@@ -594,6 +602,7 @@ def get_project_property_endpoint(property_name: str) -> Dict[str, Any]:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def set_project_property_tool(property_name: str, property_value: Any) -> str:
     """Set a project property value.
     
@@ -624,6 +633,7 @@ def get_timeline_format() -> Dict[str, Any]:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def set_timeline_format_tool(width: int, height: int, frame_rate: float, interlaced: bool = False) -> str:
     """Set timeline format (resolution and frame rate).
     
@@ -657,6 +667,7 @@ def get_superscale_settings_endpoint() -> Dict[str, Any]:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def set_superscale_settings_tool(enabled: bool, quality: int = 0) -> str:
     """Set SuperScale settings for the current project.
     
@@ -695,6 +706,7 @@ def get_color_settings_endpoint() -> Dict[str, Any]:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def set_color_science_mode_tool(mode: str) -> str:
     """Set color science mode for the current project.
     
@@ -714,6 +726,7 @@ def set_color_science_mode_tool(mode: str) -> str:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def set_color_space_tool(color_space: str, gamma: str = None) -> str:
     """Set timeline color space and gamma.
     
@@ -776,6 +789,7 @@ def archive_project(project_name: str, archive_path: str, archive_src_media: boo
 
 
 @mcp.tool()
+@granular_destructive_op()
 def delete_project(project_name: str) -> Dict[str, Any]:
     """Delete a project from the current database. WARNING: This is irreversible.
 
@@ -810,6 +824,7 @@ def create_project_folder(folder_name: str) -> Dict[str, Any]:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def delete_project_folder(folder_name: str) -> Dict[str, Any]:
     """Delete a folder from the current project folder location.
 
@@ -953,6 +968,7 @@ def get_database_list() -> Dict[str, Any]:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def set_current_database(db_info: Dict[str, str]) -> Dict[str, Any]:
     """Switch to a different database.
 
@@ -968,6 +984,7 @@ def set_current_database(db_info: Dict[str, str]) -> Dict[str, Any]:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def set_project_name(name: str) -> Dict[str, Any]:
     """Rename the current project.
 
@@ -1017,6 +1034,7 @@ def get_project_preset_list() -> Dict[str, Any]:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def set_project_preset(preset_name: str) -> Dict[str, Any]:
     """Apply a project preset to the current project.
 
@@ -1034,6 +1052,7 @@ def set_project_preset(preset_name: str) -> Dict[str, Any]:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def delete_render_job(job_id: str) -> Dict[str, Any]:
     """Delete a specific render job by its ID.
 
@@ -1085,6 +1104,7 @@ def start_rendering_jobs(job_ids: Optional[List[str]] = None, is_interactive_mod
 
 
 @mcp.tool()
+@granular_destructive_op()
 def stop_rendering() -> Dict[str, Any]:
     """Stop the current rendering process."""
     resolve = get_resolve()
@@ -1111,6 +1131,7 @@ def is_rendering_in_progress() -> Dict[str, Any]:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def load_render_preset(preset_name: str) -> Dict[str, Any]:
     """Load a render preset by name.
 
@@ -1145,6 +1166,7 @@ def save_as_new_render_preset(preset_name: str) -> Dict[str, Any]:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def delete_render_preset(preset_name: str) -> Dict[str, Any]:
     """Delete a render preset.
 
@@ -1162,6 +1184,7 @@ def delete_render_preset(preset_name: str) -> Dict[str, Any]:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def set_render_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
     """Set render settings for the current project.
 
@@ -1254,6 +1277,7 @@ def get_current_render_format_and_codec() -> Dict[str, Any]:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def set_current_render_format_and_codec(format_name: str, codec_name: str) -> Dict[str, Any]:
     """Set the render format and codec.
 
@@ -1297,6 +1321,7 @@ def get_current_render_mode() -> Dict[str, Any]:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def set_current_render_mode(mode: int) -> Dict[str, Any]:
     """Set the render mode.
 
@@ -1375,6 +1400,7 @@ def insert_audio_to_current_track(file_path: str) -> Dict[str, Any]:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def load_burn_in_preset(preset_name: str) -> Dict[str, Any]:
     """Load a burn-in preset by name for the project.
 
@@ -1441,6 +1467,7 @@ def add_color_group(group_name: str) -> Dict[str, Any]:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def delete_color_group(group_name: str) -> Dict[str, Any]:
     """Delete a color group from the current project.
 
@@ -1588,6 +1615,7 @@ def add_render_job() -> Dict[str, Any]:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def load_cloud_project(project_name: str, project_media_path: str, sync_mode: str = "proxy") -> Dict[str, Any]:
     """Load a cloud project from DaVinci Resolve cloud.
 

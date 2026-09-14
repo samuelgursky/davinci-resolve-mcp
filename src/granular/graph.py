@@ -25,6 +25,7 @@ def graph_get_num_nodes(item_index: int = 0, track_type: str = "video", track_in
 
 
 @mcp.tool()
+@granular_destructive_op()
 def graph_set_lut(node_index: int, lut_path: str, item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
     """Set LUT on a node in the color graph.
 
@@ -83,6 +84,7 @@ def graph_get_lut(node_index: int, item_index: int = 0, track_type: str = "video
 
 
 @mcp.tool()
+@granular_destructive_op()
 def graph_set_node_cache_mode(node_index: int, cache_value: int, item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
     """Set the cache mode on a node.
 
@@ -165,6 +167,7 @@ def graph_get_tools_in_node(node_index: int, item_index: int = 0, track_type: st
 
 
 @mcp.tool()
+@granular_destructive_op()
 def graph_set_node_enabled(node_index: int, is_enabled: bool, item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
     """Enable or disable a node.
 
@@ -226,6 +229,7 @@ def graph_apply_arri_cdl_lut(item_index: int = 0, track_type: str = "video", tra
 
 
 @mcp.tool()
+@granular_destructive_op()
 def graph_reset_all_grades(item_index: int = 0, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
     """Reset all grades on a timeline item's graph.
 

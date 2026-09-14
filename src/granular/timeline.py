@@ -105,6 +105,7 @@ def create_timeline(name: str) -> str:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def set_current_timeline(name: str) -> str:
     """Switch to a timeline by name.
     
@@ -203,6 +204,7 @@ def list_timelines_tool() -> List[str]:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def timeline_set_name(name: str) -> Dict[str, Any]:
     """Rename the current timeline.
 
@@ -217,6 +219,7 @@ def timeline_set_name(name: str) -> Dict[str, Any]:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def timeline_set_start_timecode(timecode: str) -> Dict[str, Any]:
     """Set the start timecode of the current timeline.
 
@@ -240,6 +243,7 @@ def timeline_get_current_timecode() -> Dict[str, Any]:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def timeline_set_current_timecode(timecode: str) -> Dict[str, Any]:
     """Set the playhead to a specific timecode.
 
@@ -288,6 +292,7 @@ def timeline_add_track(
 
 
 @mcp.tool()
+@granular_destructive_op()
 def timeline_delete_track(track_type: str, track_index: int) -> Dict[str, Any]:
     """Delete a track from the timeline.
 
@@ -318,6 +323,7 @@ def timeline_get_track_sub_type(track_type: str, track_index: int) -> Dict[str, 
 
 
 @mcp.tool()
+@granular_destructive_op()
 def timeline_set_track_enable(track_type: str, track_index: int, enabled: bool) -> Dict[str, Any]:
     """Enable or disable a track.
 
@@ -349,6 +355,7 @@ def timeline_get_is_track_enabled(track_type: str, track_index: int) -> Dict[str
 
 
 @mcp.tool()
+@granular_destructive_op()
 def timeline_set_track_lock(track_type: str, track_index: int, locked: bool) -> Dict[str, Any]:
     """Lock or unlock a track.
 
@@ -397,6 +404,7 @@ def timeline_get_voice_isolation_state(track_index: int) -> Dict[str, Any]:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def timeline_set_voice_isolation_state(track_index: int, state: Dict[str, Any]) -> Dict[str, Any]:
     """Set voice isolation state for an audio track.
 
@@ -415,6 +423,7 @@ def timeline_set_voice_isolation_state(track_index: int, state: Dict[str, Any]) 
 
 
 @mcp.tool()
+@granular_destructive_op()
 def timeline_delete_clips(clip_ids: List[str], track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
     """Delete clips from the timeline.
 
@@ -437,6 +446,7 @@ def timeline_delete_clips(clip_ids: List[str], track_type: str = "video", track_
 
 
 @mcp.tool()
+@granular_destructive_op()
 def timeline_set_clips_linked(clip_ids: List[str], linked: bool, track_type: str = "video", track_index: int = 1) -> Dict[str, Any]:
     """Link or unlink clips in the timeline.
 
@@ -533,6 +543,7 @@ def timeline_get_marker_custom_data(frame_id: int) -> Dict[str, Any]:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def timeline_delete_markers_by_color(color: str) -> Dict[str, Any]:
     """Delete all timeline markers of a specific color.
 
@@ -547,6 +558,7 @@ def timeline_delete_markers_by_color(color: str) -> Dict[str, Any]:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def timeline_delete_marker_at_frame(frame_id: int) -> Dict[str, Any]:
     """Delete a timeline marker at a specific frame.
 
@@ -561,6 +573,7 @@ def timeline_delete_marker_at_frame(frame_id: int) -> Dict[str, Any]:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def timeline_delete_marker_by_custom_data(custom_data: str) -> Dict[str, Any]:
     """Delete a timeline marker by custom data.
 
@@ -590,6 +603,7 @@ def timeline_get_track_name(track_type: str, track_index: int) -> Dict[str, Any]
 
 
 @mcp.tool()
+@granular_destructive_op()
 def timeline_set_track_name(track_type: str, track_index: int, name: str) -> Dict[str, Any]:
     """Set the name of a track.
 
@@ -882,6 +896,7 @@ def timeline_create_subtitles_from_audio(
 # the timeline by adding cuts. The compound server rates timeline_ai.detect_scene_cuts
 # destructive; this is the same Resolve call, so it carries the same hint.
 @mcp.tool(annotations=DESTRUCTIVE_TOOL)
+@granular_destructive_op()
 def timeline_detect_scene_cuts() -> Dict[str, Any]:
     """Detect scene cuts in the current timeline. DESTRUCTIVE — adds cuts to the timeline."""
     _, tl, err = _get_timeline()
@@ -987,6 +1002,7 @@ def timeline_get_mark_in_out() -> Dict[str, Any]:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def timeline_set_mark_in_out(mark_in: int, mark_out: int) -> Dict[str, Any]:
     """Set mark in/out points for the current timeline.
 
@@ -1002,6 +1018,7 @@ def timeline_set_mark_in_out(mark_in: int, mark_out: int) -> Dict[str, Any]:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def timeline_clear_mark_in_out() -> Dict[str, Any]:
     """Clear mark in/out points for the current timeline."""
     _, tl, err = _get_timeline()
@@ -1084,6 +1101,7 @@ def create_timeline_from_clips(
 
 
 @mcp.tool()
+@granular_destructive_op()
 def set_timeline_setting(setting_name: str, setting_value: str) -> Dict[str, Any]:
     """Set a timeline setting value.
 

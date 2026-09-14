@@ -9,6 +9,7 @@ from src.utils.resolve211_edits import validate_edit_options, validate_transitio
 from src.granular.common import (
     mcp, READ_ONLY_TOOL, WRITE_TOOL, DESTRUCTIVE_TOOL, get_resolve, get_current_project,
     _get_timeline, _get_timeline_item, _resolve_safe_dir, _find_clip_by_id, _requires_method, has_method,
+    granular_destructive_op,
 )
 
 
@@ -190,6 +191,7 @@ def set_timeline_item_fades(options: dict, track_type: str = "video", track_inde
 
 
 @mcp.tool(annotations=DESTRUCTIVE_TOOL)
+@granular_destructive_op()
 def add_timeline_item_transition(options: dict, track_type: str = "video", track_index: int = 1, item_index: int = 0) -> dict:
     """Add a native 21.1 transition using type/category/position/alignment and optional duration in frames. Returns actual span; clip indexes can change after insertion."""
     error = validate_transition_options(options)
@@ -207,6 +209,7 @@ def add_timeline_item_transition(options: dict, track_type: str = "video", track
 
 
 @mcp.tool(annotations=DESTRUCTIVE_TOOL)
+@granular_destructive_op()
 def create_multicam_clip(clip_ids: list[str], options: dict | None = None) -> dict:
     """Create native 21.1 multicam clips. Options follow MulticamOptions; named Resolve constants or numeric values accepted. Resolves every ID before writing."""
     _, p = get_current_project()
@@ -220,6 +223,7 @@ def create_multicam_clip(clip_ids: list[str], options: dict | None = None) -> di
 
 
 @mcp.tool(annotations=DESTRUCTIVE_TOOL)
+@granular_destructive_op()
 def flatten_timeline_item_multicam(grade_option: str = "FLATTEN_MULTICAM_COPY_GRADE", track_type: str = "video", track_index: int = 1, item_index: int = 0) -> dict:
     """Flatten a native multicam item using COPY_GRADE or RETAIN_GRADE_FROM_ANGLE. Re-query items after replacement."""
     if track_type not in ("video", "audio") or track_index < 1 or item_index < 0:
@@ -237,6 +241,7 @@ def flatten_timeline_item_multicam(grade_option: str = "FLATTEN_MULTICAM_COPY_GR
 
 
 @mcp.tool(annotations=DESTRUCTIVE_TOOL)
+@granular_destructive_op()
 def set_timeline_output_blanking(options: dict) -> dict:
     """Set native 21.1 timeline Top/Bottom/Left/Right pixel coordinates."""
     error = validate_blanking(options)
@@ -252,6 +257,7 @@ def set_timeline_output_blanking(options: dict) -> dict:
 
 
 @mcp.tool(annotations=DESTRUCTIVE_TOOL)
+@granular_destructive_op()
 def set_timeline_item_output_blanking(options: dict, track_type: str = "video", track_index: int = 1, item_index: int = 0) -> dict:
     """Set native 21.1 clip pixel coordinates. Disable timeline blanking inheritance first; this call does not change inheritance."""
     error = validate_blanking(options)
@@ -269,6 +275,7 @@ def set_timeline_item_output_blanking(options: dict, track_type: str = "video", 
 
 
 @mcp.tool(annotations=DESTRUCTIVE_TOOL)
+@granular_destructive_op()
 def set_timeline_item_use_timeline_for_output_blanking(use_timeline: bool, track_type: str = "video", track_index: int = 1, item_index: int = 0) -> dict:
     """Explicitly enable/disable native 21.1 timeline blanking inheritance for a clip."""
     if type(use_timeline) is not bool:
@@ -285,6 +292,7 @@ def set_timeline_item_use_timeline_for_output_blanking(use_timeline: bool, track
 
 
 @mcp.tool(annotations=DESTRUCTIVE_TOOL)
+@granular_destructive_op()
 def normalize_timeline_audio_level(item_ids: list[str], options: dict | None = None) -> dict:
     """Native 21.1 normalization of explicit audio timeline item IDs. Options normalizationMode, targetLevel (dBFS), targetLoudness (LKFS), setLevelMode; use get_normalize_audio_modes for names."""
     _, timeline, error = _get_timeline()
@@ -297,6 +305,7 @@ def normalize_timeline_audio_level(item_ids: list[str], options: dict | None = N
 
 
 @mcp.tool(annotations=DESTRUCTIVE_TOOL)
+@granular_destructive_op()
 def auto_align_timeline_clips(item_ids: list[str], options: dict | None = None) -> dict:
     """Native 21.1 alignment of current video/audio items by unique ID. Include linked audio AND video IDs to move both; selection is not expanded. Options SyncUsing and UseTrack accept documented constant names or integral native values."""
     _, timeline, error = _get_timeline()

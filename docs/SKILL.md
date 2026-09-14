@@ -362,6 +362,21 @@ and blanking in both server interfaces. These readers do not invoke setters.
 This skill document covers the **compound server** (the default). Each compound
 tool accepts an `action` string and an optional `params` object.
 
+**Granular writes are enforced, not archived.** Every destructive-hinted granular
+tool (deletes, clears, resets, replaces, sets, loads — 132 of the 387) runs
+through `granular_destructive_op`: while `destructive.safe_mode` is on, a
+HIGH-risk call is refused unless that call passes `allow_risky_operation: true`
+(a parameter the hook adds to each hooked tool's schema), and every call writes
+a row to the security audit log. Risk is read from the verb — `delete`/`remove`/
+`clear`/`reset`/`replace`/`unlink`/`quit`/`restart` are HIGH, `set`/`load`/
+`switch`/`close`/`stop` are MEDIUM — except that a tool reaching a symbol the
+`api_truth` ledger marks `destroys_prior_work` is HIGH from the ledger
+(`ti_copy_grades`), and those tools also keep their `acknowledge_trap` +
+confirm-token gate. What the granular hook does **not** do is duplicate the
+timeline into an Archive bin first, as the compound hook does: a granular write
+has no recovery version, and a refused-or-audited call is the whole of its
+safety. Use the compound server when you want the archive.
+
 ### The advanced server (`davinci-resolve-advanced-mcp`)
 
 The same package ships an optional third surface: an offline Node server (18

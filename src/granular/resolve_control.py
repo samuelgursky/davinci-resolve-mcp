@@ -228,6 +228,7 @@ def save_layout_preset_tool(preset_name: str) -> Dict[str, Any]:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def load_layout_preset_tool(preset_name: str) -> Dict[str, Any]:
     """Load a UI layout preset.
 
@@ -282,6 +283,7 @@ def import_layout_preset_tool(import_path: str, preset_name: str = None) -> Dict
 
 
 @mcp.tool()
+@granular_destructive_op()
 def delete_layout_preset_tool(preset_name: str) -> Dict[str, Any]:
     """Delete a layout preset.
 
@@ -325,6 +327,7 @@ def get_app_state_endpoint() -> Dict[str, Any]:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def quit_app(force: bool = False, save_project: bool = True) -> str:
     """
     Quit DaVinci Resolve application.
@@ -346,6 +349,7 @@ def quit_app(force: bool = False, save_project: bool = True) -> str:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def restart_app(wait_seconds: int = 5) -> str:
     """
     Restart DaVinci Resolve application.
@@ -515,6 +519,7 @@ def get_keyframe_mode() -> Dict[str, Any]:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def set_keyframe_mode(mode: int) -> Dict[str, Any]:
     """Set the keyframe mode in Resolve.
 
@@ -545,6 +550,7 @@ def get_fairlight_presets() -> Dict[str, Any]:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def quit_resolve() -> Dict[str, Any]:
     """Quit DaVinci Resolve. WARNING: This will close the application."""
     resolve = get_resolve()
@@ -591,6 +597,7 @@ def get_burn_in_preset_list() -> Dict[str, Any]:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def delete_burn_in_preset(preset_name: str) -> Dict[str, Any]:
     """Delete a data burn-in preset by name (Resolve 21.0.4+).
 
@@ -641,6 +648,7 @@ def save_user_preferences_preset(preset_name: str) -> Dict[str, Any]:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def load_user_preferences_preset(preset_name: str) -> Dict[str, Any]:
     """Load a user-preferences preset (Resolve 21.0.4+).
 
@@ -662,6 +670,7 @@ def load_user_preferences_preset(preset_name: str) -> Dict[str, Any]:
 
 
 @mcp.tool()
+@granular_destructive_op()
 def delete_user_preferences_preset(preset_name: str) -> Dict[str, Any]:
     """Delete a user-preferences preset by name (Resolve 21.0.4+).
 

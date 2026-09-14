@@ -27,22 +27,26 @@ The COMPOUND server (`src/server.py`) dispatches `(tool, action)` pairs through
 `@_destructive_op`, so a rating can be checked against a real enforcement hook —
 that is the first three tests.
 
-The GRANULAR server (`src/granular/`) has one function per tool, no `action`
-argument, and **no enforcement hook at all**: `@_destructive_op` wraps a
-`(action, params)` signature that granular tools do not have, and none of the risk
-tables or the destructive registry can key on them. For four releases that meant
-its 387 tools were scanned by nothing — which is how `ti_copy_grades` reached
-`TimelineItem.CopyGrades`, an API that replaces a node graph with no recovery
-version, behind no guard of any kind (v4.3.0).
+The GRANULAR server (`src/granular/`) has one function per tool and no `action`
+argument, so `@_destructive_op` — which wraps `(action, params)` — cannot apply.
+For four releases it had no enforcement hook at all, which is how `ti_copy_grades`
+reached `TimelineItem.CopyGrades`, an API that replaces a node graph with no
+recovery version, behind no guard of any kind (v4.3.0). Since v4.5.0 every
+destructive-hinted granular tool carries `@granular_destructive_op()`: safe-mode
+refusal plus an audit row, and NO archive — a granular write stays unrecoverable.
 
-So the granular tests below claim less, on purpose:
+Two tiers, kept separate on purpose, because enforcement and confirmation are
+different things (the compound server registers 148 destructive actions and has
+24 confirm-token sites):
 
-  * a tool that calls a symbol the ledger marks `destroys_prior_work` MUST be
-    gated — that is a real enforcement check, and the one that would have caught
-    `ti_copy_grades` mechanically rather than by someone reading the file;
-  * every other destructive-hinted granular tool is frozen in a backlog that can
-    only shrink. That is a VISIBILITY ratchet, not an enforcement one. It does not
-    make those 131 tools safe; it makes the 132nd fail the suite.
+  * ENFORCEMENT — every destructive-hinted tool must carry the hook, placed INSIDE
+    `@mcp.tool` so the schema FastMCP reads is the wrapper's. The backlog of
+    unhooked tools is frozen at empty; a new destructive tool without the hook
+    fails the suite.
+  * CONFIRMATION — a tool that calls a symbol the ledger marks `destroys_prior_work`
+    must ALSO ask twice: `acknowledge_trap` plus a confirm token bound to the
+    resolved targets, and it takes HIGH from the ledger rather than from its verb.
+    The enforcement hook does not satisfy this test, and must not.
 """
 
 from __future__ import annotations
@@ -55,7 +59,7 @@ from pathlib import Path
 from src.granular.common import _annotations_for_tool_name
 from src.utils import destructive_hook
 from src.utils.api_truth import API_TRUTH
-from src.utils.execution_lifecycle import RiskClassificationHook, classify_operation_risk
+from src.utils.execution_lifecycle import RiskClassificationHook, RiskLevel, classify_operation_risk
 
 SERVER = Path(__file__).resolve().parents[1] / "src" / "server.py"
 GRANULAR = Path(__file__).resolve().parents[1] / "src" / "granular"
@@ -301,146 +305,12 @@ TRAP_METHODS = frozenset(
     if entry.get("destroys_prior_work")
 )
 
-#: Granular tools hinted destructive with no gate in front of them, as of v4.4.1.
-#: This list may only shrink. Gating one makes the stale-entry test fail until it is
-#: removed here; adding a new ungated destructive tool fails the other test.
-#:
-#: These are NOT safe. Each one mutates, and nothing on the granular server enforces
-#: anything about it — no archive, no safe-mode refusal, no audit row. The list is
-#: here so the number is known and cannot quietly grow.
-UNGATED_GRANULAR_DESTRUCTIVE = frozenset({
-    "add_timeline_item_transition",
-    "auto_align_timeline_clips",
-    "clear_clip_audio_classification",
-    "clear_clip_color",
-    "clear_clip_flags",
-    "clear_clip_mark_in_out",
-    "clear_clip_transcription",
-    "clear_folder_transcription",
-    "clear_transcription",
-    "close_project",
-    "create_multicam_clip",
-    "delete_burn_in_preset",
-    "delete_clip_marker_at_frame",
-    "delete_clip_marker_by_custom_data",
-    "delete_clip_markers_by_color",
-    "delete_clip_mattes",
-    "delete_color_group",
-    "delete_keyframe",
-    "delete_layout_preset_tool",
-    "delete_media_pool_clips",
-    "delete_media_pool_folders",
-    "delete_project",
-    "delete_project_folder",
-    "delete_render_job",
-    "delete_render_preset",
-    "delete_stills_from_album",
-    "delete_timelines_by_id",
-    "delete_user_preferences_preset",
-    "flatten_timeline_item_multicam",
-    "folder_clear_audio_classification",
-    "folder_clear_transcription",
-    "folder_remove_motion_blur",
-    "graph_reset_all_grades",
-    "graph_set_lut",
-    "graph_set_node_cache_mode",
-    "graph_set_node_enabled",
-    "load_burn_in_preset",
-    "load_cloud_project",
-    "load_cloud_project_tool",
-    "load_layout_preset_tool",
-    "load_render_preset",
-    "load_user_preferences_preset",
-    "normalize_timeline_audio_level",
-    "quit_app",
-    "quit_resolve",
-    "remove_clip_motion_blur",
-    "replace_clip",
-    "replace_media_pool_clip",
-    "replace_media_pool_clip_preserve_sub_clip",
-    "restart_app",
-    "set_cache_mode",
-    "set_cache_path",
-    "set_clip_color",
-    "set_clip_mark_in_out",
-    "set_clip_metadata",
-    "set_clip_property",
-    "set_clip_third_party_metadata",
-    "set_color_science_mode_tool",
-    "set_color_space_tool",
-    "set_current_database",
-    "set_current_media_pool_folder",
-    "set_current_render_format_and_codec",
-    "set_current_render_mode",
-    "set_current_still_album",
-    "set_current_timeline",
-    "set_gallery_album_name",
-    "set_keyframe_interpolation",
-    "set_keyframe_mode",
-    "set_media_pool_clip_name",
-    "set_optimized_media_mode",
-    "set_project_name",
-    "set_project_preset",
-    "set_project_property_tool",
-    "set_project_setting",
-    "set_proxy_mode",
-    "set_proxy_quality",
-    "set_render_settings",
-    "set_selected_clip",
-    "set_still_label",
-    "set_superscale_settings_tool",
-    "set_timeline_format_tool",
-    "set_timeline_item_audio",
-    "set_timeline_item_composite",
-    "set_timeline_item_crop",
-    "set_timeline_item_output_blanking",
-    "set_timeline_item_retime",
-    "set_timeline_item_stabilization",
-    "set_timeline_item_transform",
-    "set_timeline_item_use_timeline_for_output_blanking",
-    "set_timeline_output_blanking",
-    "set_timeline_setting",
-    "stop_rendering",
-    "ti_clear_clip_color",
-    "ti_clear_flags",
-    "ti_delete_fusion_comp",
-    "ti_delete_marker_at_frame",
-    "ti_delete_marker_by_custom_data",
-    "ti_delete_markers_by_color",
-    "ti_delete_take",
-    "ti_delete_version",
-    "ti_load_burn_in_preset",
-    "ti_load_fusion_comp",
-    "ti_load_version",
-    "ti_remove_from_color_group",
-    "ti_reset_all_node_colors",
-    "ti_set_cdl",
-    "ti_set_clip_color",
-    "ti_set_clip_enabled",
-    "ti_set_color_output_cache",
-    "ti_set_fusion_output_cache",
-    "ti_set_name",
-    "ti_set_property",
-    "ti_set_voice_isolation_state",
-    "timeline_clear_mark_in_out",
-    "timeline_delete_clips",
-    "timeline_delete_marker_at_frame",
-    "timeline_delete_marker_by_custom_data",
-    "timeline_delete_markers_by_color",
-    "timeline_delete_track",
-    "timeline_detect_scene_cuts",
-    "timeline_set_clips_linked",
-    "timeline_set_current_timecode",
-    "timeline_set_mark_in_out",
-    "timeline_set_name",
-    "timeline_set_start_timecode",
-    "timeline_set_track_enable",
-    "timeline_set_track_lock",
-    "timeline_set_track_name",
-    "timeline_set_voice_isolation_state",
-    "unlink_clip_proxy_media",
-    "unlink_proxy_media",
-})
+#: Granular tools hinted destructive with no enforcement hook in front of them.
+#: Emptied in v4.5.0 — it held 131 entries at v4.4.1. It stays declared so that the
+#: two ratchet tests keep their shape: a new destructive-hinted tool that skips the
+#: hook fails `test_no_new_ungated_destructive_granular_tool`, and anything added
+#: here must come with a written reason and comes off again the moment it is hooked.
+UNGATED_GRANULAR_DESTRUCTIVE: frozenset = frozenset()
 
 
 def _granular_tools():
@@ -476,8 +346,36 @@ def _granular_tools():
             gated = ({"issue", "consume"} <= confirm_calls
                      and "acknowledge_trap" in params
                      and "confirm_token" in params)
-            out[fn.name] = (explicit, called, gated)
+            # The enforcement hook, as a decorator CALL by name — a bare reference
+            # `@granular_destructive_op` (no parentheses) would wrap the tool in the
+            # decorator factory and register a tool that does nothing.
+            hook_positions = [i for i, d in enumerate(fn.decorator_list)
+                              if isinstance(d, ast.Call)
+                              and isinstance(d.func, ast.Name)
+                              and d.func.id == "granular_destructive_op"]
+            tool_positions = [i for i, d in enumerate(fn.decorator_list)
+                              if isinstance(d, ast.Call) and getattr(d.func, "attr", "") == "tool"]
+            enforced = bool(hook_positions)
+            # Decorators apply bottom-up: a lower index is the OUTER wrapper. The hook
+            # must sit below @mcp.tool so FastMCP registers the wrapper (and its
+            # `allow_risky_operation` parameter), not the bare function.
+            hook_inside = enforced and all(h > t for h in hook_positions for t in tool_positions)
+            out[fn.name] = (explicit, called, gated, enforced, hook_inside)
     return out
+
+
+def _live_tool(name: str):
+    """The registered function object for a granular tool, hook and all."""
+    import importlib
+    for path in sorted(GRANULAR.glob("*.py")):
+        if path.stem.startswith("__"):
+            continue
+        module = importlib.import_module(f"src.granular.{path.stem}")
+        fn = getattr(module, name, None)
+        # Star imports carry every name everywhere; only the defining module counts.
+        if callable(fn) and getattr(fn, "__module__", None) == module.__name__:
+            return fn
+    raise AssertionError(f"no granular module defines {name}")
 
 
 def _is_destructive(tool: str, explicit) -> bool:
@@ -501,7 +399,7 @@ class GranularWriteEnforcementTest(unittest.TestCase):
         """
         self.assertTrue(TRAP_METHODS, "no destroys_prior_work entries — guard is vacuous")
         ungated = [f"{tool} calls {sorted(called & TRAP_METHODS)}"
-                   for tool, (_explicit, called, gated) in sorted(self.tools.items())
+                   for tool, (_explicit, called, gated, _enforced, _inside) in sorted(self.tools.items())
                    if (called & TRAP_METHODS) and not gated]
         self.assertEqual(ungated, [], "granular tools reaching an unrecoverable API "
                                       "with no acknowledge_trap + confirm_token gate")
@@ -512,22 +410,77 @@ class GranularWriteEnforcementTest(unittest.TestCase):
         A client that refuses destructive tools should never reach the confirmation
         at all, so the hint has to agree with the gate.
         """
-        mismatched = [tool for tool, (explicit, called, _gated) in sorted(self.tools.items())
+        mismatched = [tool for tool, (explicit, called, _gated, _enforced, _inside) in sorted(self.tools.items())
                       if (called & TRAP_METHODS) and not _is_destructive(tool, explicit)]
         self.assertEqual(mismatched, [], "reaches an unrecoverable API but is not "
                                          "hinted destructive")
 
+    def test_trap_symbol_tools_take_high_from_the_ledger(self) -> None:
+        """The one hand-rating refinement, made mechanical.
+
+        `ti_copy_grades` rates MEDIUM by verb (`copy` is in no table). The ledger
+        says the API it reaches destroys prior work, so the hook rates it HIGH from
+        the ledger — and safe mode refuses it. A trap tool must also carry the hook
+        at all: a confirm token asks the caller, the hook asks the policy.
+        """
+        for tool, (_explicit, called, _gated, enforced, _inside) in sorted(self.tools.items()):
+            if not (called & TRAP_METHODS):
+                continue
+            with self.subTest(tool=tool):
+                self.assertTrue(enforced, f"{tool} reaches a trap symbol but has no hook")
+                live = _live_tool(tool)
+                _action, level = live.__granular_destructive__
+                self.assertEqual(level, RiskLevel.HIGH.value)
+                self.assertEqual(destructive_hook.granular_risk_level(tool, live.__wrapped__),
+                                 RiskLevel.HIGH.value)
+                self.assertIn(level, destructive_hook.SAFE_MODE_BLOCKED_RISK_LEVELS)
+
+    def test_enforcement_hook_sits_inside_mcp_tool(self) -> None:
+        """`@mcp.tool()` outermost, `@granular_destructive_op()` inner.
+
+        The other way round FastMCP registers the bare function: no refusal, no
+        audit row, no override parameter — and every static count still reads as
+        hooked. Order is the whole difference between enforced and decorated.
+        """
+        wrong = sorted(tool for tool, (_e, _c, _g, enforced, inside) in self.tools.items()
+                       if enforced and not inside)
+        self.assertEqual(wrong, [], "hook placed outside @mcp.tool — it wraps nothing "
+                                    "FastMCP registers")
+
+    def test_every_hooked_tool_rates_a_level_safe_mode_can_read(self) -> None:
+        """The casing bug, pinned. The first draft rated verbs "HIGH" while the gate
+        holds `RiskLevel.HIGH.value == "high"`; nothing matched and safe mode was
+        cosmetic on every hooked tool."""
+        valid = {level.value for level in RiskLevel}
+        bad = []
+        for tool, (_e, _c, _g, enforced, _i) in sorted(self.tools.items()):
+            if not enforced:
+                continue
+            _action, level = _live_tool(tool).__granular_destructive__
+            if level not in valid:
+                bad.append(f"{tool}={level!r}")
+        self.assertEqual(bad, [], "risk levels that are not RiskLevel values")
+        self.assertTrue(set(destructive_hook.GRANULAR_RISK_BY_VERB.values()) <= valid)
+
     def _ungated_destructive(self) -> set:
-        return {tool for tool, (explicit, _called, gated) in self.tools.items()
-                if _is_destructive(tool, explicit) and not gated}
+        return {tool for tool, (explicit, _called, _gated, enforced, _inside) in self.tools.items()
+                if _is_destructive(tool, explicit) and not enforced}
 
     def test_no_new_ungated_destructive_granular_tool(self) -> None:
         new = sorted(self._ungated_destructive() - UNGATED_GRANULAR_DESTRUCTIVE)
-        self.assertEqual(new, [], "new destructive granular tool with no gate — add a "
-                                  "gate, or add it to the backlog with a reason")
+        self.assertEqual(new, [], "destructive granular tool with no enforcement hook — "
+                                  "add @granular_destructive_op() inside @mcp.tool(), or "
+                                  "add it to the backlog with a reason")
+
+    def test_hooked_tools_are_exactly_the_destructive_hinted_ones(self) -> None:
+        """The hook is not free — it adds a parameter and an audit row — so a plain
+        write or a reader must not carry it either."""
+        extra = sorted(tool for tool, (explicit, _c, _g, enforced, _i) in self.tools.items()
+                       if enforced and not _is_destructive(tool, explicit))
+        self.assertEqual(extra, [], "hooked but not hinted destructive")
 
     def test_the_granular_backlog_has_no_stale_entries(self) -> None:
-        """The ratchet: gating a tool takes it off the list, so the list only shrinks."""
+        """The ratchet: hooking a tool takes it off the list, so the list only shrinks."""
         stale = sorted(UNGATED_GRANULAR_DESTRUCTIVE - self._ungated_destructive())
         self.assertEqual(stale, [], "these are gated now — remove them from the backlog")
 
