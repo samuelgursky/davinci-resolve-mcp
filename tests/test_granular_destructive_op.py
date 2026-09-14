@@ -55,19 +55,42 @@ class RiskVocabulary(unittest.TestCase):
         self.assertNotIn("set", high)
 
     def test_namespace_is_stripped_before_the_verb_is_read(self):
-        self.assertEqual(dh.granular_risk_level("ti_clear_flags"), RiskLevel.HIGH.value)
-        self.assertEqual(dh.granular_risk_level("timeline_delete_track"), RiskLevel.HIGH.value)
-        self.assertEqual(dh.granular_risk_level("graph_set_lut"), RiskLevel.MEDIUM.value)
-        self.assertEqual(dh.granular_risk_level("set_clip_color"), RiskLevel.MEDIUM.value)
+        # Stripping is asserted directly, because a stripped name may now resolve
+        # against the compound ratings rather than the verb table.
+        self.assertEqual(dh._granular_action_name("ti_clear_flags"), "clear_flags")
+        self.assertEqual(dh._granular_action_name("timeline_delete_track"), "delete_track")
+        self.assertEqual(dh._granular_action_name("set_clip_color"), "set_clip_color")
+        # A stripped verb with no compound rating still falls through to the table.
+        self.assertEqual(dh.granular_risk_level("ti_delete_widget_thing"), RiskLevel.HIGH.value)
+        self.assertEqual(dh.granular_risk_level("ti_set_widget_thing"), RiskLevel.MEDIUM.value)
 
     def test_unknown_verbs_are_medium_never_high(self):
         self.assertEqual(dh.granular_risk_level("ti_frobnicate_thing"), RiskLevel.MEDIUM.value)
 
     def test_the_ledger_outranks_the_verb(self):
-        """`copy` is in no table, so by verb ti_copy_grades is MEDIUM. It reaches
-        `TimelineItem.CopyGrades`, which the ledger marks destroys_prior_work, so
-        the hook rates it HIGH — from the ledger, mechanically."""
-        self.assertEqual(dh.granular_risk_level("ti_copy_grades"), RiskLevel.MEDIUM.value)
+        """A body that reaches a destroys_prior_work symbol is HIGH regardless.
+
+        Demonstrated on a synthetic tool whose name matches no compound rating, so
+        only the verb and the ledger are in play: `copy` is in no verb table, so the
+        name alone says MEDIUM, and reading the body raises it to HIGH.
+        """
+        def copy_widget_grades(x: int = 1):
+            item = None
+            return item.CopyGrades([])
+
+        self.assertEqual(dh.granular_risk_level("copy_widget_grades"),
+                         RiskLevel.MEDIUM.value)
+        self.assertEqual(dh.granular_risk_level("copy_widget_grades", copy_widget_grades),
+                         RiskLevel.HIGH.value)
+
+    def test_ti_copy_grades_is_high_by_both_routes(self):
+        """The tool this whole effort started with, rated HIGH twice over.
+
+        The ledger raises it because the body reaches `TimelineItem.CopyGrades`, and
+        the compound tables rate `copy_grades` HIGH independently. It was MEDIUM
+        while the verb table was the only authority — safe mode let it through.
+        """
+        self.assertEqual(dh.granular_risk_level("ti_copy_grades"), RiskLevel.HIGH.value)
         self.assertEqual(dh.granular_risk_level("ti_copy_grades", ti.ti_copy_grades.__wrapped__),
                          RiskLevel.HIGH.value)
         self.assertEqual(ti.ti_copy_grades.__granular_destructive__[1], RiskLevel.HIGH.value)
@@ -126,13 +149,18 @@ class SafeModeRefusal(unittest.TestCase):
         self.assertEqual(result["security"]["risk_level"], RiskLevel.MEDIUM.value)
 
     def test_registered_high_tool_is_refused_before_touching_resolve(self):
-        """Not a probe: the real `ti_clear_flags`, as FastMCP registered it."""
+        """Not a probe: a real registered tool, rated HIGH.
+
+        `ti_clear_flags` used to stand here, but the compound server rates
+        `clear_flags` LOW and the hook now defers to that, so it is no longer
+        blockable — which is the point of the rating change, not a regression.
+        """
         never = mock.Mock(side_effect=AssertionError("reached Resolve"))
         with mock.patch.object(ti, "_get_timeline_item", never), \
              mock.patch.object(ti, "_get_timeline", never), \
              mock.patch.object(ti, "get_current_project", never), \
              mock.patch.object(ti, "get_resolve", never):
-            result = ti.ti_clear_flags(color="Blue")
+            result = ti.ti_delete_version(version_name="V1")
         self.assertEqual(result["status"], "blocked_by_security_policy")
         never.assert_not_called()
 
@@ -207,6 +235,126 @@ class SafeModeOff(unittest.TestCase):
         tool, _calls = _probe("ti_delete_marker_probe", boom)
         with self.assertRaisesRegex(ValueError, "resolve said no"):
             tool()
+
+
+class RatingPrefersAnAssessmentOverAGuess(unittest.TestCase):
+    """The verb table is a fallback, not the authority.
+
+    The same operation is exposed on both servers under the same action name, and
+    the compound tables are where someone actually assessed it. Guessing from the
+    verb disagreed with an established compound rating on 20 tools — and three of
+    those UNDER-rated, which is the direction that matters: the verb called
+    `ti_copy_grades` MEDIUM, so safe mode let through the one tool this whole
+    effort started with.
+    """
+
+    def test_under_rated_tools_now_take_the_compound_rating(self):
+        for tool, expected in (("ti_copy_grades", "high"),
+                               ("timeline_delete_clips", "critical"),
+                               ("timeline_detect_scene_cuts", "high")):
+            with self.subTest(tool=tool):
+                self.assertEqual(dh.granular_risk_level(tool), expected)
+
+    def test_over_rated_tools_come_back_down(self):
+        """Over-blocking is not the safe direction.
+
+        `_safe_mode_allows` documents why: a gate that refuses work the compound
+        server rates LOW teaches people to switch safe mode off, and a setting left
+        off protects nothing.
+        """
+        for tool in ("ti_clear_flags", "ti_reset_all_node_colors",
+                     "timeline_set_track_name", "ti_set_clip_color"):
+            with self.subTest(tool=tool):
+                self.assertEqual(dh.granular_risk_level(tool), "low")
+
+    def test_no_decorated_tool_still_disagrees_with_an_established_rating(self):
+        """The whole class, not the twenty examples."""
+        import ast
+        import pathlib
+
+        established = dh._established_compound_ratings()
+        offenders = []
+        granular = pathlib.Path(__file__).resolve().parent.parent / "src" / "granular"
+        for path in sorted(granular.glob("*.py")):
+            for node in ast.parse(path.read_text(encoding="utf-8")).body:
+                if not isinstance(node, ast.FunctionDef):
+                    continue
+                if not any("granular_destructive_op" in ast.unparse(d)
+                           for d in node.decorator_list):
+                    continue
+                compound = established.get(dh._granular_action_name(node.name))
+                if compound is None:
+                    continue
+                actual = dh.granular_risk_level(node.name)
+                # A trap-symbol tool may be raised ABOVE the compound rating; it may
+                # never sit below one.
+                if dh._RISK_ORDER[actual] < dh._RISK_ORDER[compound]:
+                    offenders.append(f"{node.name}: {actual} < compound {compound}")
+        self.assertEqual(offenders, [], "rated below the compound server's assessment")
+
+    def test_an_unrated_verb_still_falls_back_and_is_never_high(self):
+        self.assertEqual(dh.granular_risk_level("ti_frobnicate_widget"), "medium")
+
+
+class AuditRowsSayWhatActuallyHappened(unittest.TestCase):
+    """Three outcomes, three statuses. Two of them used to be wrong.
+
+    The audit log is the granular server's only record of what ran — there is no
+    archive behind it — so a row that overstates or is simply absent is the whole
+    artifact failing.
+    """
+
+    def setUp(self):
+        self.log = tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False)
+        self.log.close()
+        self.addCleanup(os.unlink, self.log.name)
+        patch = mock.patch.object(dh, "_audit_log_path", lambda: self.log.name)
+        patch.start()
+        self.addCleanup(patch.stop)
+        enabled = mock.patch.object(dh, "_audit_enabled", lambda: True)
+        enabled.start()
+        self.addCleanup(enabled.stop)
+
+    def _rows(self):
+        with open(self.log.name, encoding="utf-8") as handle:
+            return [json.loads(line) for line in handle if line.strip()]
+
+    def _tool(self, name, body):
+        body.__name__ = name
+        return dh.granular_destructive_op()(body)
+
+    def test_a_token_issuance_is_not_recorded_as_a_mutation(self):
+        tool = self._tool("ti_delete_probe",
+                          lambda x=1: {"status": "confirmation_required"})
+
+        tool()
+
+        self.assertEqual([r["status"] for r in self._rows()], ["pending_confirmation"])
+
+    def test_a_failure_is_recorded_rather_than_vanishing(self):
+        def boom(x=1):
+            raise RuntimeError("Resolve blew up")
+
+        with self.assertRaises(RuntimeError):
+            self._tool("ti_delete_boom_probe", boom)()
+
+        rows = self._rows()
+        self.assertEqual([r["status"] for r in rows], ["failed"])
+        self.assertEqual(rows[0]["reason"], "RuntimeError")
+
+    def test_the_hook_witnesses_a_failure_without_swallowing_it(self):
+        def boom(x=1):
+            raise KeyError("nope")
+
+        with self.assertRaises(KeyError):
+            self._tool("ti_delete_keyerror_probe", boom)()
+
+    def test_an_ordinary_write_is_still_allowed(self):
+        tool = self._tool("ti_delete_ok_probe", lambda x=1: {"success": True})
+
+        tool()
+
+        self.assertEqual([r["status"] for r in self._rows()], ["allowed"])
 
 
 class RefusalMatchesTheDeclaredReturnType(unittest.TestCase):
@@ -332,11 +480,11 @@ class McpSchema(unittest.TestCase):
                  mock.patch.object(ti, "_get_timeline", never), \
                  mock.patch.object(ti, "get_current_project", never), \
                  mock.patch.object(ti, "get_resolve", never):
-                blocked = await mcp.call_tool("ti_clear_flags", {"color": "Blue"})
+                blocked = await mcp.call_tool("ti_delete_version", {"version_name": "V1"})
                 with mock.patch.object(ti, "_get_timeline_item",
                                        return_value=(None, {"error": "stub"})):
                     allowed = await mcp.call_tool(
-                        "ti_clear_flags", {"color": "Blue", "allow_risky_operation": True})
+                        "ti_delete_version", {"version_name": "V1", "allow_risky_operation": True})
             return blocked, allowed
         blocked, allowed = asyncio.run(call())
         self.assertIn("SAFE_MODE_BLOCKED", str(blocked))

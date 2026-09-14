@@ -38,7 +38,12 @@ from typing import Any, Callable, Dict, FrozenSet, Optional, Tuple
 from src.utils import analysis_runs, brain_edits, media_pool_changes, timeline_versioning
 from src.utils.api_truth import API_TRUTH, traps_for, trap_notice
 from src.utils.bool_params import coerce_bool, explicit_bool_param
-from src.utils.execution_lifecycle import RiskAssessment, RiskLevel, classify_operation_risk
+from src.utils.execution_lifecycle import (
+    RiskAssessment,
+    RiskClassificationHook,
+    RiskLevel,
+    classify_operation_risk,
+)
 
 logger = logging.getLogger("resolve-mcp.destructive-hook")
 
@@ -947,22 +952,72 @@ def _reaches_trap_symbol(fn: Callable[..., Any]) -> bool:
     return False
 
 
+_RISK_ORDER = {
+    RiskLevel.LOW.value: 0,
+    RiskLevel.MEDIUM.value: 1,
+    RiskLevel.HIGH.value: 2,
+    RiskLevel.CRITICAL.value: 3,
+}
+
+
+@functools.lru_cache(maxsize=1)
+def _established_compound_ratings() -> Dict[str, str]:
+    """Compound risk ratings keyed by action name, most severe wins.
+
+    The same operation is often exposed on both servers under the same action
+    name — `clear_flags`, `delete_clips`, `copy_grades` — and the compound tables
+    are where someone actually assessed it. Guessing from the verb when a real
+    rating exists produced 20 disagreements, three of them UNDER-rating: the verb
+    table called `ti_copy_grades` MEDIUM (so safe mode let it through) while the
+    compound tables rate `copy_grades` HIGH, and `delete_clips` is CRITICAL there
+    against HIGH here.
+
+    Most-severe-wins because a name rated differently by two compound tools is
+    ambiguous, and a gate should resolve ambiguity by refusing more, not less.
+    """
+    ratings: Dict[str, str] = {}
+    for table, level in (
+        ("_CRITICAL_ACTIONS", RiskLevel.CRITICAL.value),
+        ("_HIGH_RISK_ACTIONS", RiskLevel.HIGH.value),
+        ("_MEDIUM_RISK_ACTIONS", RiskLevel.MEDIUM.value),
+        ("_LOW_RISK_ACTIONS", RiskLevel.LOW.value),
+    ):
+        for _tool, action in getattr(RiskClassificationHook, table, ()) or ():
+            current = ratings.get(action)
+            if current is None or _RISK_ORDER[level] > _RISK_ORDER[current]:
+                ratings[action] = level
+    return ratings
+
+
+def _granular_action_name(tool_name: str) -> str:
+    """The tool name with its namespace removed — the compound action name."""
+    name = (tool_name or "").lower()
+    for prefix in _GRANULAR_NAMESPACES:
+        if name.startswith(prefix):
+            return name[len(prefix):]
+    return name
+
+
 def granular_risk_level(tool_name: str, fn: Optional[Callable[..., Any]] = None) -> str:
-    """Rate a granular tool: HIGH from the ledger if it reaches a trap symbol,
-    otherwise from its verb. Unknown verbs are MEDIUM, never HIGH.
+    """Rate a granular tool, preferring an assessment over a guess.
+
+    In order: HIGH if the body reaches a symbol the ledger marks
+    `destroys_prior_work`; else the compound server's established rating for the
+    same action name; else the verb. Unknown verbs are MEDIUM, never HIGH.
 
     Rating an unrecognised verb HIGH would let safe mode block writes nobody has
     assessed, which is the failure `_safe_mode_allows` documents: over-blocking
     teaches people to switch the setting off, and a setting left off protects
-    nothing.
+    nothing. The compound lookup cuts both ways for the same reason — it raises
+    `copy_grades` to HIGH, and it lowers the seventeen `clear_*`/`set_*` tools the
+    verb table called HIGH while compound rates them LOW.
     """
     if fn is not None and _reaches_trap_symbol(fn):
         return RiskLevel.HIGH.value
-    name = (tool_name or "").lower()
-    for prefix in _GRANULAR_NAMESPACES:
-        if name.startswith(prefix):
-            name = name[len(prefix):]
-            break
+    name = _granular_action_name(tool_name)
+    established = _established_compound_ratings().get(name)
+    if established is not None:
+        return established
     return GRANULAR_RISK_BY_VERB.get(name.split("_", 1)[0], RiskLevel.MEDIUM.value)
 
 
@@ -1084,15 +1139,38 @@ def granular_destructive_op(
                     override_hint=f"{GRANULAR_OVERRIDE_PARAM}=true",
                 ))
 
-            result = fn(*args, **kwargs)
+            try:
+                result = fn(*args, **kwargs)
+            except BaseException as exc:
+                # A call that reached Resolve and then failed used to leave no row
+                # at all. The audit log is this surface's only record of what ran,
+                # so going silent precisely when something broke is the worst place
+                # to have a gap. Record it, then let the exception continue
+                # untouched — the hook is a witness, not a handler.
+                _audit_security_event(
+                    operation_id=operation_id,
+                    tool_name="granular",
+                    action=action,
+                    risk_level=level,
+                    status="failed",
+                    params=params,
+                    reason=type(exc).__name__,
+                )
+                raise
+
+            # A first call that mints a confirm token has not mutated anything, and
+            # recording it as "allowed" overstates what happened — the compound hook
+            # distinguishes the same case via _PENDING_CONFIRM_CHECK.
+            pending = (isinstance(result, dict)
+                       and result.get("status") == "confirmation_required")
             _audit_security_event(
                 operation_id=operation_id,
                 tool_name="granular",
                 action=action,
                 risk_level=level,
-                status="allowed",
+                status="pending_confirmation" if pending else "allowed",
                 params=params,
-                reason="no_archive_on_granular",
+                reason="confirm_token_required" if pending else "no_archive_on_granular",
             )
             return _annotate_security(result, operation_id=operation_id, risk_level=level)
 
