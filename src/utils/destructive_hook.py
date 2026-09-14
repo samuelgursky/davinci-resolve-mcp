@@ -991,6 +991,39 @@ def _with_override_param(fn: Callable[..., Any]) -> Tuple[inspect.Signature, boo
     return sig.replace(parameters=head + [extra] + tail), True
 
 
+def _returns_plain_string(fn: Callable[..., Any]) -> bool:
+    """Does this tool declare `-> str`?
+
+    FastMCP builds an output schema from the return annotation and validates
+    against it, so handing a dict to a tool annotated `-> str` raises ToolError
+    and the caller never sees the refusal — only a generic execution error with
+    none of its code or remediation. 27 granular tools declare `-> str`, and the
+    HIGH-risk ones among them are exactly the calls safe mode exists to stop.
+    """
+    annotation = getattr(fn, "__annotations__", {}).get("return")
+    return annotation is str or annotation in ("str", "'str'")
+
+
+def _block_for(fn: Callable[..., Any], block: Dict[str, Any]) -> Any:
+    """The refusal, shaped to the contract the tool declares.
+
+    A string-returning tool gets the message and its remediation as text. That
+    loses the machine-readable `code`, which is a real cost — but a refusal the
+    client can read beats a ToolError that discards it entirely, and it is the
+    only shape that tool's own schema will accept.
+    """
+    if not _returns_plain_string(fn):
+        return block
+    error = block.get("error") or {}
+    message = error.get("message") or "Blocked by destructive.safe_mode."
+    remediation = error.get("remediation")
+    code = error.get("code")
+    parts = [f"{code}: {message}" if code else message]
+    if remediation:
+        parts.append(remediation)
+    return " ".join(parts)
+
+
 def granular_destructive_op(
     tool_name: Optional[str] = None,
     *,
@@ -1043,13 +1076,13 @@ def granular_destructive_op(
                     params=params,
                     reason="safe_mode",
                 )
-                return _security_block_response(
+                return _block_for(fn, _security_block_response(
                     operation_id=operation_id,
                     tool_name="granular",
                     action=action,
                     risk_level=level,
                     override_hint=f"{GRANULAR_OVERRIDE_PARAM}=true",
-                )
+                ))
 
             result = fn(*args, **kwargs)
             _audit_security_event(

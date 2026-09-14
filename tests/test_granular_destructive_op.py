@@ -209,6 +209,89 @@ class SafeModeOff(unittest.TestCase):
             tool()
 
 
+class RefusalMatchesTheDeclaredReturnType(unittest.TestCase):
+    """A refusal the client cannot receive is not a refusal.
+
+    FastMCP builds an output schema from the return annotation and validates
+    against it, so returning the block dict from a tool annotated `-> str` raised
+    `ToolError` and the caller got a generic execution error carrying none of the
+    SAFE_MODE_BLOCKED code or remediation. The gate fired correctly and its answer
+    was destroyed on the way out. 27 granular tools declare `-> str`, and the
+    HIGH-risk ones among them are exactly the calls safe mode exists to stop —
+    `clear_folder_transcription`, `unlink_proxy_media`, `replace_clip`.
+    """
+
+    def _str_tool(self):
+        def fn(folder_name: str = "") -> str:
+            return "did the thing"
+        fn.__name__ = "clear_str_probe"
+        return dh.granular_destructive_op()(fn)
+
+    def _dict_tool(self):
+        def fn(folder_name: str = "") -> dict:
+            return {"success": True}
+        fn.__name__ = "clear_dict_probe"
+        return dh.granular_destructive_op()(fn)
+
+    def test_a_string_tool_is_refused_as_a_string(self):
+        with mock.patch.object(dh, "_safe_mode_enabled", lambda: True):
+            out = self._str_tool()(folder_name="x")
+
+        self.assertIsInstance(out, str)
+        self.assertIn("SAFE_MODE_BLOCKED", out)
+
+    def test_the_string_refusal_still_says_how_to_proceed(self):
+        """The machine-readable code is lost to the schema; the guidance must not be."""
+        with mock.patch.object(dh, "_safe_mode_enabled", lambda: True):
+            out = self._str_tool()(folder_name="x")
+
+        self.assertIn("allow_risky_operation", out)
+        self.assertIn("safe_mode", out)
+
+    def test_a_dict_tool_keeps_the_structured_envelope(self):
+        with mock.patch.object(dh, "_safe_mode_enabled", lambda: True):
+            out = self._dict_tool()(folder_name="x")
+
+        self.assertIsInstance(out, dict)
+        self.assertEqual(out["error"]["code"], "SAFE_MODE_BLOCKED")
+        self.assertEqual(out["status"], "blocked_by_security_policy")
+
+    def test_the_string_path_does_not_swallow_a_permitted_call(self):
+        with mock.patch.object(dh, "_safe_mode_enabled", lambda: True):
+            out = self._str_tool()(folder_name="x", allow_risky_operation=True)
+
+        self.assertEqual(out, "did the thing")
+
+    def test_no_shipped_tool_is_left_returning_a_dict_it_cannot_declare(self):
+        """The end-to-end shape, through the real registry rather than a probe.
+
+        Every destructive-decorated tool annotated `-> str` must hand back a string
+        when blocked, or FastMCP refuses it on the way out.
+        """
+        import ast
+        import pathlib
+
+        offenders = []
+        granular = pathlib.Path(__file__).resolve().parent.parent / "src" / "granular"
+        for path in sorted(granular.glob("*.py")):
+            for node in ast.parse(path.read_text(encoding="utf-8")).body:
+                if not isinstance(node, ast.FunctionDef) or not node.returns:
+                    continue
+                decorators = [ast.unparse(d) for d in node.decorator_list]
+                if not any("granular_destructive_op" in d for d in decorators):
+                    continue
+                if ast.unparse(node.returns) != "str":
+                    continue
+                fn = getattr(__import__(f"src.granular.{path.stem}", fromlist=["x"]),
+                             node.name, None)
+                if fn is None:
+                    continue
+                inner = getattr(fn, "__wrapped__", fn)
+                if not dh._returns_plain_string(inner):
+                    offenders.append(f"{path.name}:{node.name}")
+        self.assertEqual(offenders, [], "annotated -> str but the hook would return a dict")
+
+
 class McpSchema(unittest.TestCase):
     """`functools.wraps` plus `__signature__`: FastMCP sees the tool's own
     parameters and exactly one addition."""
