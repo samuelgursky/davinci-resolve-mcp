@@ -2,6 +2,92 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.5.0 — safe mode and the audit log reach the granular server
+
+v4.4.1 froze 131 destructive-hinted granular tools in a backlog and said plainly
+that nothing enforced anything about them: no safe-mode refusal, no audit row. A
+user running with `destructive.safe_mode` on was protected on the compound server
+and not on the `--full` one, with nothing saying so. This release works that
+backlog to zero.
+
+### Added
+
+- **`@granular_destructive_op()` on every destructive-hinted granular tool** — the
+  131 in the backlog plus `ti_copy_grades`, 132 in all. The hook does two things
+  and only two: while `destructive.safe_mode` is on, a HIGH-risk call is refused
+  unless that call passes `allow_risky_operation: true`; and every call, refused
+  or run, writes a row to the security audit log. A dict result is annotated with
+  `operation_id` and `security` exactly as compound results are; a list, string or
+  boolean result comes back untouched, because several granular tools return
+  those.
+- **`allow_risky_operation` is now a parameter on each hooked tool.** Granular
+  tools have no `params` object for the compound override to live in, so the hook
+  adds the parameter to the tool's own MCP schema (via `__signature__`, which
+  FastMCP honours). Every other property of every schema is unchanged — a test
+  diffs each hooked tool's advertised properties against its original signature.
+- **Risk is rated from the verb, with one ledger override.** `delete`, `remove`,
+  `clear`, `reset`, `replace`, `unlink`, `overwrite`, `quit` and `restart` are
+  HIGH; `set`, `load`, `switch`, `close`, `stop` and `lift` are MEDIUM; anything
+  else is MEDIUM, never HIGH, so an unassessed verb cannot make safe mode
+  over-block. A tool whose body reaches a symbol the `api_truth` ledger marks
+  `destroys_prior_work` takes HIGH from the ledger instead: `ti_copy_grades` rates
+  MEDIUM by verb and HIGH in fact, mechanically, because `CopyGrades` is in the
+  ledger. Flagging a new ledger entry re-rates every tool that reaches it.
+- **The ratchet now counts the hook, and keeps the tiers apart.**
+  `UNGATED_GRANULAR_DESTRUCTIVE` is empty; a new destructive-hinted tool without
+  the hook fails the suite, and so does a hook placed *outside* `@mcp.tool()`
+  (that order registers the bare function — decorated, and enforcing nothing).
+  The `destroys_prior_work` test still demands the full `acknowledge_trap` +
+  confirm-token gate; the enforcement hook does not satisfy it and must not.
+  Enforcement and confirmation are separate tiers — a two-step confirmation on
+  `ti_set_clip_color` would make the granular server unusable.
+- **`tests/test_granular_destructive_op.py`** — refusal, override, audit rows for
+  allowed and blocked calls, an unwritable audit path that cannot break the call,
+  list/scalar passthrough, positional arguments audited by name, and the override
+  travelling end-to-end through FastMCP's `call_tool`.
+
+### Not added, on purpose
+
+- **No archive.** The compound hook duplicates the timeline into an Archive bin
+  before mutating it. Doing that around 132 granular calls would bury a project in
+  versions for operations as small as a clip-colour change. A granular write
+  therefore has **no recovery version**: it is refused, or it is recorded — never
+  recovered. `docs/SKILL.md` and the README now say so rather than implying parity.
+
+### Fixed
+
+- **The first draft of the hook was cosmetic.** It rated verbs `"HIGH"` while the
+  safe-mode gate holds `RiskLevel.HIGH.value == "high"`; nothing matched, and a
+  HIGH tool ran with safe mode on. Reproduced with a probe before the fix, pinned
+  by a vocabulary test that asserts every rating is a `RiskLevel` value, and by a
+  refusal test that asserts the body never ran.
+- **The refusal names the right argument.** On the granular server the override
+  is `allow_risky_operation=true` on the call, not `params.allow_risky_operation`;
+  the message and remediation say which.
+
+### Validation
+
+- Static checks: API parity audit, api-limitations, read/write symmetry,
+  agent-rules, release-surface drift, `git diff --check`.
+- Full offline suite: 3679 passed, 1 skipped, 0 failed, 1412 subtests (v4.4.2 baseline plus the new guards; no count drop).
+- Every new guard was made to fail before it was trusted — nine regressions were
+  re-introduced one at a time and restored from a byte copy: hook removed (fails),
+  hook outside `@mcp.tool` (fails), bare `@granular_destructive_op` without
+  parentheses (the granular package no longer imports — pydantic cannot build a
+  schema for the decorator factory), `"HIGH"` casing (3 tests fail), a list result
+  mutated (fails), the ledger override removed (2 fail), the confirm-token
+  redemption dropped from `ti_copy_grades` with the hook still present (the
+  confirmation-tier test fails on its own), `__signature__` not set (133 fail — the
+  override never reaches the hook), and an audit write error re-raised (fails).
+- Live, DaVinci Resolve Studio 19.1.3.7, on a disposable project: with safe mode
+  on, `set_project_setting` (MEDIUM) ran, returned its plain string untouched and
+  was audited `allowed`; `delete_project` (HIGH) was refused with
+  `SAFE_MODE_BLOCKED` and audited `blocked`; the same call with
+  `allow_risky_operation=true` reached the body and was audited `allowed`. Resolve's
+  own `DeleteProject` returned False for the just-created project, which was also
+  absent from the folder listing before and after — an artifact of an unsaved new
+  project on a PostgreSQL database, not hook behaviour. No project was left behind.
+
 ## What's New in v4.4.2 — a refused option now says which one, and why
 
 Reported as [#232](https://github.com/samuelgursky/davinci-resolve-mcp/issues/232):
