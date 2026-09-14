@@ -1,6 +1,11 @@
 """Native normalization: validate explicit audio-item selection before writes."""
 import math
 
+from src.utils.option_errors import reject_option_keys
+
+#: The full NormalizeAudioOptions surface, per the shipped typed API stub.
+OPTION_KEYS = ('normalizationMode', 'targetLevel', 'targetLoudness', 'setLevelMode')
+
 
 def finite_number(value):
     try:
@@ -14,8 +19,9 @@ def normalize_audio(r, timeline, item_ids, options):
         return {'error':'item_ids must be a non-empty list of audio timeline item unique IDs'}
     if len(set(item_ids))!=len(item_ids):
         return {'error':'item_ids must not contain duplicates'}
-    if not isinstance(options,dict) or set(options)-{'normalizationMode','targetLevel','targetLoudness','setLevelMode'}:
-        return {'error':'Unknown normalization options or non-dictionary options'}
+    error = reject_option_keys(options, OPTION_KEYS, 'normalization')
+    if error:
+        return {'error': error}
     normalized=dict(options)
     for key,value in options.items():
         if key=='normalizationMode':

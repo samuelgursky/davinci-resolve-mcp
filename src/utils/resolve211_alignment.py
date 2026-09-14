@@ -1,4 +1,5 @@
 """Native alignment with strict ID resolution before any timeline mutation."""
+from src.utils.option_errors import reject_option_keys
 from src.utils.resolve211_multicam import resolve_constant
 
 OPTIONS = {
@@ -12,8 +13,9 @@ def auto_align(r, timeline, item_ids, options):
         return {'error':'item_ids must be a non-empty list of timeline item unique IDs'}
     if len(set(item_ids))!=len(item_ids):
         return {'error':'item_ids must not contain duplicates'}
-    if not isinstance(options,dict) or set(options)-set(OPTIONS):
-        return {'error':'options must contain only SyncUsing and/or UseTrack'}
+    error = reject_option_keys(options, tuple(OPTIONS), 'alignment')
+    if error:
+        return {'error': error}
     normalized={}
     for key,value in options.items():
         normalized[key],error=resolve_constant(r,value,OPTIONS[key])
