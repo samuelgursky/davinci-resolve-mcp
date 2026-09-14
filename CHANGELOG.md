@@ -2,6 +2,69 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.5.2 — granular safety stops guessing, and the audit log stops lying
+
+Two findings from a review of the v4.5.0 enforcement hook, both measured before and
+after rather than reasoned about.
+
+### Fixed
+
+- **The verb table was the sole authority on risk, and it disagreed with the
+  compound server on 20 tools.** The same operation is exposed on both servers under
+  the same action name, and the compound tables are where someone actually assessed
+  it. Three granular tools were rated **below** their compound assessment — the
+  direction that matters, because safe mode then lets them through:
+
+  | tool | was | now |
+  |---|---|---|
+  | `ti_copy_grades` | medium | **high** |
+  | `timeline_delete_clips` | high | **critical** |
+  | `timeline_detect_scene_cuts` | medium | **high** |
+
+  `ti_copy_grades` is the tool this entire effort began with — the one that reaches
+  `TimelineItem.CopyGrades` and replaces a node graph with no recovery version. The
+  verb table called it MEDIUM, because `copy` appears in no table, so safe mode did
+  not stop it.
+
+  The other seventeen were rated **above** their compound assessment: `clear_*` and
+  `set_*` tools called HIGH here while compound rates them LOW. That is not the safe
+  direction either — `_safe_mode_allows` documents why at length. A gate that refuses
+  work the compound server considers low-risk teaches people to switch safe mode off,
+  and a setting left off protects nothing.
+
+  Rating order is now: a symbol the ledger marks `destroys_prior_work`, then the
+  compound server's established rating for the same action name, then the verb.
+  Most-severe-wins where two compound tools rate one name differently, because a gate
+  should resolve ambiguity by refusing more rather than less.
+
+- **The audit log misreported two of its three outcomes.** It is this surface's only
+  record of what ran — there is no archive behind it — so a row that overstates, or
+  is simply absent, is the whole artifact failing:
+
+  - a first call that only minted a confirm token was recorded `allowed`, claiming a
+    mutation that had not happened. It is now `pending_confirmation`, matching what
+    the compound hook records for the same case.
+  - **an exception wrote no row at all**, so the log went silent exactly when
+    something broke. It is now `failed`, carrying the exception type. The hook is a
+    witness, not a handler: the exception is re-raised untouched.
+
+### Changed
+
+- Four existing tests asserted the old verb ratings. `ti_clear_flags` is LOW now
+  because compound rates `clear_flags` LOW — the change working, not a regression —
+  so the two behavioural tests moved to `ti_delete_version` as their HIGH exemplar,
+  and namespace stripping is asserted directly rather than through a rating that may
+  now come from the compound tables.
+
+### Validation
+
+- Full offline suite: **3,693 passed, 1 skipped, 0 failed**, 1,419 subtests.
+- Each fix was reverted in turn to confirm its guard fails rather than passing
+  vacuously — 9, 1 and 1 failures respectively, all green on restore.
+- A guard now walks every decorated tool and fails if any is rated *below* the
+  compound server's established assessment, so the class cannot return one tool at a
+  time. A trap-symbol tool may still be raised above it.
+
 ## What's New in v4.5.1 — the safe-mode refusal reaches the caller on 27 more tools
 
 v4.5.0 gave the granular server a working safe-mode gate. On 27 tools it then threw
