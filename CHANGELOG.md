@@ -2,6 +2,39 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.7.0 — the Resolve 21.1 transcription and timeline-item type reads are complete
+
+The read-only pick from the 21.1 tracker ([#207](https://github.com/samuelgursky/davinci-resolve-mcp/issues/207)), by @legionsound in [#237](https://github.com/samuelgursky/davinci-resolve-mcp/pull/237). Granular 387 → 389; compound unchanged at 37.
+
+### Added
+
+- **Granular `get_media_pool_item_transcription(clip_id, use_nested_clip_transcription=False)`** —
+  the complete 21.1 `MediaPoolItem.GetTranscription` dictionary with timed words. The
+  compound `media_pool_item get_transcription` already preferred it on 21.1; the
+  granular server had no way to reach it.
+- **Compound `timeline_item get_type` and granular
+  `get_timeline_item_type(track_type, track_index, item_index)`** — the native
+  lowercase `TimelineItem.GetType`, addressed by position like the other 21.1 item
+  readers (`get_speed`, `get_fades`), behind the same `_requires_method(..., "21.1")`
+  guard. The granular item-properties bundle already carried `type` by id through an
+  unguarded call; this is the position-addressed twin of the compound action.
+- `CODE_FLOORS` gains `MediaPoolItem.GetTranscription` and `TimelineItem.GetType` at
+  21.1. Docs, README counts, and the generated agent-rule files are regenerated.
+
+### Validation
+
+- Live on Studio 21.1.0.14 (contributor's measurement, reported): native, compound,
+  and granular agreed exactly — one English segment with 19 timed words, and item
+  type `video` — matching the 2026-09-09 measurement. `Transcription Status` reads
+  empty while processing and `Transcribed` when done.
+  `tests/live_resolve211_read_completion.py` reproduces it.
+- Unit-tested: argument validation, the missing-method refusal below 21.1, and both
+  interfaces forwarding the native value unchanged. The 19.1.3.7 floor refusal was
+  not re-measured on landing (the open project had no timeline or clips); the guard
+  is the one the twelve v2.216.0 readers measured refusing on 19.1.3.7.
+- Not tested: nested-clip transcription, non-English or multi-speaker audio,
+  `GetType` on audio/subtitle/generator/Fusion items, builds other than 21.1.0.14.
+
 ## What's New in v4.6.4 — `ripple="false"` no longer ripples
 
 ### Fixed
