@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from src.utils import operation_log
+from src.utils.bool_params import coerce_bool
 
 logger = logging.getLogger("resolve-mcp.execution-lifecycle")
 
@@ -407,7 +408,7 @@ class RiskClassificationHook(LifecycleHook):
         ):
             level = RiskLevel.HIGH
             destructive = True
-            if params.get("ripple", False):
+            if coerce_bool(params.get("ripple")):
                 radius = BlastRadius.TIMELINE
                 reasons.append("Ripple mode alters downstream timeline synchronization")
             elif tool_name == "graph":
