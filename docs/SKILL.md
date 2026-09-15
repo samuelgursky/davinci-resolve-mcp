@@ -830,7 +830,11 @@ lifecycle, settings, database, preset, and archive boundary helpers:
 - `safe_project_create(name, media_location_path?, dry_run?)`
 - `safe_project_export(name, path, with_stills_and_luts?, dry_run?)`
 - `safe_project_import(path, name, dry_run?)`
-- `safe_project_archive(name, path, src_media=false, render_cache=false, proxy_media=false, dry_run?)`
+- `safe_project_archive(name, path, src_media=false, render_cache=false, proxy_media=false, allow_media_archive?, acknowledge_trap?, dry_run?)`
+  — `src_media` and `proxy_media` crash Resolve 21.1.0.14 (reported, #233); they are refused
+  unless `acknowledge_trap=true`, and every flag defaults off on `archive` too. No
+  scriptable call has produced an archive on 19.1.3.7 or 21.1.0.14; see
+  `docs/reference/project-archive.md`.
 - `safe_project_restore(path, name, dry_run?)`
 - `safe_project_delete(name, close_current?, dry_run?)`
 - `safe_set_project_settings(settings, restore?, dry_run?)`

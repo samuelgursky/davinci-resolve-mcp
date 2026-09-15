@@ -2,7 +2,52 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
-## Unreleased
+## What's New in v4.6.0 — a default project archive no longer crashes Resolve 21.1
+
+The archive coverage measured by @legionsound in [#233](https://github.com/samuelgursky/davinci-resolve-mcp/pull/233), plus the offline node-graph relayout work that was sitting unreleased on `main`.
+
+### Fixed
+
+- **`project_manager` `archive` defaulted source media and render cache ON, and on
+  Resolve 21.1.0.14 a default call crashes Resolve.** ([#233](https://github.com/samuelgursky/davinci-resolve-mcp/pull/233), @legionsound)
+  Measured on Studio 21.1.0.14, one isolated call per case on a disposable project:
+  with source media and proxies off, `ProjectManager.ArchiveProject` returns `False`
+  instantly and writes nothing, open or closed, render cache on or off. With either
+  `isArchiveSrcMedia` or `isArchiveProxyMedia` on it creates an empty directory at the
+  target and Resolve SIGSEGVs in the same second (4 of 4; flags-off 0 of 5), the call
+  comes back through the bridge as `None`, and unsaved work in the open project is
+  lost. A file or folder already at the target survived every case byte for byte, so
+  the destination is never the casualty. 19.1.3.7 agrees where it was measured: this
+  repo's 2026-08-02 mode matrix recorded `False` for `.dra` and folder paths with
+  every flag off. **No scriptable call on either build has produced an archive.**
+  - New `src/utils/archive_guard.py`, shared by the compound `archive`,
+    `safe_project_archive`, and the granular `archive_project`: every flag defaults
+    off; only real booleans are accepted (`bool("false")` is `True`, and two of these
+    flags crash); `src_media` and `proxy_media` are refused unless
+    `acknowledge_trap=true`; the result reports the native return as observed —
+    `True`, `False` ("wrote nothing"), or `None` ("likely crashed; check Resolve is
+    running") — instead of a bare bool.
+  - `safe_project_archive` keeps `allow_media_archive` as the size guard and now also
+    needs `acknowledge_trap` for the crashing flags. One guards size, the other the
+    crash.
+  - Granular `archive_project` now carries the `DESTRUCTIVE_TOOL` annotation and
+    `@granular_destructive_op()`. It previously fell through to plain `WRITE_TOOL`
+    (`archive_` is in no verb table) with no gate.
+  - Both compound actions are in the `destructive_hook` registry and rated MEDIUM in
+    the risk sets, off the ratchet backlog; `safe_project_archive` honours `dry_run`
+    natively and is in `NATIVE_DRY_RUN_ACTIONS`. The refusal is at parameter level
+    rather than a symbol-level `destroys_prior_work`, because a flags-off call is a
+    harmless no-op that should not need acknowledgement.
+  - `api_truth`: new `ProjectManager.ArchiveProject` entry (`verified_on:
+    21.1.0.14`, tagged `reported` — the contributor's measurement) and
+    `ACTION_SYMBOLS` for both actions, so the fact rides on every result as a
+    `known_limitation`. `docs/reference/api-coverage.md` row corrected from "API
+    accepts; archiving is slow"; evidence in `docs/reference/project-archive.md` and
+    `docs/reference/evidence/project-archive-21.1.json`.
+  - Not measured: `RestoreProject` round-trip (nothing produced an archive to
+    restore), render cache on a project that has one, headless 21.1, builds after
+    21.1.0.14, Windows/Linux, and whether the media flags crash 19.1.3.7 — this
+    machine's Resolve was left alone rather than risked on it.
 
 ### Added
 
@@ -56,6 +101,7 @@ Release history for the DaVinci Resolve MCP Server. The latest release is summar
     the lane pitch is a documented default until a mixer graph is cleaned natively
     and read back. `test/node-layout-topology.test.mjs` pins the planner on rewired
     real bodies (fan-out + merge, slot order, key link, cycle, row mode, single node).
+
 
 ## What's New in v4.5.2 — granular safety stops guessing, and the audit log stops lying
 
