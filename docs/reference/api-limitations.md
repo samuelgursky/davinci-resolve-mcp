@@ -12,7 +12,7 @@ that none exists).
 
 **Verified on:** DaVinci Resolve Studio 21.0.2
 
-**Totals:** 41 missing capabilities, 53 bugs / unreliable behaviors.
+**Totals:** 41 missing capabilities, 54 bugs / unreliable behaviors.
 
 The authoritative source is the runtime-queryable `api_truth` ledger
 (`resolve_control api_truth "<query>"`); this document is generated from
@@ -776,3 +776,11 @@ values, or automation-hostile modal prompts.
 - **Behavior:** Gated on the Color page. Measured on all six pages: returns False from media, edit, fusion, fairlight and deliver, and True only from color. The refusal is a bare False with no reason. It does at least fail cleanly - no file is written on the failing pages, so there is no stale-file trap here.
 - **Workaround / current handling:** resolve.OpenPage('color') before the call and restore the prior page afterwards. Treat a False as 'you were on the wrong page' before suspecting the path.
 - **Tags:** page-gated, silent-failure, lut
+
+### ProjectManager.ArchiveProject
+
+- **Object:** `ProjectManager`
+- **Signature:** `(projectName, filePath, isArchiveSrcMedia=True, isArchiveRenderCache=True, isArchiveProxyMedia=False) -> bool`
+- **Behavior:** No scriptable call produces an archive. With source media and proxies off it returns False instantly and writes nothing, for an open or a closed project and with render cache on or off. With isArchiveSrcMedia or isArchiveProxyMedia on it creates an empty directory at the target and Resolve crashes (SIGSEGV) in the same second; the call comes back through the bridge as None and every later handle is dead. Four crashes, one of them in a Blackmagic Cloud library, share identical top stack frames in Fusion script-symbol teardown on the UI thread; a separate crash in the same session during DeleteProject/LoadProject had a different stack, so the signature belongs to the archive calls. Media-flag calls crashed 4 of 4, flags-off calls 0 of 5. A file already at the target survived every case byte for byte, including a crash, so the destination is never overwritten; unsaved work in the open project is what is lost. The native defaults turn source media on, so a default call crashes Resolve. Resolve logs nothing about the False returns.
+- **Workaround / current handling:** Keep isArchiveSrcMedia and isArchiveProxyMedia off unless you have verified the build, and save every open project first. Treat False as 'nothing archived', not as a path problem: a .dra and a folder-style path fail identically. Archive from the Project Manager UI when you need a real archive.
+- **Tags:** crash, unreliable-return, silent-failure, project, reported

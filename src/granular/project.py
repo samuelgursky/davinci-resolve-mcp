@@ -769,23 +769,45 @@ def get_project_info_endpoint() -> Dict[str, Any]:
     return get_project_info(current_project)
 
 
-@mcp.tool()
-def archive_project(project_name: str, archive_path: str, archive_src_media: bool = True, archive_render_cache: bool = True, archive_proxy_media: bool = False) -> Dict[str, Any]:
-    """Archive a project to a file with optional media.
+@mcp.tool(annotations=DESTRUCTIVE_TOOL)
+@granular_destructive_op()
+def archive_project(project_name: str, archive_path: str, archive_src_media: bool = False,
+                    archive_render_cache: bool = False, archive_proxy_media: bool = False,
+                    acknowledge_trap: bool = False) -> Dict[str, Any]:
+    """Archive a project to a file. On Resolve 21.1.0.14 this never produces an archive.
+
+    Measured: with source media and proxies off, ArchiveProject returns False and
+    writes nothing, open or closed. With either on it crashes Resolve and loses
+    unsaved work in the open project. So every flag defaults off, and the two
+    crashing flags are refused unless acknowledge_trap is true. The result
+    reports what the native call returned. See src/utils/archive_guard.py.
 
     Args:
         project_name: Name of the project to archive.
-        archive_path: Absolute path for the archive file (.dra).
-        archive_src_media: Include source media in archive. Default: True.
-        archive_render_cache: Include render cache. Default: True.
-        archive_proxy_media: Include proxy media. Default: False.
+        archive_path: Absolute path for the archive (.dra).
+        archive_src_media: Include source media. Crashes Resolve 21.1.0.14. Default: False.
+        archive_render_cache: Include render cache. Default: False.
+        archive_proxy_media: Include proxy media. Crashes Resolve 21.1.0.14. Default: False.
+        acknowledge_trap: Must be true to send either crashing flag.
     """
+    from src.utils import archive_guard
+    flags, flag_err = archive_guard.read_flags({
+        "src_media": archive_src_media, "render_cache": archive_render_cache,
+        "proxy_media": archive_proxy_media})
+    if flag_err:
+        return {"error": flag_err}
+    if not acknowledge_trap:
+        refused = archive_guard.crash_refusal("granular", "archive_project", flags)
+        if refused:
+            return refused
     resolve = get_resolve()
     if resolve is None:
         return {"error": "Not connected to DaVinci Resolve"}
     pm = resolve.GetProjectManager()
-    result = pm.ArchiveProject(project_name, archive_path, archive_src_media, archive_render_cache, archive_proxy_media)
-    return {"success": bool(result), "project_name": project_name, "archive_path": archive_path}
+    native = pm.ArchiveProject(project_name, archive_path, flags["src_media"],
+                               flags["render_cache"], flags["proxy_media"])
+    return archive_guard.outcome(native, flags, project_name=project_name,
+                                 archive_path=archive_path)
 
 
 @mcp.tool()
