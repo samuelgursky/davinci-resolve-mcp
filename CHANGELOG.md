@@ -2,6 +2,21 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.6.2 — the granular server's macOS temp-path redirect matches the compound server's
+
+### Fixed
+
+- **`_resolve_safe_dir` had two copies that disagreed on macOS.** ([#235](https://github.com/samuelgursky/davinci-resolve-mcp/pull/235), @Dev-next-gen)
+  The compound server redirects `/tmp`, `/tmp/...`, `/private/tmp` and `/private/tmp/...`
+  to `~/Documents/resolve-stills`, because Resolve's exporters fail silently into them
+  (live-verified 2026-07-03); the granular copy only knew `/var/` and `/private/var/`.
+  Two granular tools reach it with a `/tmp` path: `save_project`'s export fallback
+  stages in `tempfile.gettempdir()`, which is `/tmp` when `TMPDIR` is unset, and
+  `encrypt_dctl` resolves its output folder, so `/tmp` arrives as `/private/tmp`. The
+  granular helper now carries the same Darwin condition, and
+  `tests/test_granular_safe_dir.py` asserts both copies agree on a set of paths. Linux
+  and Windows are untouched.
+
 ## What's New in v4.6.1 — copy_grades refuses an all-missing target set before spending a confirmation
 
 ### Fixed
