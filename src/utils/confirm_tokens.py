@@ -39,6 +39,13 @@ DEFAULT_TTL_SECONDS = 300
 PREFERENCE_KEY = "require_confirm_token"
 PREFERENCE_SECTION = "destructive"
 
+#: Both spellings a caller may hand the token back under. `consume` reads either,
+#: and every gated action in the compound server treats either as "a token is
+#: present", so `fingerprint` has to ignore both: a spelling the fingerprint does
+#: not strip is an ordinary param, and the request looks different after issuance
+#: than it did before.
+TOKEN_PARAM_KEYS = ("confirm_token", "confirmToken")
+
 
 def gate_required_from(preferences: Optional[Dict[str, Any]]) -> bool:
     """Read `destructive.require_confirm_token` out of a preferences payload.
@@ -109,9 +116,10 @@ class ConfirmTokenStore:
         payload = {"action": action, "params": params or {}}
         # Strip the token itself if the caller is echoing it back to us, so the
         # fingerprint of "the request" is the same before and after issuance.
-        if isinstance(payload["params"], dict) and "confirm_token" in payload["params"]:
+        # Both spellings, not just the snake_case one: `consume` accepts either.
+        if isinstance(payload["params"], dict):
             payload["params"] = {
-                k: v for k, v in payload["params"].items() if k != "confirm_token"
+                k: v for k, v in payload["params"].items() if k not in TOKEN_PARAM_KEYS
             }
         try:
             blob = json.dumps(payload, sort_keys=True, default=str)
@@ -181,7 +189,8 @@ class ConfirmTokenStore:
         """
         if not self.required():
             return None
-        token = (params or {}).get("confirm_token") or (params or {}).get("confirmToken")
+        supplied = params or {}
+        token = next((supplied.get(key) for key in TOKEN_PARAM_KEYS if supplied.get(key)), None)
         if not token:
             return None  # Caller is expected to call issue() in this case.
         with self.lock:
