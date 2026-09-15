@@ -250,6 +250,8 @@ CODE_FLOORS: Dict[str, str] = {
     "Timeline.GetOutputBlanking": "21.1",
     "TimelineItem.GetSpeed": "21.1",
     "TimelineItem.GetFades": "21.1",
+    "MediaPoolItem.GetTranscription": "21.1",
+    "TimelineItem.GetType": "21.1",
     "TimelineItem.GetOutputBlanking": "21.1",
     "TimelineItem.GetUseTimelineForOutputBlanking": "21.1",
 

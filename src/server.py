@@ -26403,6 +26403,7 @@ def timeline_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
       set_fades(options, ...) -> {success} — native 21.1 FadeIn/FadeOut integer frames.
       get_speed(...) -> {speed} — documented on Resolve 21.1+.
       get_fades(...) -> {fades} — documented on Resolve 21.1+. Native frame durations.
+      get_type(...) -> {type} — native lowercase TimelineItem type documented on Resolve 21.1+.
       get_output_blanking(...) -> {blanking} — documented on Resolve 21.1+. Pixel coordinates; empty on a clip inheriting timeline blanking.
       get_use_timeline_for_output_blanking(...) -> {use_timeline} — documented on Resolve 21.1+.
       get_name(track_type?, track_index?, item_index?) -> {name}
@@ -26516,6 +26517,11 @@ def timeline_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
         if missing:
             return missing
         return {"fades": _ser(item.GetFades())}
+    if action == "get_type":
+        missing = _requires_method(item, "GetType", "21.1")
+        if missing:
+            return missing
+        return {"type": _ser(item.GetType())}
     if action == "get_output_blanking":
         missing = _requires_method(item, "GetOutputBlanking", "21.1")
         if missing:
@@ -26702,7 +26708,7 @@ def timeline_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
             return _err(f"Invalid interpolation. Must be one of: {', '.join(valid)}")
         return {"success": bool(item.SetKeyframeInterpolation(p["property"], p["frame"], p["interpolation"]))}
 
-    return _unknown(action, ["set_output_blanking","set_use_timeline_for_output_blanking","flatten_multicam","add_transition","set_speed","set_fades","get_speed","get_fades","get_output_blanking","get_use_timeline_for_output_blanking","get_name","get_property","set_property","get_duration","get_start","get_end","get_source_start_frame","get_source_end_frame","get_source_start_time","get_source_end_time","get_left_offset","get_right_offset","set_clip_enabled","get_clip_enabled","update_sidecar","get_unique_id","get_media_pool_item","get_stereo_convergence","get_stereo_left_window","get_stereo_right_window","get_linked_items","get_track_type_and_index","get_source_audio_mapping","load_burnin_preset","set_name","get_voice_isolation_state","set_voice_isolation_state","get_retime","set_retime","get_transform","set_transform","get_crop","set_crop","get_composite","set_composite","get_audio","set_audio","get_keyframes","add_keyframe","modify_keyframe","delete_keyframe","set_keyframe_interpolation"])
+    return _unknown(action, ["set_output_blanking","set_use_timeline_for_output_blanking","flatten_multicam","add_transition","set_speed","set_fades","get_speed","get_fades","get_type","get_output_blanking","get_use_timeline_for_output_blanking","get_name","get_property","set_property","get_duration","get_start","get_end","get_source_start_frame","get_source_end_frame","get_source_start_time","get_source_end_time","get_left_offset","get_right_offset","set_clip_enabled","get_clip_enabled","update_sidecar","get_unique_id","get_media_pool_item","get_stereo_convergence","get_stereo_left_window","get_stereo_right_window","get_linked_items","get_track_type_and_index","get_source_audio_mapping","load_burnin_preset","set_name","get_voice_isolation_state","set_voice_isolation_state","get_retime","set_retime","get_transform","set_transform","get_crop","set_crop","get_composite","set_composite","get_audio","set_audio","get_keyframes","add_keyframe","modify_keyframe","delete_keyframe","set_keyframe_interpolation"])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

@@ -58,6 +58,25 @@ def get_project_settings_presets() -> dict:
 
 
 @mcp.tool(annotations=READ_ONLY_TOOL)
+def get_media_pool_item_transcription(clip_id: str, use_nested_clip_transcription: bool = False) -> dict:
+    """Read the complete 21.1 transcription dictionary for one Media Pool item, including timed words."""
+    if not isinstance(clip_id, str) or not clip_id:
+        return {"error": "clip_id must be a non-empty string"}
+    if type(use_nested_clip_transcription) is not bool:
+        return {"error": "use_nested_clip_transcription must be a boolean"}
+    _, proj = get_current_project()
+    if proj is None:
+        return {"error": "No project currently open"}
+    clip = _find_clip_by_id(proj.GetMediaPool().GetRootFolder(), clip_id)
+    if clip is None:
+        return {"error": "Media Pool item not found"}
+    missing = _requires_method(clip, "GetTranscription", "21.1")
+    if missing:
+        return missing
+    return {"transcription": clip.GetTranscription(use_nested_clip_transcription)}
+
+
+@mcp.tool(annotations=READ_ONLY_TOOL)
 def get_audio_render_formats() -> dict:
     """Read GetAudioRenderFormats (documented on Resolve 21.1+)."""
     _, proj = get_current_project()
@@ -128,6 +147,19 @@ def get_timeline_item_fades(track_type: str = "video", track_index: int = 1, ite
     if missing:
         return missing
     return {"fades": item.GetFades()}
+
+@mcp.tool(annotations=READ_ONLY_TOOL)
+def get_timeline_item_type(track_type: str = "video", track_index: int = 1, item_index: int = 0) -> dict:
+    """Read the native lowercase TimelineItem type documented on Resolve 21.1+."""
+    if track_type not in ("video", "audio") or track_index < 1 or item_index < 0:
+        return {"error": "Use video/audio, a 1-based track index and a non-negative item index"}
+    item, error = _get_timeline_item(track_type, track_index, item_index)
+    if error:
+        return error
+    missing = _requires_method(item, "GetType", "21.1")
+    if missing:
+        return missing
+    return {"type": item.GetType()}
 
 @mcp.tool(annotations=READ_ONLY_TOOL)
 def get_timeline_item_output_blanking(track_type: str = "video", track_index: int = 1, item_index: int = 0) -> dict:

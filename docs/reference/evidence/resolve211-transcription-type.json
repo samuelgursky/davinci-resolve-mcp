@@ -1,0 +1,36 @@
+{
+  "resolve_version": "21.1.0.14",
+  "project": "Codex Transcription Type Validation 20260909",
+  "fixture": "14-second synthetic spoken-camera clip",
+  "transcription": {
+    "status": "Transcribed",
+    "language": "en",
+    "segment_count": 1,
+    "word_count": 19,
+    "use_nested_clip_transcription": false,
+    "exact_across_official_api_compound_and_granular": true
+  },
+  "timeline_item_type": {
+    "value": "video",
+    "exact_across_official_api_compound_and_granular": true
+  },
+  "untested": [
+    "nested-clip transcription",
+    "speaker labels",
+    "other languages",
+    "audio-only items",
+    "titles, generators, transitions, subtitles and multicam type values"
+  ],
+  "rerun_2026_09_15": {
+    "main": "919ed9c (v4.6.3)",
+    "project": "Testbed (local disk database), synthetic camera clip on timeline ReadProbe",
+    "transcription_status": "Transcribed",
+    "language": "en",
+    "segment_count": 1,
+    "word_count": 19,
+    "transcription_exact_across_native_and_both_interfaces": true,
+    "timeline_item_type": "video",
+    "type_exact_across_native_and_both_interfaces": true,
+    "note": "Same result as the 2026-09-09 run, re-measured after rebuilding on v4.6.3."
+  }
+}
