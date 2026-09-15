@@ -170,3 +170,48 @@ jobs:
           done
           echo "::error::npm publish failed and ${package_name}@${package_version} never appeared on the registry."
           exit 1
+
+      - name: Keep the latest dist-tag on the highest published version
+        # Several tags pushed together run several publishes in parallel, and
+        # npm points `latest` at whichever publish finishes LAST. On 2026-09-15
+        # v4.6.0, v4.6.1 and v4.6.2 completed in the order 4.6.1, 4.6.2, 4.6.0,
+        # so `npm install davinci-resolve-mcp` resolved to 4.6.0 while 4.6.2 was
+        # the GitHub Release marked latest. This step re-points `latest` when it
+        # lags the highest published version. The version this run carries is
+        # always a candidate, because `npm view` can serve a document that is
+        # minutes stale right after a publish — without that, a stale read could
+        # move `latest` BACK to the previous version. The step never fails the
+        # job: the publish above already landed, and if the trusted-publishing
+        # token cannot edit dist-tags the log says so and a maintainer runs
+        # `npm dist-tag add <pkg>@<version> latest` by hand.
+        if: always() && steps.npm_version.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        run: |
+          package_name="$(node -p "require('./package.json').name")"
+          package_version="$(node -p "require('./package.json').version")"
+          highest="$(npm view "${package_name}" versions --json 2>/dev/null | PKG_VERSION="${package_version}" node -p '
+            const seen = JSON.parse(require("fs").readFileSync(0, "utf8"));
+            const all = (Array.isArray(seen) ? seen : [seen]).concat([process.env.PKG_VERSION]);
+            const stable = all.filter((v) => /^\d+\.\d+\.\d+$/.test(v));
+            const cmp = (a, b) => {
+              const pa = a.split(".").map(Number), pb = b.split(".").map(Number);
+              for (let i = 0; i < 3; i++) if (pa[i] !== pb[i]) return pa[i] - pb[i];
+              return 0;
+            };
+            stable.sort(cmp).pop()')"
+          latest="$(npm view "${package_name}" dist-tags.latest 2>/dev/null || true)"
+          echo "highest published (incl. this run): ${highest}; latest currently: ${latest:-<unknown>}"
+          if [ -z "${highest}" ]; then
+            echo "::warning::could not determine the highest published version; leaving latest alone"
+            exit 0
+          fi
+          if [ "${highest}" = "${latest}" ]; then
+            echo "latest already points at ${highest}; nothing to do"
+            exit 0
+          fi
+          if npm dist-tag add "${package_name}@${highest}" latest; then
+            echo "re-pointed latest to ${highest}"
+          else
+            echo "::warning::could not re-point latest to ${highest} (token may not allow dist-tag edits); run: npm dist-tag add ${package_name}@${highest} latest"
+          fi

@@ -204,7 +204,16 @@ should say that no behavior changed.
    ```
 
 6. Push `main`.
-7. Create and push the annotated tag:
+7. Create and push the annotated tag. **Push one release tag at a time and wait
+   for its `Publish npm package` run to finish before pushing the next.** Runs for
+   tags pushed together execute in parallel, and npm points `latest` at whichever
+   publish finishes *last*: on 2026-09-15 v4.6.0–v4.6.2 pushed in one command
+   finished in the order 4.6.1, 4.6.2, 4.6.0, and `latest` landed on 4.6.0. The
+   workflow's final step now re-points `latest` at the highest published version
+   when it lags, but it is a backstop, not the plan — the trusted-publishing token
+   may not be allowed to edit dist-tags, in which case the fix is
+   `npm dist-tag add davinci-resolve-mcp@X.Y.Z latest` by a logged-in maintainer,
+   or simply the next release's publish, which sets `latest` itself.
 
    ```bash
    git tag -a v2.4.1 -m "v2.4.1"

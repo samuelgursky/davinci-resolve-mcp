@@ -2,6 +2,26 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.6.3 — the publish workflow keeps npm `latest` on the highest version
+
+Release-process hardening only. No tool, action, or Resolve behaviour changed.
+
+### Fixed
+
+- **Three release tags pushed in one command left npm `latest` on the oldest of
+  them.** The `Publish npm package` runs for v4.6.0, v4.6.1 and v4.6.2 executed in
+  parallel and finished in the order 4.6.1, 4.6.2, 4.6.0; npm points `latest` at
+  whichever publish lands last, so `npm install davinci-resolve-mcp` resolved to
+  4.6.0 while v4.6.2 was the GitHub Release marked latest. The workflow now ends with
+  a step that compares `dist-tags.latest` against the highest published version
+  (always counting the version the run itself carries, because `npm view` can serve
+  a document minutes stale right after a publish) and re-points `latest` when it
+  lags. It never fails the job; if the trusted-publishing token cannot edit
+  dist-tags it logs the `npm dist-tag add` command for a maintainer. This release's
+  own publish is what puts `latest` back on the newest version.
+- `docs/process/release-process.md`: push one release tag at a time and wait for its
+  publish run before pushing the next; the workflow step is a backstop, not the plan.
+
 ## What's New in v4.6.2 — the granular server's macOS temp-path redirect matches the compound server's
 
 ### Fixed
