@@ -270,6 +270,12 @@ class RiskClassificationHook(LifecycleHook):
         # `attenuate` refuses an existing destination but writes the same tree.
         ("lut", "install"),
         ("lut", "attenuate"),
+        # Project archive. Writes only a new path (an existing file or folder
+        # at the target was never touched in any measured case), but the two
+        # media flags crash Resolve 21.1.0.14 and lose unsaved work; the
+        # wrappers refuse those unless acknowledge_trap. See archive_guard.py.
+        ("project_manager", "archive"),
+        ("project_manager", "safe_project_archive"),
         # 21.0 AI deblur renders NEW media and never touches the source (it is
         # confirm-token gated for that reason). The `remove_` prefix rule rated
         # it HIGH on its name alone, which would make safe mode block a create.

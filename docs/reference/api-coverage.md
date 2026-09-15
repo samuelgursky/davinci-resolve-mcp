@@ -251,7 +251,7 @@ Every method in the DaVinci Resolve Scripting API and its test status. Methods a
 
 | # | Method | Status | Test Result / Notes |
 |---|--------|--------|---------------------|
-| 1 | `ArchiveProject(projectName, filePath, ...)` | ⚠️ | API accepts; archiving is slow |
+| 1 | `ArchiveProject(projectName, filePath, ...)` | ⚠️ | Never produces an archive by script: returns `False` and writes nothing with source media and proxies off; either on crashes Resolve 21.1.0.14. Wrappers default every flag off and refuse the crashing two unless `acknowledge_trap`. See [project archive](project-archive.md). |
 | 2 | `CreateProject(projectName, mediaLocationPath)` | ✅ | Creates new project; optional media location added in Resolve 20.2.2 |
 | 3 | `DeleteProject(projectName)` | ⚠️ | Returns `False` if project is open |
 | 4 | `LoadProject(projectName)` | ✅ | Returns Project object |

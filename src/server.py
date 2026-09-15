@@ -52,6 +52,7 @@ from src.utils.resolve211_edits import validate_edit_options, validate_transitio
 
 # Platform-specific Resolve paths
 from src.utils.cdl import normalize_cdl_payload
+from src.utils import archive_guard
 from src.utils import typed_api_search
 from src.utils import lut_files
 from src.utils import resolve_writes as _resolve_writes
@@ -18544,11 +18545,18 @@ def _safe_project_archive(pm, p: Dict[str, Any]) -> Dict[str, Any]:
     path_err = _project_path_guard(path, require_temp_path=p.get("require_temp_path", True))
     if path_err:
         return path_err
-    src_media = bool(p.get("src_media", False))
-    render_cache = bool(p.get("render_cache", False))
-    proxy_media = bool(p.get("proxy_media", False))
+    flags, flag_err = archive_guard.read_flags(p)
+    if flag_err:
+        return _err(flag_err, code="INVALID_ARCHIVE_FLAG", category="invalid_input")
+    src_media, render_cache, proxy_media = (flags["src_media"], flags["render_cache"],
+                                            flags["proxy_media"])
     if (src_media or render_cache or proxy_media) and not p.get("allow_media_archive", False):
         return _err("Archive media/cache/proxy flags must stay false unless allow_media_archive=True")
+    # allow_media_archive guards size; this guards the crash. Both are required.
+    if not p.get("acknowledge_trap"):
+        refused = archive_guard.crash_refusal("project_manager", "safe_project_archive", flags)
+        if refused:
+            return refused
     os.makedirs(_project_path_parent(path), exist_ok=True)
     if p.get("dry_run"):
         return _ok(
@@ -18559,7 +18567,8 @@ def _safe_project_archive(pm, p: Dict[str, Any]) -> Dict[str, Any]:
             render_cache=render_cache,
             proxy_media=proxy_media,
         )
-    return {"success": bool(pm.ArchiveProject(name, path, src_media, render_cache, proxy_media))}
+    native = pm.ArchiveProject(name, path, src_media, render_cache, proxy_media)
+    return archive_guard.outcome(native, flags, name=name, path=path)
 
 
 def _safe_project_restore(pm, p: Dict[str, Any]) -> Dict[str, Any]:
@@ -19248,8 +19257,18 @@ def project_manager(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         })
         if err:
             return _err(err)
-        return {"success": bool(pm.ArchiveProject(p["name"], p["path"],
-            p.get("src_media", True), p.get("render_cache", True), p.get("proxy_media", False)))}
+        # Every flag defaults OFF. The native defaults turn source media on, and on
+        # 21.1.0.14 that crashes Resolve (see utils/archive_guard.py).
+        flags, flag_err = archive_guard.read_flags(p)
+        if flag_err:
+            return _err(flag_err, code="INVALID_ARCHIVE_FLAG", category="invalid_input")
+        if not p.get("acknowledge_trap"):
+            refused = archive_guard.crash_refusal("project_manager", "archive", flags)
+            if refused:
+                return refused
+        native = pm.ArchiveProject(p["name"], p["path"], flags["src_media"],
+                                   flags["render_cache"], flags["proxy_media"])
+        return archive_guard.outcome(native, flags, name=p["name"], path=p["path"])
     elif action == "restore":
         if not p.get("path"):
             return _err("restore requires path")

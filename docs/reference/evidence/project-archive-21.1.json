@@ -1,0 +1,76 @@
+{
+  "symbol": "ProjectManager.ArchiveProject",
+  "resolve_version": "DaVinci Resolve Studio 21.1.0.14",
+  "database": "Local Database (Disk); project library 'Local Database : Local'",
+  "fixture": "disposable project _mcp_archive_src_1789440588, one synthetic 2s 640x360 red ProRes clip on one timeline, saved; archived by name while CLOSED unless stated",
+  "presence_check": "dir() membership with a known-present control, never hasattr (Resolve fabricates callables for any name)",
+  "rows": [
+    {
+      "case": "archive the OPEN project (Testbed), all flags off",
+      "returned": false,
+      "seconds": 0.0,
+      "wrote": "nothing",
+      "resolve": "healthy"
+    },
+    {
+      "case": "closed project, all flags off, .dra path",
+      "returned": false,
+      "seconds": 0.0,
+      "wrote": "nothing",
+      "resolve": "healthy"
+    },
+    {
+      "case": "closed project, render cache only",
+      "returned": false,
+      "seconds": 0.0,
+      "wrote": "nothing",
+      "resolve": "healthy",
+      "caveat": "the fixture has no render cache, so 'unsupported' and 'nothing to include' cannot be told apart"
+    },
+    {
+      "case": "closed project, source media on",
+      "returned": null,
+      "seconds": 0.14,
+      "wrote": "an EMPTY directory at the target path; nothing inside it after 35s",
+      "resolve": "CRASHED, SIGSEGV, crash dump stamped the same second as the call"
+    },
+    {
+      "case": "closed project, proxy media on",
+      "returned": null,
+      "seconds": 0.14,
+      "wrote": "an EMPTY directory at the target path",
+      "resolve": "CRASHED, SIGSEGV, same second as the call"
+    },
+    {
+      "case": "collision: unrelated FILE already at target, all flags off",
+      "returned": false,
+      "target": "byte-identical before and after"
+    },
+    {
+      "case": "collision: DIRECTORY with contents already at target, all flags off",
+      "returned": false,
+      "target": "untouched"
+    },
+    {
+      "case": "collision on the crash path: source media on, unrelated FILE already at target",
+      "returned": null,
+      "seconds": 0.19,
+      "target": "byte-identical before, immediately after and 3s after (sha256 dd4c395f...)",
+      "resolve": "CRASHED, SIGSEGV; Resolve could not create its bundle directory over the file and crashed anyway, so the crash is in starting the archive job, not in writing the destination"
+    }
+  ],
+  "crash_signature": "all four crashes (one in a Blackmagic Cloud library on 2026-09-14 22:34, three in the local database) share identical top nine stack frames: QHash deleteNode2 <- _sigtramp <- UiPreventSystemSleepManagerImpl slot <- QMetaTypeFunctionHelper<Fusion::ScriptVal> <- Fusion::ScriptSymbol::~ScriptSymbol <- Fusion::HandleUIEX <- FusionAppQt::eventFilter",
+  "bridge_behaviour": "a crashing call returns None through the scripting bridge rather than a bool; the script process survives and every later handle is dead",
+  "prior_measurement": "19.1.3.7 (repo mode-matrix 2026-08-02, GUI and headless; project-lifecycle kernel): returned False for both a .dra and a folder-style path with all flags off",
+  "consequence_for_wrappers": "the native defaults (isArchiveSrcMedia=True, isArchiveRenderCache=True) and both existing wrappers' defaults turn source media on, so a default call crashes Resolve 21.1.0.14 and loses unsaved work in whatever project is open",
+  "untested": [
+    "any successful archive: no scriptable path produced one, so RestoreProject round-trip could not be measured",
+    "render cache on a project that actually has one",
+    "headless mode on 21.1",
+    "other builds after 21.1.0.14",
+    "Windows and Linux"
+  ],
+  "crash_signature_uniqueness": "A fifth SIGSEGV in the same session, during DeleteProject then LoadProject 44s after a relaunch, shares only the generic crash-handler frames (QHash<QString,...>::deleteNode2, _sigtramp) and then diverges into QHash<const char*, QVariant>::deleteNode2. It does not pass through the Fusion ScriptSymbol teardown the four archive crashes share, so that signature belongs to the archive calls. Crash uptimes were 1:45, 14:16, 1:31 and 0:45, so it is not only early-startup instability.",
+  "media_flag_calls": "4 of 4 crashed",
+  "flags_off_calls": "0 of 5 crashed (open, closed, render cache only, and both flags-off collisions)"
+}
