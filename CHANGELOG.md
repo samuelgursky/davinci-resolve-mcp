@@ -2,6 +2,24 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.6.4 — `ripple="false"` no longer ripples
+
+### Fixed
+
+- **`timeline` `delete_clips`, `lift_range`, and the delete step of `move_clips` read
+  `ripple` with a bare `bool()`, so a client sending `ripple="false"` got a ripple
+  delete.** ([#236](https://github.com/samuelgursky/davinci-resolve-mcp/pull/236), @Dev-next-gen)
+  The gap closed and everything downstream shifted, which is exactly what the caller
+  declined. The guards around it read the flag the same way — the pending-confirm
+  check, `destructive_hook.is_strict_required`, and the blast-radius branch of the
+  risk classifier — so with confirm tokens on the user was asked to confirm a ripple
+  delete they never requested, and once confirmed it ran as one. All six readings now
+  go through `coerce_bool` (the helper #218 added for `dry_run`). Real booleans and
+  `"true"`/`"false"`/`"1"`/`"0"` behave exactly as before; a string `coerce_bool`
+  does not recognise now falls to non-ripple instead of ripple, the safe direction
+  for a destructive flag. Guard test: `tests/test_delete_clips_ripple_string.py`,
+  which fails three of four on the previous code.
+
 ## What's New in v4.6.3 — the publish workflow keeps npm `latest` on the highest version
 
 Release-process hardening only. No tool, action, or Resolve behaviour changed.
