@@ -96,6 +96,18 @@ class RawCopyGradesConfirmationTest(unittest.TestCase):
         self.assertEqual(changed["error"]["code"], "CONFIRM_TOKEN_FINGERPRINT_MISMATCH")
         self.assertEqual(self.source.copy_grades_calls, [])
 
+    def test_raw_copy_grades_with_no_resolved_targets_refuses_before_token(self):
+        out = compound.timeline_item_color(
+            "copy_grades",
+            self._params(target_ids=["missing-1"]),
+        )
+
+        self.assertEqual(out["error"]["code"], "NO_COPY_GRADE_TARGETS")
+        self.assertEqual(out["error"]["category"], "invalid_input")
+        self.assertEqual(out["error"]["state"]["missing"], ["missing-1"])
+        self.assertNotIn("confirm_token", out)
+        self.assertEqual(self.source.copy_grades_calls, [])
+
     def test_trap_acknowledgement_is_still_required_before_confirmation(self):
         out = compound.timeline_item_color("copy_grades", {"target_ids": ["target-1"]})
 

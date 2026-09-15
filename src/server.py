@@ -28701,6 +28701,14 @@ def timeline_item_color(action: str, params: Optional[Dict[str, Any]] = None) ->
             targets, missing = _timeline_items_for_grade_copy(tl, target_ids)
         else:
             targets, missing = [], sorted(set(target_ids or []))
+        if not targets:
+            return _err(
+                "copy_grades resolved no target items; nothing would be copied.",
+                code="NO_COPY_GRADE_TARGETS",
+                category="invalid_input",
+                remediation="Pass at least one target_ids value that exists on the current timeline.",
+                state={"target_ids": list(target_ids or []), "missing": missing},
+            )
         if "confirm_token" not in p and "confirmToken" not in p and _confirm_token_required():
             preview = {
                 "operation": "timeline_item_color.copy_grades",
