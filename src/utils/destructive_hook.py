@@ -493,7 +493,7 @@ def is_strict_required(tool_name: str, action: str, params: Optional[Dict[str, A
         tool_name == "timeline"
         and action == "delete_clips"
         and isinstance(params, dict)
-        and bool(params.get("ripple"))
+        and coerce_bool(params.get("ripple"))
     ):
         return True
     return False

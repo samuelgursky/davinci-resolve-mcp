@@ -73,7 +73,7 @@ from src.utils.proc import safe_run
 from src.utils.readback import verify_by_readback, verification_stats as _verification_stats
 from src.utils import operation_result as _operation_result
 from src.utils import operation_log as _operation_log
-from src.utils.bool_params import explicit_bool_param as _explicit_bool_param
+from src.utils.bool_params import coerce_bool as _coerce_bool, explicit_bool_param as _explicit_bool_param
 from src.utils.confirm_tokens import (
     ConfirmTokenStore as _ConfirmTokenStore,
     gate_required_from as _gate_required_from,
@@ -1365,7 +1365,7 @@ def _action_will_gate_pending_confirm(
         tool_name == "timeline"
         and action == "delete_clips"
         and isinstance(params, dict)
-        and bool(params.get("ripple"))
+        and _coerce_bool(params.get("ripple"))
     ):
         return True
     return False
@@ -4982,7 +4982,7 @@ def _timeline_duplicate_clips_impl(proj, tl, p: Dict[str, Any], *, delete_source
                 seen_delete_ids.add(item_id)
         if delete_items:
             try:
-                out["deleted_sources"] = _timeline_delete_clips_verified(tl, delete_items, bool(p.get("ripple", False)), resolve=resolve)
+                out["deleted_sources"] = _timeline_delete_clips_verified(tl, delete_items, _coerce_bool(p.get("ripple")), resolve=resolve)
                 out["deleted_source_ids"] = _timeline_item_ids(delete_items)
             except Exception as exc:
                 out["deleted_sources"] = False
@@ -5614,7 +5614,7 @@ def _timeline_lift_range_impl(tl, p: Dict[str, Any], *, resolve=None):
         return {"success": True, "deleted": 0, "range": {"start": start, "end": end}}
     deleted_ids = _timeline_item_ids(delete_items)
     return {
-        "success": _timeline_delete_clips_verified(tl, delete_items, bool(p.get("ripple", False)), resolve=resolve),
+        "success": _timeline_delete_clips_verified(tl, delete_items, _coerce_bool(p.get("ripple")), resolve=resolve),
         "deleted": len(delete_items),
         "deleted_ids": deleted_ids,
         "range": {"start": start, "end": end},
@@ -25619,7 +25619,7 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
                     if it.GetUniqueId() in ids_set:
                         found.append(it)
         # B2 — ripple=True is catastrophic; require confirmation.
-        ripple = bool(p.get("ripple", False))
+        ripple = _coerce_bool(p.get("ripple"))
         if ripple:
             if "confirm_token" not in p and "confirmToken" not in p and _confirm_token_required():
                 return _issue_confirm_token(
