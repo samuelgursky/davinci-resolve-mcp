@@ -2,6 +2,22 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.6.1 — copy_grades refuses an all-missing target set before spending a confirmation
+
+### Fixed
+
+- **Raw `timeline_item_color` `copy_grades` could issue a confirmation token for a call
+  that would run `CopyGrades([])`.** ([#234](https://github.com/samuelgursky/davinci-resolve-mcp/pull/234), @Rohitkanithi)
+  When every `target_ids` value failed to resolve on the current timeline, the tool
+  still walked into the confirmation flow, so the caller confirmed a destructive-looking
+  operation that had no valid target and then spent the round trip on a no-op. It now
+  returns a structured `NO_COPY_GRADE_TARGETS` (`invalid_input`) error carrying the
+  missing ids, before any token is issued and without calling Resolve. Mixed sets are
+  unchanged: resolved targets preview, and missing ids are still reported in the
+  preview. The granular `ti_copy_grades` already refused this case through its
+  non-empty and in-range index checks, so the class was confined to the compound
+  server. Guard test in `tests/test_copy_grades_confirmation.py`.
+
 ## What's New in v4.6.0 — a default project archive no longer crashes Resolve 21.1
 
 The archive coverage measured by @legionsound in [#233](https://github.com/samuelgursky/davinci-resolve-mcp/pull/233), plus the offline node-graph relayout work that was sitting unreleased on `main`.
