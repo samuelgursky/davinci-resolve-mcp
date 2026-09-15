@@ -342,13 +342,15 @@ class ResolveProxy:
 def _resolve_safe_dir(path):
     """Redirect sandbox/temp paths that Resolve can't access to ~/Desktop/resolve-stills.
 
-    Covers macOS (/var/folders, /private/var), Linux (/tmp, /var/tmp),
-    and Windows (AppData\\Local\\Temp) sandbox temp directories.
+    Covers macOS (/var/folders, /private/var, /tmp, /private/tmp), Linux (/tmp,
+    /var/tmp), and Windows (AppData\\Local\\Temp) sandbox temp directories.
     """
     system_temp = tempfile.gettempdir()
     _is_sandbox = False
     if platform.system() == "Darwin":
-        _is_sandbox = path.startswith("/var/") or path.startswith("/private/var/")
+        # /tmp is a symlink to /private/tmp on macOS; Resolve's exporters fail
+        # silently into both, same as /var/folders (matches src/server.py).
+        _is_sandbox = path.startswith(("/var/", "/private/var/", "/tmp/", "/private/tmp/")) or path in ("/tmp", "/private/tmp")
     elif platform.system() == "Linux":
         _is_sandbox = path.startswith("/tmp") or path.startswith("/var/tmp")
     elif platform.system() == "Windows":
