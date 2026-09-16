@@ -51,7 +51,7 @@ def _real_mcp_is_importable() -> bool:
 def _build_stub_modules(*, stdio_note: str) -> Dict[str, types.ModuleType]:
     class FastMCP:
         def __init__(self, *args, **kwargs):
-            pass
+            self._mcp_server = types.SimpleNamespace(version=None)
 
         def _decorator(self, *args, **kwargs):
             def decorate(func):

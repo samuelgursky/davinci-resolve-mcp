@@ -101,6 +101,8 @@ logger.info(f"Using Resolve API path: {RESOLVE_API_PATH}")
 logger.info(f"Using Resolve library path: {RESOLVE_LIB_PATH}")
 
 mcp = FastMCP("DaVinciResolveMCP")
+if hasattr(mcp, "_mcp_server"):
+    mcp._mcp_server.version = VERSION
 
 READ_ONLY_TOOL = ToolAnnotations(
     readOnlyHint=True,
