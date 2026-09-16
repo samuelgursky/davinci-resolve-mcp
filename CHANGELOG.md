@@ -2,6 +2,31 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.7.3 — a false spelling no longer grants permission on six opt-in flags
+
+### Fixed
+
+- **Six opt-in permission flags were read with bare truthiness, so a client sending
+  `"false"` was granted the permission it was declining.** ([#240](https://github.com/samuelgursky/davinci-resolve-mcp/pull/240), @Dev-next-gen)
+  These open in the opposite direction from `overwrite` (v4.7.2): they default to off,
+  so the string does not perform the act, it *grants* it. On the previous code:
+  `allow_media_archive="false"` let `ArchiveProject` run with source media on (the
+  21.1.0.14 crash `archive_guard` measures); `acknowledge_trap="false"` stood the crash
+  refusal down on both archive paths and stood the trap guard in
+  `destructive_hook._trap_acknowledged` down in front of `TimelineItem.CopyGrades`;
+  `close_current="false"` closed and deleted the open project; `allow_generate`,
+  `allow_render` and `allow_switch` ran `CreateSubtitlesFromAudio`,
+  `RenderWithQuickExport` and `SetCurrentDatabase`. Nine readings in all now go through
+  `coerce_bool`. Real booleans and the true spellings are unchanged; a false or
+  unrecognised string now yields the documented refusal with its `retry_with` payload.
+  The neighbouring `dry_run` reads are deliberately untouched (a stringified `"false"`
+  there keeps the call in preview, which fails safe), and the granular tools already
+  type these as booleans. Guard test: `tests/test_permission_flags_string_false.py` —
+  one test per flag over six false spellings, asserting the effect did not happen
+  before checking the envelope; 54 of 54 subtests fail on the previous code, every one
+  on the effect. One bare opt-in read remains by choice, `allow_timeline_mismatch` on
+  `apply_trace_plan`, which gates a name mismatch rather than a destructive act.
+
 ## What's New in v4.7.2 — `overwrite="false"` no longer unlocks an install guard
 
 ### Fixed
