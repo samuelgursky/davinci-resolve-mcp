@@ -263,6 +263,8 @@ mcp = FastMCP(
         "issue link for the user to review and submit; nothing is filed for them."
     ),
 )
+if hasattr(mcp, "_mcp_server"):
+    mcp._mcp_server.version = VERSION
 
 READ_ONLY_TOOL = mcp_types.ToolAnnotations(
     readOnlyHint=True,
