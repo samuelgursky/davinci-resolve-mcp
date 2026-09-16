@@ -2,6 +2,26 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.7.2 — `overwrite="false"` no longer unlocks an install guard
+
+### Fixed
+
+- **Five install actions read `overwrite` with bare truthiness, so the string
+  `"false"` opened the guard and replaced the existing file.** ([#239](https://github.com/samuelgursky/davinci-resolve-mcp/pull/239), @Dev-next-gen)
+  `fuse_plugin install`, `dctl install`, `script_plugin install`,
+  `script_plugin safe_install_extension`, and `lut install` all refuse an existing
+  file with the same words — "Pass overwrite=true to replace it." — but `"false"` is a
+  non-empty string, so `not p.get("overwrite")` was `False` and the Fuse, DCTL, script
+  or LUT was replaced. On the LUT path the response even reported `overwritten: True`
+  against a request that said `overwrite="false"`, breaking `install_lut`'s own promise
+  that an install never silently replaces something in use. Same defect and same fix
+  as `ripple="false"` (v4.6.4): all five readings go through `coerce_bool`. Real
+  booleans and `"true"`/`"yes"`/`"1"`/`"on"` are unchanged; an unrecognised string now
+  falls to refuse-and-explain instead of destroy. Guard test:
+  `tests/test_install_overwrite_string_false.py` — six false spellings across all
+  five entry points, asserting both the refusal and that the bytes on disk are
+  unchanged; 25 subtests fail on the previous code.
+
 ## What's New in v4.7.1 — a token handed back as `confirmToken` can be redeemed
 
 ### Fixed
