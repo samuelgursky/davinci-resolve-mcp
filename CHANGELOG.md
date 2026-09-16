@@ -2,6 +2,22 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.7.6 — `serverInfo.version` reports this project's version
+
+### Fixed
+
+- **The MCP `initialize` handshake advertised the installed SDK's version (1.30.0)
+  as the server's, not the project's.** ([#243](https://github.com/samuelgursky/davinci-resolve-mcp/issues/243) reported with the diagnosis by @Eniot666; fixed in [#244](https://github.com/samuelgursky/davinci-resolve-mcp/pull/244) by @DYNOSuprovo)
+  `FastMCP.__init__` in the 1.x SDK has no `version` parameter, so it builds the
+  low-level `Server` without one and `create_initialization_options()` falls back to
+  `pkg_version("mcp")`. Every client displayed the SDK's number, so the version a user
+  quoted in a bug report was not this project's. Both FastMCP instances (compound and
+  granular) now set `_mcp_server.version = VERSION` right after construction, and the
+  test-mode stub carries the attribute. This reaches through a private SDK attribute
+  on purpose — the SDK exposes no public route — and
+  `tests/test_server_info_version.py` pins `create_initialization_options().server_version`
+  on both servers so a future SDK that adds the parameter can replace it cleanly.
+
 ## What's New in v4.7.5 — the control panel serves on the `::1` loopback it accepts
 
 ### Fixed
