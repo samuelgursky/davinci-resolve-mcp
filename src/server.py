@@ -31047,7 +31047,7 @@ def fuse_plugin(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
         d = _fuses_dir()
         os.makedirs(d, exist_ok=True)
         path = _fuse_path(name)
-        if os.path.exists(path) and not p.get("overwrite", False):
+        if os.path.exists(path) and not _coerce_bool(p.get("overwrite")):
             return _err(f"Fuse '{name}' already exists at {path}. "
                         "Pass overwrite=true to replace it.")
         try:
@@ -31292,7 +31292,7 @@ def lut(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
                 return _ok(would_install=p["name"], writable_dir=lut_files.writable_dir())
             return lut_files.install_lut(
                 p["name"], source=p.get("source"), source_path=p.get("source_path"),
-                overwrite=bool(p.get("overwrite", False)))
+                overwrite=_coerce_bool(p.get("overwrite")))
         if action == "remove":
             if not p.get("name"):
                 return _err("remove requires name")
@@ -31440,7 +31440,7 @@ def dctl(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]
         target_dir = root if sd is None else os.path.join(root, sd)
         os.makedirs(target_dir, exist_ok=True)
         path = os.path.join(target_dir, f"{name}{ext}")
-        if os.path.exists(path) and not p.get("overwrite", False):
+        if os.path.exists(path) and not _coerce_bool(p.get("overwrite")):
             return _err(f"DCTL '{name}{ext}' already exists at {path}. "
                         "Pass overwrite=true to replace it.")
         try:
@@ -31879,7 +31879,7 @@ def _safe_install_extension(p: Dict[str, Any]) -> Dict[str, Any]:
     validation = _validate_script_source(source, language)
     if validation.get("valid") is False:
         return _err(f"Script validation failed: {validation.get('errors')}")
-    return _script_install_source(name, source, category, language, p.get("overwrite", False))
+    return _script_install_source(name, source, category, language, _coerce_bool(p.get("overwrite")))
 
 
 def _safe_remove_extension(p: Dict[str, Any]) -> Dict[str, Any]:
@@ -32250,7 +32250,7 @@ def script_plugin(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
             return _err(str(e))
         os.makedirs(target_dir, exist_ok=True)
         path = os.path.join(target_dir, f"{name}{_SCRIPT_LANG_EXT[language]}")
-        if os.path.exists(path) and not p.get("overwrite", False):
+        if os.path.exists(path) and not _coerce_bool(p.get("overwrite")):
             return _err(f"Script '{name}{_SCRIPT_LANG_EXT[language]}' already "
                         f"exists at {path}. Pass overwrite=true to replace it.")
         try:
