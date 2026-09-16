@@ -13,6 +13,9 @@ it, so a logged token would outlive the session in a file the state file's
 
 Security posture:
 - Default host is loopback; a non-loopback bind logs a loud warning.
+- DNS-rebinding protection follows the bind host (see
+  ``transport_security_for``); a loopback-only allowlist on a LAN bind
+  answered every request with 421 until v4.7.4 (issue #241).
 - Every HTTP request must carry ``Authorization: Bearer <token>`` (constant-time
   compared); otherwise 401.
 - stdio (the default transport) is unaffected by anything here.
@@ -36,6 +39,75 @@ def _state_path() -> str:
 # Resolved lazily so DAVINCI_RESOLVE_MCP_STATE_DIR set by a test harness is honored.
 TRANSPORT_STATE_PATH = _state_path()
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+#: Binds that listen on every interface. A client never sends one of these as
+#: its Host header, so an allowlist cannot be derived from the bind address.
+WILDCARD_HOSTS = {"0.0.0.0", "::", ""}
+ALLOWED_HOSTS_ENV = "DAVINCI_MCP_ALLOWED_HOSTS"
+
+
+def _host_pattern(name: str) -> str:
+    """`Host`-header pattern for one name: any port, IPv6 literals bracketed."""
+    name = name.strip()
+    if ":" in name and not name.startswith("["):
+        name = f"[{name}]"
+    return f"{name}:*"
+
+
+def extra_allowed_hosts(env=None):
+    """Names from $DAVINCI_MCP_ALLOWED_HOSTS (comma-separated), stripped, deduped."""
+    raw = (env if env is not None else os.environ).get(ALLOWED_HOSTS_ENV, "")
+    seen, out = set(), []
+    for name in raw.split(","):
+        name = name.strip()
+        if name and name not in seen:
+            seen.add(name)
+            out.append(name)
+    return out
+
+
+def transport_security_for(host, extra_hosts=()):
+    """The DNS-rebinding allowlist the transport should run with for `host`.
+
+    Returns None for a loopback bind: the SDK already pins the allowlist to
+    loopback when FastMCP is built without a host, and that is correct there.
+
+    Everything else exists because of issue #241. `src/server.py` builds
+    `FastMCP(...)` without a host, so the SDK (1.30.0,
+    `mcp/server/fastmcp/server.py`) auto-enables DNS-rebinding protection with
+    `allowed_hosts=["127.0.0.1:*", "localhost:*", "[::1]:*"]`. `run_networked`
+    then set `settings.host` to the LAN address but never touched
+    `settings.transport_security`, and `streamable_http_app()` / `sse_app()`
+    hand that loopback-only allowlist to the transport middleware. Every request
+    to the LAN address therefore answered **421 Misdirected Request** — after the
+    bearer check, so a wrong token still got 401 and the bind looked healthy.
+    A non-loopback bind could never serve anyone.
+
+    - Specific non-loopback host: protection stays ON; the allowlist is the bind
+      host, the loopback names, and any extra names from
+      `$DAVINCI_MCP_ALLOWED_HOSTS` (for clients that reach the box by a DNS name
+      rather than the bound address).
+    - Wildcard bind (`0.0.0.0` / `::`): a client never sends the wildcard as its
+      Host, so with no extra names there is nothing to allow. Protection is then
+      turned OFF with a warning — the bearer token remains on every request, and
+      a rebinding page does not hold it. Set `$DAVINCI_MCP_ALLOWED_HOSTS` to keep
+      the protection on for a wildcard bind.
+    """
+    from mcp.server.transport_security import TransportSecuritySettings
+
+    if host in LOOPBACK_HOSTS:
+        return None
+    names = []
+    if host not in WILDCARD_HOSTS:
+        names.append(host)
+    names.extend(n for n in extra_hosts if n not in names)
+    if not names:
+        return TransportSecuritySettings(enable_dns_rebinding_protection=False)
+    names.extend(sorted(LOOPBACK_HOSTS))
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=[_host_pattern(n) for n in names],
+        allowed_origins=[f"http://{_host_pattern(n)}" for n in names],
+    )
 
 
 def resolve_token():
@@ -124,6 +196,24 @@ def run_networked(mcp, transport):
     mcp.settings.host = host
     mcp.settings.port = port
     token, generated = resolve_token()
+
+    # Must happen BEFORE the app is built: sse_app()/streamable_http_app() read
+    # settings.transport_security once, when they construct the middleware.
+    extra = extra_allowed_hosts()
+    security = transport_security_for(host, extra)
+    if security is not None:
+        mcp.settings.transport_security = security
+        if security.enable_dns_rebinding_protection:
+            logger.info("MCP transport Host allowlist: %s",
+                        ", ".join(security.allowed_hosts))
+        else:
+            logger.warning(
+                "SECURITY: MCP transport bound to %r with no %s set — a client "
+                "never sends the wildcard as its Host header, so DNS-rebinding "
+                "protection is OFF for this bind (the bearer token still gates "
+                "every request). Set %s to the names clients will use to keep "
+                "it on.", host, ALLOWED_HOSTS_ENV, ALLOWED_HOSTS_ENV,
+            )
 
     app = mcp.sse_app() if transport == "sse" else mcp.streamable_http_app()
     app.add_middleware(_auth_middleware_cls(token))

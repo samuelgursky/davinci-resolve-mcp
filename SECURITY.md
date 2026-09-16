@@ -24,7 +24,11 @@ Their posture:
 - **Loopback only.** The panel refuses any bind host other than
   `127.0.0.1` / `localhost` / `::1` — the bind address is not a tool parameter
   an AI can widen. The transport defaults to loopback and logs a loud warning
-  if `DAVINCI_MCP_HOST` points elsewhere.
+  if `DAVINCI_MCP_HOST` points elsewhere. On a non-loopback bind its
+  DNS-rebinding allowlist is the bind host plus loopback, extended by
+  `DAVINCI_MCP_ALLOWED_HOSTS` (comma-separated names clients will use); on a
+  wildcard bind (`0.0.0.0` / `::`) with that variable unset the Host check is
+  off and the bearer token is the only gate, and the log says so.
 - **Bearer token on every request.** Each panel launch generates a fresh
   `secrets.token_urlsafe(32)` token, passed to the child via environment (not
   argv) and delivered to the browser in the URL fragment (`#token=…`), which

@@ -237,6 +237,18 @@ Network scripting permits remote control of Resolve. Prefer Local mode when
 remote access is unnecessary; otherwise restrict access with host firewall and
 network controls.
 
+The MCP server's own networked transport (`--transport streamable-http` or
+`sse`) binds `127.0.0.1:8000` by default and requires `Authorization: Bearer
+<token>` on every request (`DAVINCI_MCP_TOKEN`, or a generated one). To serve a
+client on another machine, set `DAVINCI_MCP_HOST` to the address to bind and,
+if clients reach the box by a DNS name rather than that address, list the names
+in `DAVINCI_MCP_ALLOWED_HOSTS` (comma-separated). The transport keeps
+DNS-rebinding protection on, pinned to the bind host, loopback, and those
+names; a request whose `Host` header is none of them gets 421. A wildcard bind
+(`0.0.0.0` / `::`) with no names listed turns the Host check off, since a
+client never sends the wildcard as its Host, and the bearer token is then the
+only gate. Restrict a non-loopback bind with a host firewall.
+
 Run the read-only doctor against Network mode explicitly:
 
 ```bash

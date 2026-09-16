@@ -2,6 +2,35 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.7.4 — the networked transport can serve a client on another machine
+
+### Fixed
+
+- **`--transport streamable-http` / `sse` bound to a LAN address answered every
+  request with HTTP 421.** ([#241](https://github.com/samuelgursky/davinci-resolve-mcp/issues/241), reported with the diagnosis by @TeamCLP)
+  `src/server.py` builds `FastMCP(...)` without a host, so the SDK (1.30.0)
+  auto-enables DNS-rebinding protection pinned to loopback
+  (`allowed_hosts=["127.0.0.1:*", "localhost:*", "[::1]:*"]`). `run_networked` then
+  set `settings.host` to `DAVINCI_MCP_HOST` but never touched
+  `settings.transport_security`, and the app handed that loopback-only allowlist to
+  the transport middleware. The 421 came after the bearer check, so a wrong token
+  still got 401 and the bind looked healthy — a non-loopback bind could never serve
+  anyone, including an instance the control panel's Start button launched.
+  Reproduced on v4.7.3 with the real SDK app before the fix (LAN Host → 421, wrong
+  token → 401, loopback → 200).
+  - New `transport_security_for(host, extra_hosts)` in `src/utils/mcp_transport.py`,
+    applied **before** the app is built (the app reads the setting once). Loopback
+    binds are untouched. A specific non-loopback bind keeps protection ON with an
+    allowlist of the bind host, loopback, and any names in the new
+    **`DAVINCI_MCP_ALLOWED_HOSTS`** (comma-separated, for clients that reach the box
+    by a DNS name); IPv6 literals are bracketed. A wildcard bind (`0.0.0.0` / `::`)
+    with no names listed turns the Host check off with a warning, since a client
+    never sends the wildcard as its Host — the bearer token remains on every request.
+  - `tests/test_mcp_transport_host_allowlist.py`: the policy table plus the real
+    streamable-http app through `run_networked` — LAN Host 200, wrong token 401,
+    loopback 200, foreign Host still 421. `SECURITY.md` and `docs/install.md`
+    describe the allowlist and the new variable.
+
 ## What's New in v4.7.3 — a false spelling no longer grants permission on six opt-in flags
 
 ### Fixed
