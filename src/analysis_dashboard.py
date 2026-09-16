@@ -10,6 +10,7 @@ import json
 import os
 import re
 import secrets
+import socket
 import sqlite3
 import sys
 import threading
@@ -16289,6 +16290,23 @@ def _loopback_host(value: str) -> str:
     return value
 
 
+class _IPv6ThreadingHTTPServer(ThreadingHTTPServer):
+    address_family = socket.AF_INET6
+
+
+def make_panel_server(host: str, port: int, handler: type) -> ThreadingHTTPServer:
+    """Bind the panel. ThreadingHTTPServer is AF_INET, so `::1` needs the v6 class."""
+    bind = host.strip("[]")
+    server_cls = _IPv6ThreadingHTTPServer if ":" in bind else ThreadingHTTPServer
+    return server_cls((bind, port), handler)
+
+
+def panel_url_host(host: str) -> str:
+    """Host as it goes in a URL: an IPv6 literal must be bracketed."""
+    bind = host.strip("[]")
+    return f"[{bind}]" if ":" in bind else bind
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the local Resolve MCP control panel.")
     parser.add_argument("--host", default="127.0.0.1", type=_loopback_host)
@@ -16325,10 +16343,10 @@ def main() -> None:
     state = DashboardState(args.project_name, args.project_id, args.analysis_root)
     Handler.state = state
     Handler.token = resolve_panel_token()
-    server = ThreadingHTTPServer((args.host, args.port), Handler)
+    server = make_panel_server(args.host, args.port, Handler)
     # The token rides in the URL fragment: browsers keep fragments client-side,
     # so it never appears in a request line, proxy log, or Referer.
-    url = f"http://{args.host}:{args.port}/#token={Handler.token}"
+    url = f"http://{panel_url_host(args.host)}:{args.port}/#token={Handler.token}"
     # flush: under --no-open the URL (with its token) is the only handle the
     # operator gets, and a piped/redirected stdout would otherwise hold it back.
     print(f"DaVinci Resolve MCP: {url}", flush=True)

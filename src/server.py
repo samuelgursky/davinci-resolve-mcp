@@ -17491,6 +17491,11 @@ def _control_panel_read_token() -> Optional[str]:
 _CONTROL_PANEL_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
 
+def _control_panel_url_host(host: str) -> str:
+    """Host as it goes in a URL: `::1` must be written `[::1]`."""
+    return f"[{host}]" if ":" in host else host
+
+
 def _control_panel_pid_alive(pid: int) -> bool:
     """Check whether a PID is alive on this OS without killing it."""
     if not pid or pid <= 0:
@@ -17578,7 +17583,7 @@ def _control_panel_probe(host: str, port: int, timeout: float = 1.5,
     """
     import urllib.error
     import urllib.request
-    url = f"http://{host}:{port}/api/boot"
+    url = f"http://{_control_panel_url_host(host)}:{port}/api/boot"
     headers = {"Authorization": f"Bearer {token}"} if token else {}
     try:
         req = urllib.request.Request(url, headers=headers)
@@ -17838,7 +17843,7 @@ def _open_control_panel(p: Dict[str, Any]) -> Dict[str, Any]:
     # Write the pidfile so subsequent calls find it. The token travels in the
     # URL fragment — browsers never send fragments, so it stays out of every
     # request line and log.
-    url = f"http://{host}:{port}/#token={panel_token}"
+    url = f"http://{_control_panel_url_host(host)}:{port}/#token={panel_token}"
     state = {
         "pid": proc.pid,
         "port": port,
