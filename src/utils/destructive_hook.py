@@ -833,7 +833,7 @@ TRAP_REFUSAL_EXEMPT_ACTIONS: FrozenSet[Tuple[str, str]] = frozenset({
 
 def _trap_acknowledged(params: Optional[Dict[str, Any]]) -> bool:
     """Did the caller explicitly accept a known-destructive behaviour?"""
-    return bool(isinstance(params, dict) and params.get("acknowledge_trap"))
+    return isinstance(params, dict) and coerce_bool(params.get("acknowledge_trap"))
 
 
 def _trap_block_response(

@@ -9298,7 +9298,7 @@ def _transcription_capabilities(mp, p: Dict[str, Any]):
 
 def _subtitle_generation_probe(tl, p: Dict[str, Any]):
     settings, ignored = _normalize_auto_caption_settings(p.get("settings"), get_resolve())
-    if not p.get("allow_generate", False):
+    if not _coerce_bool(p.get("allow_generate")):
         return _ok(would_generate=True, settings=settings, ignored_settings=ignored,
                    note="Pass allow_generate=True to call CreateSubtitlesFromAudio.")
     if not _has_method(tl, "CreateSubtitlesFromAudio"):
@@ -18550,10 +18550,10 @@ def _safe_project_archive(pm, p: Dict[str, Any]) -> Dict[str, Any]:
         return _err(flag_err, code="INVALID_ARCHIVE_FLAG", category="invalid_input")
     src_media, render_cache, proxy_media = (flags["src_media"], flags["render_cache"],
                                             flags["proxy_media"])
-    if (src_media or render_cache or proxy_media) and not p.get("allow_media_archive", False):
+    if (src_media or render_cache or proxy_media) and not _coerce_bool(p.get("allow_media_archive")):
         return _err("Archive media/cache/proxy flags must stay false unless allow_media_archive=True")
     # allow_media_archive guards size; this guards the crash. Both are required.
-    if not p.get("acknowledge_trap"):
+    if not _coerce_bool(p.get("acknowledge_trap")):
         refused = archive_guard.crash_refusal("project_manager", "safe_project_archive", flags)
         if refused:
             return refused
@@ -18600,7 +18600,7 @@ def _safe_project_delete(pm, p: Dict[str, Any]) -> Dict[str, Any]:
     from src.utils.project_cleanup import delete_project_safely
     current_name = current.GetName() if current and _has_method(current, "GetName") else None
     if current_name == name:
-        if not p.get("close_current", False):
+        if not _coerce_bool(p.get("close_current")):
             return _err("Refusing to delete the currently open project; pass close_current=True")
         saved = bool(pm.SaveProject()) if p.get("save_current", True) else None
         closed = bool(pm.CloseProject(current))
@@ -18646,7 +18646,7 @@ def _safe_set_current_database(pm, p: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(db_info, dict) or not db_info.get("DbType") or not db_info.get("DbName"):
         return _err("db_info must include DbType and DbName")
     current = _ser(pm.GetCurrentDatabase()) if _has_method(pm, "GetCurrentDatabase") else None
-    dry_run = p.get("dry_run", True) or not p.get("allow_switch", False)
+    dry_run = p.get("dry_run", True) or not _coerce_bool(p.get("allow_switch"))
     if dry_run:
         return _ok(
             would_switch=True,
@@ -19233,7 +19233,7 @@ def project_manager(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
             _open_name = _open.GetName() if _open else None
         except Exception:
             _open_name = None
-        if _open_name == p["name"] and not p.get("close_current", False):
+        if _open_name == p["name"] and not _coerce_bool(p.get("close_current")):
             return _err("Refusing to delete the currently open project; pass close_current=True")
         from src.utils.project_cleanup import delete_project_safely
         deleted = delete_project_safely(pm, p["name"])
@@ -19262,7 +19262,7 @@ def project_manager(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         flags, flag_err = archive_guard.read_flags(p)
         if flag_err:
             return _err(flag_err, code="INVALID_ARCHIVE_FLAG", category="invalid_input")
-        if not p.get("acknowledge_trap"):
+        if not _coerce_bool(p.get("acknowledge_trap")):
             refused = archive_guard.crash_refusal("project_manager", "archive", flags)
             if refused:
                 return refused
@@ -20354,7 +20354,7 @@ def _safe_quick_export(proj, p: Dict[str, Any]):
         return err
     if not validation["valid"]:
         return {"success": False, "validation": validation}
-    if p.get("dry_run") or not p.get("allow_render", False):
+    if p.get("dry_run") or not _coerce_bool(p.get("allow_render")):
         return _ok(would_render=False, preset=preset, params=params, validation=validation)
     before = set()
     if target_dir and os.path.isdir(target_dir):
