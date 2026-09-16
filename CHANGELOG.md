@@ -2,6 +2,27 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.7.1 — a token handed back as `confirmToken` can be redeemed
+
+### Fixed
+
+- **A camelCase client could never execute a confirm-gated action.** ([#238](https://github.com/samuelgursky/davinci-resolve-mcp/pull/238), @Dev-next-gen)
+  `ConfirmTokenStore.consume` accepts the token as `confirm_token` or `confirmToken`,
+  and the twenty-eight gated compound actions treat either spelling as "the caller
+  holds a token" — but `fingerprint()` stripped only the snake_case key. A token
+  echoed back as `confirmToken` stayed in the params, the request hashed differently
+  after issuance than before, and redemption failed with
+  `CONFIRM_TOKEN_FINGERPRINT_MISMATCH`. Because the token is popped before that check
+  it was already spent, so the retry the remediation asks for reported
+  `CONFIRM_TOKEN_INVALID` instead, and re-issuing looped back to the same mismatch.
+  That was a closed loop in front of `TimelineItem.CopyGrades` and project deletion
+  on both servers, which share the store. Reproduced on `main` before merging.
+  Both spellings now live in one `TOKEN_PARAM_KEYS` tuple that `fingerprint` strips
+  and `consume` reads, so the pair cannot drift apart again. A camelCase token
+  presented against different params is still refused — stripping the key does not
+  loosen the gate. Guard tests: `tests/test_confirm_token_camel_case.py`, 5 of 6
+  failing on the previous code.
+
 ## What's New in v4.7.0 — the Resolve 21.1 transcription and timeline-item type reads are complete
 
 The read-only pick from the 21.1 tracker ([#207](https://github.com/samuelgursky/davinci-resolve-mcp/issues/207)), by @legionsound in [#237](https://github.com/samuelgursky/davinci-resolve-mcp/pull/237). Granular 387 → 389; compound unchanged at 37.
