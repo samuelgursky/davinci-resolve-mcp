@@ -2,6 +2,25 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.7.5 — the control panel serves on the `::1` loopback it accepts
+
+### Fixed
+
+- **`open_control_panel(host="::1")` was accepted by both loopback guards and could
+  never start.** ([#242](https://github.com/samuelgursky/davinci-resolve-mcp/pull/242), @Dev-next-gen)
+  The panel's `ThreadingHTTPServer` is AF_INET, so binding `("::1", port)` raised
+  `socket.gaierror` and the tool reported "Control panel child exited (rc=1) before
+  serving" — while the panel's own `--host` refusal message listed `::1` as allowed.
+  Behind it, the launch URL, the pidfile URL and the `/api/boot` probe URL were all
+  written `http://::1:<port>/`, which neither a browser nor urllib parses.
+  `make_panel_server()` now uses an AF_INET6 subclass for an IPv6 literal, and the
+  three URLs bracket the host. The Host/Origin gate already accepted `[::1]`; IPv4
+  and `localhost` take the same paths as before. Guard test:
+  `tests/test_control_panel_ipv6_loopback.py` launches the real panel on `::1`
+  through `_open_control_panel`, GETs `/` over IPv6, parses the issued URL, and probes
+  `/api/boot` with the issued token; it skips on a host with no IPv6 loopback and ran
+  (did not skip) on the macOS landing machine.
+
 ## What's New in v4.7.4 — the networked transport can serve a client on another machine
 
 ### Fixed
