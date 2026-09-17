@@ -99,6 +99,55 @@ def timecode_to_frames(timecode: Any, fps: Any, *, drop_frame: Optional[bool] = 
     return total
 
 
+def frames_to_timecode(frame: Any, fps: Any, *, drop_frame: bool = False) -> Optional[str]:
+    """Convert a frame count back to HH:MM:SS:FF timecode.
+
+    The exact inverse of `timecode_to_frames`, and it lives next to it so the
+    pair cannot drift apart: a frames->timecode helper written on its own
+    reliably forgets that drop-frame dropped frame NUMBERS on the way in, and
+    then reports a timecode 3.6 seconds early per hour.
+
+    `drop_frame` renders drop-frame timecode (semicolon separator) at the two
+    nominal rates where it is defined, 30 and 60; at any other rate it is
+    ignored, exactly as `timecode_to_frames` ignores a semicolon there.
+    """
+    rate = parse_frame_rate(fps)
+    if rate is None:
+        return None
+    try:
+        frame = max(0, int(frame))
+    except (TypeError, ValueError):
+        return None
+    nominal = _nominal_timecode_rate(rate)
+    if nominal <= 0:
+        return None
+
+    if drop_frame and nominal in (30, 60):
+        # Two (30) or four (60) frame numbers are skipped at the top of every
+        # minute except every tenth, so a ten-minute block holds one full
+        # minute and nine short ones.
+        drop = 2 if nominal == 30 else 4
+        per_minute = nominal * 60 - drop
+        per_ten = per_minute * 10 + drop
+        tens, rem = divmod(frame, per_ten)
+        if rem < nominal * 60:
+            minutes = tens * 10
+            frame_in_minute = rem
+        else:
+            rem -= nominal * 60
+            extra_minutes, frame_in_minute = divmod(rem, per_minute)
+            minutes = tens * 10 + 1 + extra_minutes
+            frame_in_minute += drop
+        hours, minutes = divmod(minutes, 60)
+        seconds, frames = divmod(frame_in_minute, nominal)
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d};{frames:02d}"
+
+    hours, remainder = divmod(frame, nominal * 3600)
+    minutes, remainder = divmod(remainder, nominal * 60)
+    seconds, frames = divmod(remainder, nominal)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}:{frames:02d}"
+
+
 def _get_clip_property_map(clip: Any) -> Dict[str, Any]:
     try:
         props = clip.GetClipProperty()

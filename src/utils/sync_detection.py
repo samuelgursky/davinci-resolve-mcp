@@ -16,7 +16,7 @@ from array import array
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
-from src.utils.multicam import timecode_to_frames
+from src.utils.multicam import frames_to_timecode, timecode_to_frames
 
 
 SYNC_EVENT_TYPES = ("two_pop", "slate_clap")
@@ -237,38 +237,25 @@ def _probe_media(path: str, ffprobe_path: str, timeout: int) -> Dict[str, Any]:
     }
 
 
-def _nominal_timecode_rate(fps: float) -> int:
-    if abs(fps - 23.976) < 0.02:
-        return 24
-    if abs(fps - 29.97) < 0.02:
-        return 30
-    if abs(fps - 47.952) < 0.05:
-        return 48
-    if abs(fps - 59.94) < 0.05:
-        return 60
-    return int(round(fps))
-
-
-def _frames_to_timecode(frame: int, fps: float) -> Optional[str]:
-    if fps <= 0:
-        return None
-    nominal = _nominal_timecode_rate(fps)
-    if nominal <= 0:
-        return None
-    frame = max(0, int(frame))
-    hours, remainder = divmod(frame, nominal * 3600)
-    minutes, remainder = divmod(remainder, nominal * 60)
-    seconds, frames = divmod(remainder, nominal)
-    return f"{hours:02d}:{minutes:02d}:{seconds:02d}:{frames:02d}"
-
-
 def _timecode_for_event(time_seconds: float, fps: Optional[float], start_timecode: Optional[str]) -> Optional[str]:
+    """Timecode of an event `time_seconds` into a clip whose head is `start_timecode`.
+
+    The start timecode comes from the media's own timecode track, via ffprobe,
+    so on an NTSC deliverable it is routinely DROP-FRAME (`HH:MM:SS;FF`).
+    `timecode_to_frames` subtracts the dropped frame numbers on the way in, so
+    the way back out has to add them again — carry the drop-frame spelling
+    through rather than rendering the result as non-drop.
+    """
     if not fps or not start_timecode:
         return None
     start_frame = timecode_to_frames(start_timecode, fps)
     if start_frame is None:
         return None
-    return _frames_to_timecode(start_frame + int(round(time_seconds * fps)), fps)
+    return frames_to_timecode(
+        start_frame + int(round(time_seconds * fps)),
+        fps,
+        drop_frame=";" in str(start_timecode),
+    )
 
 
 def _event_marker_color(event_type: str, params: Dict[str, Any]) -> str:
