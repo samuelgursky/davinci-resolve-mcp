@@ -2,6 +2,28 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.7.8 — `allow_non_mcp_name="false"` no longer lifts the `_mcp_` name guard
+
+### Fixed
+
+- **The opt-in that lifts the `_mcp_` name guard was read with bare truthiness inside
+  both guard helpers, so a stringified `"false"` stood the guard down.** ([#246](https://github.com/samuelgursky/davinci-resolve-mcp/pull/246), @Dev-next-gen)
+  `_require_disposable_project_name` and `_extension_safe_name` both opened with
+  `if allow_non_mcp_name:`, and the eight call sites pass the raw value through, which
+  is why the #240 search for `not p.get("<flag>")` at the guard missed it. From a client
+  that stringifies its JSON scalars, `safe_project_delete` with
+  `allow_non_mcp_name="false"` called `DeleteProject` on a project the MCP never
+  created (as long as it was not the open one), and `safe_install_extension` /
+  `safe_remove_extension` accepted a user-owned Fuse, DCTL or script name; the same
+  reading covered `safe_project_create`, `_export`, `_import`, `_archive` and
+  `_restore`. Both helpers now read the flag through `coerce_bool`. Real booleans and
+  the true spellings are unchanged; a false or unrecognised string keeps the guard up
+  and returns the refusal that already existed. Guard test:
+  `tests/test_allow_non_mcp_name_string_false.py` — both helpers over six false and six
+  true spellings, `safe_project_delete` against a stub asserting `DeleteProject` never
+  ran, and `safe_install_extension` in `dry_run`; 24 of 24 false-spelling subtests
+  fail on the previous code.
+
 ## What's New in v4.7.7 — the offline test bootstrap holds under `unittest discover` too
 
 Test-harness fix only. No tool, action, or Resolve behaviour changed.
