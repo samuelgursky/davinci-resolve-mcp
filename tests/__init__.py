@@ -1,12 +1,19 @@
 """Test package.
 
 Exists so the offline guard is installed under `python -m unittest` too, not
-only under pytest. `unittest discover -s tests` and `python -m unittest
-tests.test_x` both import this module before any test module, which is the only
-hook `unittest` offers that runs early enough — conftest.py is a pytest concept
-and is never loaded on that path. (The `load_tests` protocol is not an option
-here: unittest calls it for sub-packages it descends into, never for the start
-directory itself, so a hook defined here would silently never fire.)
+only under pytest. `python -m unittest tests.test_x` imports this module before
+any test module — a dotted name imports its parent package first — which is the
+only hook `unittest` offers that runs early enough on that path; conftest.py is
+a pytest concept and is never loaded there. (The `load_tests` protocol is not an
+option here: unittest calls it for sub-packages it descends into, never for the
+start directory itself, so a hook defined here would silently never fire.)
+
+`python -m unittest discover -s tests` does NOT reach this module: `discover`
+given a path leaves `top_level_dir` at that path and imports every module under
+its bare name (`test_clip_colors`, not `tests.test_clip_colors`), so the package
+`__init__` never executes. `tests/test_0000_offline_bootstrap.py` covers that
+runner by sorting first in discovery order and importing this package itself;
+see its docstring.
 
 Without this, the runner named in the release checklist ran with no guard at
 all: the suite connected to a running Resolve, and would launch one when none
