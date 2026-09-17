@@ -18251,9 +18251,9 @@ def _require_disposable_project_name(
     name: Any,
     *,
     field: str = "name",
-    allow_non_mcp_name: bool = False,
+    allow_non_mcp_name: Any = False,
 ) -> Optional[Dict[str, Any]]:
-    if allow_non_mcp_name:
+    if _coerce_bool(allow_non_mcp_name):
         if isinstance(name, str) and name:
             return None
         return _err(f"{field} must be a non-empty string")
@@ -31640,8 +31640,8 @@ _EXTENSION_KERNEL_ACTIONS = [
 _EXTENSION_TYPES = ("fuse", "dctl", "script")
 
 
-def _extension_safe_name(name: Any, *, allow_non_mcp_name: bool = False) -> Optional[Dict[str, Any]]:
-    if allow_non_mcp_name:
+def _extension_safe_name(name: Any, *, allow_non_mcp_name: Any = False) -> Optional[Dict[str, Any]]:
+    if _coerce_bool(allow_non_mcp_name):
         if isinstance(name, str) and name:
             return None
         return _err("name must be a non-empty string")
