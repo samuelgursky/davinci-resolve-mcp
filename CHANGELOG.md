@@ -2,6 +2,29 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.7.7 — the offline test bootstrap holds under `unittest discover` too
+
+Test-harness fix only. No tool, action, or Resolve behaviour changed.
+
+### Fixed
+
+- **`python -m unittest discover -s tests` ran the suite with no offline guard and
+  with the root logger pointed at the operator's real `logs/server.log`.**
+  ([#245](https://github.com/samuelgursky/davinci-resolve-mcp/pull/245), @Adi202001)
+  `tests/__init__.py` sets `RESOLVE_MCP_LOG_FILE` and installs `offline_guard`, and
+  its docstring claimed both unittest forms import it first. Only the dotted form
+  (`python -m unittest tests.test_x`) does: `discover` given a path leaves
+  `top_level_dir` at that path and imports every module under its bare name, so the
+  package `__init__` never executes. Reproduced on `main` before merging: the
+  `test_log_isolation` tripwire fails, the guard is absent for the whole run, and
+  `logs/server.log` grows — meaning that invocation could connect to, or launch, a
+  live Resolve. (`discover -s tests -t .` was never affected, which is why the
+  maintainer's own runs did not see it.) New `tests/test_0000_offline_bootstrap.py`
+  sorts first in discovery order, imports the `tests` package for its side effects,
+  asserts the redirect and the guard are in place, and asserts it still sorts first so
+  a future file cannot silently restore the bug. The package docstring now states what
+  holds on each runner.
+
 ## What's New in v4.7.6 — `serverInfo.version` reports this project's version
 
 ### Fixed
