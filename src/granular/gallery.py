@@ -4,6 +4,18 @@ from src.granular.common import *  # noqa: F401,F403
 
 resolve = ResolveProxy()
 
+
+def _index_in_range(idx, length):
+    """True for a real 0-based position. Negatives are refused: Python would read
+    `albums[-1]` as the last album and act on something nobody named."""
+    return isinstance(idx, int) and not isinstance(idx, bool) and 0 <= idx < length
+
+
+def _invalid_indices(indices, length):
+    """The entries of `indices` that are not a 0-based position below `length`."""
+    return [i for i in indices if not _index_in_range(i, length)]
+
+
 @mcp.tool(annotations=READ_ONLY_TOOL)
 def get_gallery_album_name() -> Dict[str, Any]:
     """Get the name of the current gallery album."""
@@ -107,7 +119,7 @@ def set_current_still_album(album_index: int) -> Dict[str, Any]:
     if not gallery:
         return {"error": "Failed to get Gallery"}
     albums = gallery.GetGalleryStillAlbums()
-    if not albums or album_index >= len(albums):
+    if not albums or album_index < 0 or album_index >= len(albums):
         return {"error": f"No album at index {album_index}"}
     result = gallery.SetCurrentStillAlbum(albums[album_index])
     return {"success": bool(result)}
@@ -176,7 +188,7 @@ def get_album_stills(album_index: int = 0) -> Dict[str, Any]:
     if not gallery:
         return {"error": "Failed to get Gallery"}
     albums = gallery.GetGalleryStillAlbums()
-    if not albums or album_index >= len(albums):
+    if not albums or album_index < 0 or album_index >= len(albums):
         return {"error": f"No album at index {album_index}"}
     stills = albums[album_index].GetStills()
     return {"still_count": len(stills) if stills else 0}
@@ -198,10 +210,10 @@ def get_still_label(album_index: int, still_index: int) -> Dict[str, Any]:
         return {"error": "No project open"}
     gallery = project.GetGallery()
     albums = gallery.GetGalleryStillAlbums()
-    if not albums or album_index >= len(albums):
+    if not albums or album_index < 0 or album_index >= len(albums):
         return {"error": f"No album at index {album_index}"}
     stills = albums[album_index].GetStills()
-    if not stills or still_index >= len(stills):
+    if not stills or still_index < 0 or still_index >= len(stills):
         return {"error": f"No still at index {still_index}"}
     label = albums[album_index].GetLabel(stills[still_index])
     return {"label": label if label else ""}
@@ -225,10 +237,10 @@ def set_still_label(album_index: int, still_index: int, label: str) -> Dict[str,
         return {"error": "No project open"}
     gallery = project.GetGallery()
     albums = gallery.GetGalleryStillAlbums()
-    if not albums or album_index >= len(albums):
+    if not albums or album_index < 0 or album_index >= len(albums):
         return {"error": f"No album at index {album_index}"}
     stills = albums[album_index].GetStills()
-    if not stills or still_index >= len(stills):
+    if not stills or still_index < 0 or still_index >= len(stills):
         return {"error": f"No still at index {still_index}"}
     result = albums[album_index].SetLabel(stills[still_index], label)
     return {"success": bool(result)}
@@ -250,7 +262,7 @@ def import_stills_to_album(album_index: int, file_paths: List[str]) -> Dict[str,
         return {"error": "No project open"}
     gallery = project.GetGallery()
     albums = gallery.GetGalleryStillAlbums()
-    if not albums or album_index >= len(albums):
+    if not albums or album_index < 0 or album_index >= len(albums):
         return {"error": f"No album at index {album_index}"}
     result = albums[album_index].ImportStills(file_paths)
     return {"success": bool(result)}
@@ -274,7 +286,7 @@ def export_stills_from_album(album_index: int, folder_path: str, file_prefix: st
         return {"error": "No project open"}
     gallery = project.GetGallery()
     albums = gallery.GetGalleryStillAlbums()
-    if not albums or album_index >= len(albums):
+    if not albums or album_index < 0 or album_index >= len(albums):
         return {"error": f"No album at index {album_index}"}
     stills = albums[album_index].GetStills()
     if not stills:
@@ -300,11 +312,17 @@ def delete_stills_from_album(album_index: int, still_indices: List[int]) -> Dict
         return {"error": "No project open"}
     gallery = project.GetGallery()
     albums = gallery.GetGalleryStillAlbums()
-    if not albums or album_index >= len(albums):
+    if not albums or album_index < 0 or album_index >= len(albums):
         return {"error": f"No album at index {album_index}"}
     stills = albums[album_index].GetStills()
     if not stills:
         return {"error": "No stills in album"}
-    to_delete = [stills[i] for i in still_indices if i < len(stills)]
+    # A negative index is a real Python index (`stills[-1]` is the last still),
+    # and an out-of-range one used to be dropped while the rest were deleted.
+    # Refuse the whole call instead of deleting a set nobody asked for.
+    invalid = _invalid_indices(still_indices, len(stills))
+    if invalid:
+        return {"error": f"still_indices out of range for {len(stills)} stills: {invalid}"}
+    to_delete = [stills[i] for i in still_indices]
     result = albums[album_index].DeleteStills(to_delete)
     return {"success": bool(result)}

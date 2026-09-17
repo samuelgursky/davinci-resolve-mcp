@@ -810,7 +810,9 @@ def _get_timeline_item(track_type="video", track_index=1, item_index=0):
     if err:
         return None, err
     items = tl.GetItemListInTrack(track_type, track_index)
-    if not items or item_index >= len(items):
+    # Reject negatives: `items[-1]` is the LAST clip, so a negative index would
+    # act on a clip nobody named (EX5 fixed the compound `_get_item`, not this twin).
+    if not items or item_index < 0 or item_index >= len(items):
         return None, {"error": f"No item at index {item_index} on {track_type} track {track_index}"}
     return items[item_index], None
 

@@ -28848,6 +28848,17 @@ def timeline_item_takes(action: str, params: Optional[Dict[str, Any]] = None) ->
     return _unknown(action, ["add","get_count","get_selected_index","get_by_index","select","delete","finalize"])
 
 
+def _index_in_range(idx, length):
+    """True for a real 0-based position. Negatives are refused: Python would read
+    `albums[-1]` as the last album and act on something nobody named."""
+    return isinstance(idx, int) and not isinstance(idx, bool) and 0 <= idx < length
+
+
+def _invalid_indices(indices, length):
+    """The entries of `indices` that are not a 0-based position below `length`."""
+    return [i for i in indices if not _index_in_range(i, length)]
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # TOOL 23: gallery
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -28881,13 +28892,13 @@ def gallery(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, A
     if action == "get_album_name":
         albums = gal.GetGalleryStillAlbums() or []
         idx = p.get("album_index", 0)
-        if idx < len(albums):
+        if _index_in_range(idx, len(albums)):
             return {"name": gal.GetAlbumName(albums[idx])}
         return _err("Album index out of range")
     elif action == "set_album_name":
         albums = gal.GetGalleryStillAlbums() or []
         idx = p.get("album_index", 0)
-        if idx < len(albums):
+        if _index_in_range(idx, len(albums)):
             return {"success": bool(gal.SetAlbumName(albums[idx], p["name"]))}
         return _err("Album index out of range")
     elif action == "get_current_album":
@@ -28896,7 +28907,7 @@ def gallery(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, A
     elif action == "set_current_album":
         albums = gal.GetGalleryStillAlbums() or []
         idx = p.get("album_index", 0)
-        if idx < len(albums):
+        if _index_in_range(idx, len(albums)):
             return {"success": bool(gal.SetCurrentStillAlbum(albums[idx]))}
         return _err("Album index out of range")
     elif action == "get_still_albums":
@@ -28964,7 +28975,7 @@ def gallery_stills(action: str, params: Optional[Dict[str, Any]] = None) -> Dict
     album_idx = p.get("album_index")
     if album_idx is not None:
         albums = gal.GetGalleryStillAlbums() or []
-        if album_idx < len(albums):
+        if _index_in_range(album_idx, len(albums)):
             album = albums[album_idx]
         else:
             return _err("Album index out of range")
@@ -28982,13 +28993,13 @@ def gallery_stills(action: str, params: Optional[Dict[str, Any]] = None) -> Dict
     elif action == "get_label":
         stills = album.GetStills() or []
         idx = p.get("still_index", 0)
-        if idx < len(stills):
+        if _index_in_range(idx, len(stills)):
             return {"label": album.GetLabel(stills[idx])}
         return _err("Still index out of range")
     elif action == "set_label":
         stills = album.GetStills() or []
         idx = p.get("still_index", 0)
-        if idx < len(stills):
+        if _index_in_range(idx, len(stills)):
             return {"success": bool(album.SetLabel(stills[idx], p["label"]))}
         return _err("Still index out of range")
     elif action == "import_stills":
@@ -29119,8 +29130,15 @@ def gallery_stills(action: str, params: Optional[Dict[str, Any]] = None) -> Dict
         return {"files": file_details, "format": used_format, "folder": folder_path, "cleaned_up": cleanup}
     elif action == "delete_stills":
         stills = album.GetStills() or []
-        to_delete = [stills[i] for i in p["still_indices"] if i < len(stills)]
-        return {"success": bool(album.DeleteStills(to_delete))} if to_delete else _err("No valid still indices")
+        still_indices = p["still_indices"]
+        if not isinstance(still_indices, list) or not still_indices:
+            return _err("still_indices must be a non-empty list of 0-based indices")
+        # A negative index is a real Python index (`stills[-1]` is the last still),
+        # and an out-of-range one used to be dropped while the rest were deleted.
+        invalid = _invalid_indices(still_indices, len(stills))
+        if invalid:
+            return _err(f"still_indices out of range for {len(stills)} stills: {invalid}")
+        return {"success": bool(album.DeleteStills([stills[i] for i in still_indices]))}
     return _unknown(action, ["get_stills","get_label","set_label","import_stills","export_stills","grab_and_export","delete_stills"])
 
 
