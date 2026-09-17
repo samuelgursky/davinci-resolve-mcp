@@ -2,6 +2,28 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.7.9 — a negative still, album or item index is refused
+
+### Fixed
+
+- **A negative index acted on the last element instead of being refused.** ([#247](https://github.com/samuelgursky/davinci-resolve-mcp/pull/247), @Dev-next-gen)
+  Python reads `items[-1]` as the last item, and several lookups bounded an index with
+  `>= len(...)` only. The granular `_get_timeline_item` — which 85 granular tools go
+  through — had exactly the gap EX5 closed in the compound `_get_item`, so
+  `item_index=-1` acted on the last clip of the track. Every album and still lookup in
+  the compound `gallery` / `gallery_stills` tools and in `src/granular/gallery.py` had
+  the same one-sided check. Sharpest case: `gallery_stills delete_stills` and granular
+  `delete_stills_from_album` with `still_indices=[-1]` deleted the album's LAST still,
+  and an out-of-range index was silently dropped while the others were deleted and the
+  call reported success. The lower bound is now in the granular resolver and gallery
+  lookups, a small `_index_in_range` helper guards the compound gallery tools, and the
+  two delete paths refuse the whole call when any index is not a 0-based position
+  (the way `ti_copy_grades` treats its target list) rather than deleting a set nobody
+  asked for. Valid indices behave exactly as before; the one visible change is that a
+  partly invalid `still_indices` list now errors instead of partially deleting. Guard
+  test: `tests/test_negative_index_refused.py` drives the real tool bodies against fake
+  gallery and timeline objects; 16 subtests fail on the previous code.
+
 ## What's New in v4.7.8 — `allow_non_mcp_name="false"` no longer lifts the `_mcp_` name guard
 
 ### Fixed
