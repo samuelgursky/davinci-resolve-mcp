@@ -5590,7 +5590,7 @@ def _timeline_lift_range_impl(tl, p: Dict[str, Any], *, resolve=None):
     start, end, items, err = _collect_timeline_items_in_range(tl, p)
     if err:
         return err
-    allow_partial = bool(p.get("allow_partial_item_delete", p.get("allowPartialItemDelete", False)))
+    allow_partial = _coerce_bool(p.get("allow_partial_item_delete", p.get("allowPartialItemDelete")))
     delete_items = []
     blocked = []
     for _, _, item, overlap_start, overlap_end in items:
@@ -25856,7 +25856,7 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         if blocked:
             return blocked
 
-        allow_partial = bool(p.get("allow_partial_item_delete", True))
+        allow_partial = _coerce_bool(p.get("allow_partial_item_delete"), True)
         results = []
         resolve_obj = get_resolve()
         # Hold the Edit page once for the whole run. The per-delete guard nests
