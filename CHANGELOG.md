@@ -2,6 +2,30 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.7.10 — drop-frame sync events are reported at the timecode they happen
+
+### Fixed
+
+- **A sync event on a drop-frame clip was reported 3.6 seconds per hour early, and
+  rendered as non-drop.** ([#248](https://github.com/samuelgursky/davinci-resolve-mcp/pull/248), @Dev-next-gen)
+  `_timecode_for_event` reports an event at `start_timecode + offset`, where the start
+  timecode comes from the media's own timecode track via ffprobe and on an NTSC
+  deliverable is routinely drop-frame (`HH:MM:SS;FF`). `timecode_to_frames` honours
+  drop-frame (`01:00:00;00` at 29.97 is frame 107892), but the detector's private
+  `_frames_to_timecode` had no drop-frame arithmetic, so the frame numbers subtracted
+  on the way in were never added back: the head of a drop-frame clip came back as
+  `00:59:56:12`. That value is appended to the marker note written into the Resolve
+  project — the thing someone reads to line two cameras up off a 2-pop. The inverse
+  now lives next to the forward conversion in `src/utils/multicam.py` as
+  `frames_to_timecode`, so the pair cannot drift apart again, and `sync_detection`
+  carries the drop-frame spelling of the start timecode through to it. Non-drop
+  timecode is deliberately unchanged (29.97 colon timecode legitimately lags the wall
+  clock), and a semicolon at 23.976 still drops nothing because drop-frame is only
+  defined at nominal 30 and 60. Verified on landing by brute force against the forward
+  conversion: two hours at 29.97 (216,000 frames) and 59.94 (432,000 frames), zero
+  round-trip violations, every timecode unique, dropped numbers never at the top of a
+  non-tenth minute. Guard test: `tests/test_sync_event_timecode.py`.
+
 ## What's New in v4.7.9 — a negative still, album or item index is refused
 
 ### Fixed
