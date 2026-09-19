@@ -2,6 +2,98 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.8.9 — the offline suite's child processes no longer reach Resolve
+
+Test-only. No tool, action or runtime code changed.
+
+### Fixed
+
+- **The control panels the suite starts connected to the open Resolve.** The
+  offline guard swaps the servers' entry points and installs its stand-in finder
+  inside the test process. None of it reaches a child process.
+  `server._open_control_panel` starts the real `src/analysis_dashboard.py` with
+  `subprocess.Popen`. That child imported Blackmagic's module and called
+  `scriptapp("Resolve")` through `_connect_resolve_read_only`: at startup, in the
+  inventory warm-up, and for `/api/boot`. Measured on v4.8.4 with a tripwire
+  standing in for the library, a full `python -m unittest discover -s tests -t .`
+  run made 6 calls from 3 panel children. Two children came from
+  `test_control_panel_ipv6_loopback`, whose docstring says "No Resolve". The third
+  came from `test_tool_argument_validation`, which calls every action with no
+  arguments, `open_control_panel` included. v4.8.5 attributed that third child to
+  `test_open_control_panel`, but every test there stubs the port probe and none of
+  them starts a panel.
+  - The guard now puts `tests/offline_child_site` first on PYTHONPATH, so every
+    Python child that inherits the environment runs its `sitecustomize.py` at
+    startup. That file answers `DaVinciResolveScript` and `fusionscript` with an
+    empty stand-in from a `sys.meta_path` finder, as the test process does. The
+    stand-in has no `scriptapp`, and its error names the guard. A panel started by
+    a test now reports `Resolve connection failed: DaVinciResolveScript is the
+    offline test guard's stand-in …` from `/api/boot`.
+  - It also refuses to launch the application through `subprocess` in a child.
+    A child that imports `src.server` and calls a tool falls through
+    `get_resolve()` to `_launch_resolve()` whenever Resolve is closed, and the
+    in-process swap of that function does not exist in a child. The check matches
+    the commands `resolve_runtime.launch_command` builds on each platform, any
+    other program inside an installation such as `fuscript`, and `open` or
+    `osascript` naming the app. Only the program is checked, so a Python child that
+    merely mentions the bundle path still runs.
+  - It runs the `sitecustomize` it shadows first, because Python loads only one.
+    Homebrew's Python ships one that rewrites `sys.prefix` and `sys.path`. A
+    developer's tripwire is often one too, and it typically chains to "the next
+    sitecustomize that is not me", which is now the guard. Before the guard
+    tracked what had already run, the two files chained into each other until
+    `RecursionError`. The tripwire then ended up answering the import, and the
+    guard was never installed. The chain now continues past the guard to the file
+    the tripwire would have reached, and the guard's stand-in goes in front last.
+  - The bridge redirect from v4.8.5 reaches children through the environment.
+    That covers the doctor probe as well. It replaces PYTHONPATH and so never runs
+    the new file, and it calls `connect_resolve(None)`, which is the bridge's route.
+
+### Validation
+
+- New `tests/test_offline_guard_child_process.py`, 14 tests. The main one starts the
+  real panel the way the suite does. Fakes shaped like Blackmagic's pair sit on
+  PYTHONPATH behind the guard: a `DaVinciResolveScript.py` loader that hands over
+  `fusionscript`, and a `scriptapp` that records every call to a file. The test
+  asserts that `/api/boot` names the guard's stand-in and that neither fake was
+  loaded. A control child without the guard does reach the fake `scriptapp`. The
+  other tests cover the stand-in answering both names again after a
+  `sys.modules` pop, a shadowed `sitecustomize` still running, and a chaining one
+  reaching the file after the guard. They also cover a second checkout's copy not
+  chaining in, the launch check against `launch_command` for three platforms and
+  both modes, other launch forms, ordinary children still running, a guarded child
+  refusing a bundle-shaped program that does not exist, and the PYTHONPATH
+  install and restore.
+- With the PYTHONPATH export removed from `install()`, the panel test fails
+  ("DaVinci Resolve is not connected"), and the tripwire records 4 `scriptapp`
+  calls from the panel child. With the chain tracking removed, both chaining
+  tests fail.
+- Full suite, `python -m unittest discover -s tests -t .`: 3,770 tests. The 11
+  errors are the same as on v4.8.8 in this environment (no `numpy` or `requests`
+  in the venv, plus `test_offline_fallback` and `test_lut_file_controls`).
+  `python -m unittest discover -s tests` gives the same result. Both runs used a
+  scratch `sitecustomize` tripwire on PYTHONPATH, which chains to Homebrew's. It
+  answered the scripting modules with a recording module, refused native loads of
+  `fusionscript` and launches of the application, and redirected the bridge
+  config. It recorded no `scriptapp` call, native load or launch in the test
+  process or in any child it could see, and that includes 4 panel children per
+  run. The same tripwire on v4.8.4 recorded 6 panel-child calls.
+- The tripwire could not see every child, and one of the children it missed
+  reached Resolve. `install.verify_resolve_connection` replaces PYTHONPATH with the
+  Blackmagic Modules directory, so its child loads neither the tripwire nor this
+  guard. `test_scripting_lib_discovery.test_the_live_probe_agrees_with_the_summary`
+  runs that probe for real whenever Resolve is installed. With Resolve open, each
+  of the four full runs behind this release most likely made one read-only
+  connection through it (`scriptapp`, `GetProductName`, `GetVersionString`). This
+  release does not close that path.
+- Not covered: a child started with its own PYTHONPATH, as that probe and the
+  doctor probe are, with `-E` or `-I`, or with an environment built from scratch
+  does not run the file. Launches outside `subprocess` (`os.system`, `os.exec*`)
+  are not intercepted.
+- pytest is not installed here, so the pytest path was not run locally. CI runs
+  `python -m pytest tests -q`.
+- No Resolve behavior changed, so no live Resolve run is required. None was made.
+
 ## What's New in v4.8.8 — a test that reaches a Resolve launcher fails
 
 Test-only. No tool, action or runtime code changed.
