@@ -550,6 +550,12 @@ class AppendClipInfosResultHandlingTest(unittest.TestCase):
         self.assertEqual(_normalize_include_linked(True), {"audio"})
         self.assertEqual(_normalize_include_linked("all"), {"video", "audio"})
 
+    def test_normalize_include_linked_string_false_returns_empty(self):
+        for spelling in ("false", "False", "FALSE", "no", "0", "off", "none"):
+            with self.subTest(spelling=spelling):
+                result = _normalize_include_linked(spelling)
+                self.assertEqual(result, set(), f'"{spelling}" should disable linked items')
+
     def test_get_selected_timeline_items_uses_selection_api(self):
         selected = [TimelineItemDupStub(unique_id="selected-source")]
         items, warnings = _get_selected_timeline_items(SelectedTimelineStub(selected=selected))
