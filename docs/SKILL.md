@@ -821,6 +821,19 @@ Key actions: `list`, `list_attributes`, `get_current`,
 `notes`, and `liveCollaborationMode` per project in the current folder without
 loading any of them.
 
+`snapshot(include?, track_types?, item_limit?)` is the one read to make before
+planning: `project`, `timeline` (per-track items), `gaps_overlaps`, `render`
+(`is_rendering` plus each job's status) and `media_pool` counts in a single
+read-only call, instead of `get_current` + `timeline.get_current` +
+`probe_timeline_structure` + `detect_gaps_overlaps` + `render.is_rendering` one
+turn at a time. `include` picks sections, `item_limit` (default 200) caps the
+items returned and sets `timeline.items_truncated`, and a section that fails
+reports `{error}` in its own place. It saves turns and response size, not read
+time: the timeline sections cost what `probe_timeline_structure` costs and
+`media_pool` walks every pool clip, so on a large project pass `include` with
+only the sections you need. Frame fields are `probe_timeline_structure`'s,
+unchanged.
+
 Project / Database / Archive kernel actions (v2.15.0+) add guarded project
 lifecycle, settings, database, preset, and archive boundary helpers:
 
