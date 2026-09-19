@@ -1,0 +1,14 @@
+#:schema https://developers.openai.com/codex/config-schema.json
+
+model = "gpt-6-astra"
+model_reasoning_effort = "high"
+developer_instructions = """
+Follow explicit user instructions first, then AGENTS.md and applicable skills within that scope.
+Complete work that is already authorized, and ask only when a missing choice would materially change the result.
+Delegate independent work when it improves speed or quality, while keeping the main thread focused on decisions and outcomes.
+Run tests proportional to the change; broaden verification only when failures, risk, or repository rules justify it.
+"""
+
+[agents]
+default_subagent_model = "gpt-6-astra"
+default_subagent_reasoning_effort = "medium"

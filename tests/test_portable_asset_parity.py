@@ -18,6 +18,19 @@ import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
+CODEX_CONFIG = REPO / ".codex" / "config.toml"
+
+
+def _quoted_toml_value(text: str, key: str) -> str:
+    matches = re.findall(
+        rf'(?m)^\s*{re.escape(key)}\s*=\s*"([^"]+)"\s*$',
+        text,
+    )
+    if len(matches) != 1:
+        raise AssertionError(f"expected one quoted {key}, found {len(matches)}")
+    return matches[0]
+
+
 sys.path.insert(0, str(REPO / "scripts" / "agent-rules"))
 
 from sync_portable_assets import role_pairs, skill_pairs, strip_frontmatter  # noqa: E402
@@ -69,6 +82,36 @@ class RoleParity(unittest.TestCase):
                 self.assertRegex(text, r"^---\n", f"{name}: missing frontmatter")
                 self.assertRegex(text, r"(?m)^tools:", f"{name}: frontmatter lost its tools pin")
                 self.assertRegex(text, r"(?m)^model:\s*\S+", f"{name}: frontmatter lost its model pin")
+
+
+class CodexProjectConfiguration(unittest.TestCase):
+    def test_astra_is_the_project_default(self):
+        text = CODEX_CONFIG.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "#:schema https://developers.openai.com/codex/config-schema.json",
+            text,
+        )
+        self.assertEqual(_quoted_toml_value(text, "model"), "gpt-6-astra")
+        self.assertEqual(_quoted_toml_value(text, "model_reasoning_effort"), "high")
+        self.assertEqual(
+            _quoted_toml_value(text, "default_subagent_model"),
+            "gpt-6-astra",
+        )
+        self.assertEqual(
+            _quoted_toml_value(text, "default_subagent_reasoning_effort"),
+            "medium",
+        )
+        self.assertNotIn("service_tier", text)
+
+    def test_astra_instructions_preserve_authority_and_bounded_verification(self):
+        text = CODEX_CONFIG.read_text(encoding="utf-8")
+
+        self.assertIn("Follow explicit user instructions first", text)
+        self.assertIn("AGENTS.md and applicable skills", text)
+        self.assertIn("Complete work that is already authorized", text)
+        self.assertIn("Delegate independent work", text)
+        self.assertIn("Run tests proportional to the change", text)
 
 
 class HookShims(unittest.TestCase):
