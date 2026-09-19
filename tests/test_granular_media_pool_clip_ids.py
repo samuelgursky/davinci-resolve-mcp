@@ -12,6 +12,9 @@ or moved the subset that resolved and answered like a full batch.
 
 The fake MediaPool records every call that reaches Resolve, so "changes nothing"
 is asserted as "Resolve was never asked", not inferred from the return value.
+
+v4.8.7: append_to_timeline (clip_ids form) answered {"success": True, "count": 0}
+when AppendToTimeline itself returned None/False/[] (FalsyAppendTest).
 """
 import os
 import tempfile
@@ -79,6 +82,16 @@ class FakeMP:
     def MoveClips(self, clips, target):
         self.calls.append(("MoveClips", list(clips), target))
         return True
+
+
+class FalsyAppendMP(FakeMP):
+    def __init__(self, root, answer):
+        super().__init__(root)
+        self._answer = answer
+
+    def AppendToTimeline(self, clips):
+        self.calls.append(("AppendToTimeline", list(clips)))
+        return self._answer
 
 
 def _tree():
@@ -207,6 +220,18 @@ class UnresolvedClipIdTest(_GranularCase):
                 out = self._call(mp, tool, clip_ids=[], **extra)
                 self.assertIn("error", out)
                 self.assertEqual(mp.calls, [])
+
+
+class FalsyAppendTest(_GranularCase):
+    def test_a_falsy_answer_is_a_failure_not_count_zero(self):
+        for answer in (None, False, []):
+            with self.subTest(answer=answer):
+                mp, top, nested, _ = _tree()
+                mp = FalsyAppendMP(mp.GetRootFolder(), answer)
+                out = self._call(mp, "append_to_timeline", clip_ids=["clip-top", "clip-nested"])
+                self.assertEqual(out, {"success": False,
+                                       "error": "Failed to append clip_ids to timeline"})
+                self.assertEqual(mp.calls, [("AppendToTimeline", [top, nested])])
 
 
 if __name__ == "__main__":

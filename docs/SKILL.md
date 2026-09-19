@@ -2192,6 +2192,13 @@ media_pool(action="append_to_timeline", params={"clip_infos": [
 ]})
 ```
 
+When Resolve answers `AppendToTimeline` with None/False/[], either form fails
+with `APPEND_TO_TIMELINE_FAILED`, not `success` with `count: 0`, and keeps
+`verified_operation` (the current timeline's item count before and after) on
+the error. `error.retryable` is true only when that readback shows nothing was
+appended; otherwise inspect the timeline before retrying, or the clips can land
+twice. The granular `append_to_timeline` answers `{"success": false, "error": ...}`.
+
 Mixed-fps caution: `start_frame`/`end_frame` are SOURCE frames, and a source
 whose fps differs from the timeline's rounds DOWN on conversion — a 24.0 or
 29.97 clip appended into a 23.976 timeline can land one frame short of its

@@ -20,7 +20,9 @@ STRICTLY NON-DESTRUCTIVE, and it never launches Resolve:
   resolve are the real ones; only their read methods are called. The project is
   read too: create_timeline_from_clips looks its (unique, generated) name up in
   the timeline list, and append_to_timeline reads the current timeline's items
-  before and after for its readback.
+  before and after for its readback. Since v4.8.7 the tripwire's False must come
+  back from append_to_timeline as APPEND_TO_TIMELINE_FAILED with that readback
+  kept on the error; it used to answer success with count 0.
 - Confirm-token gating is forced on and no token is ever passed, so delete_clips
   can at most *issue* a token (kept in memory, never used).
 - The destructive hook's project-root provider is disabled for the run, so no
@@ -242,11 +244,23 @@ def main() -> int:
     elif preview.get("clips_lost") != 1 or preview.get("names") != [cname]:
         failures.append(f"delete preview does not describe the probe clip: {preview}")
 
+    # The tripwire answers False; append_to_timeline must report that as a failed
+    # append, not success with count 0.
+    whole_batch_codes = {"append_to_timeline": "APPEND_TO_TIMELINE_FAILED"}
     for action, (extra, method) in cases.items():
         if action == "delete_clips":
             continue
-        _, calls, _ = step(f"{action}([probe])", action, {"clip_ids": [cid], **extra},
-                           expect_calls=1)
+        out, calls, _ = step(f"{action}([probe])", action, {"clip_ids": [cid], **extra},
+                             expect_code=whole_batch_codes.get(action), expect_calls=1)
+        if action == "append_to_timeline":
+            op = out.get("verified_operation") or {}
+            delta = (op.get("readback") or {}).get("item_count_delta")
+            if op.get("verification_status") != "api_failed":
+                failures.append(f"append_to_timeline([probe]) lost its readback: "
+                                f"verification_status={op.get('verification_status')!r}")
+            if _err_of(out).get("retryable") is not (delta == 0):
+                failures.append(f"append_to_timeline([probe]) retryable="
+                                f"{_err_of(out).get('retryable')!r} with item_count_delta={delta!r}")
         if len(calls) == 1:
             name, args = calls[0]
             # CreateTimelineFromClips(name, clips) and ExportMetadata(path, clips)
@@ -287,7 +301,8 @@ def main() -> int:
             print(f"  - {f}")
         return 1
     print(f"\nPASS: partial and all-missing batches refused for all {len(cases)} actions with "
-          f"no MediaPool call attempted; a whole batch resolves to the real clip; "
+          f"no MediaPool call attempted; a whole batch resolves to the real clip, and "
+          f"append_to_timeline reports the tripwire's False as APPEND_TO_TIMELINE_FAILED; "
           f"{len(after_folders)} folders / {len(after_clips)} clips, the probe clip's "
           f"folder and File Path, the timeline count ({timelines_after}) and the current "
           f"timeline's items unchanged; no metadata file written.")

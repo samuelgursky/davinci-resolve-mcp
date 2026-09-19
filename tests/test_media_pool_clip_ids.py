@@ -27,6 +27,10 @@ v4.8.6 fixed the other four (BATCH_ACTIONS below):
 In all eight a bare string was iterated character by character, one id per
 character.
 
+v4.8.7: with every id resolved, append_to_timeline (clip_ids) still answered
+{"success": true, "count": 0} when AppendToTimeline returned None/False/[]; only
+verified_operation.verification_status said "api_failed" (FalsyAppendTest).
+
 The fake MediaPool records every call that reaches Resolve, so "mutates nothing"
 is asserted as "Resolve was never asked", not inferred from the return value.
 """
@@ -144,7 +148,24 @@ class FakeMP:
         return True
 
 
-def _tree():
+class FalsyAppendMP(FakeMP):
+    """AppendToTimeline answers `answer`; `lands` items reach the timeline anyway."""
+
+    def __init__(self, root, answer, lands=0):
+        super().__init__(root)
+        self._answer = answer
+        self._lands = lands
+
+    def AppendToTimeline(self, clips):
+        self.calls.append(("AppendToTimeline", list(clips)))
+        if self._lands:
+            start = len(self.timeline.items)
+            self.timeline.items.extend(
+                FakeClip(f"item {start + i}", f"ti-{start + i}") for i in range(self._lands))
+        return self._answer
+
+
+def _tree(make_mp=FakeMP):
     # One clip at root, one two levels down, and an empty destination bin.
     top = FakeClip("A001.mov", "clip-top")
     nested = FakeClip("B002.mov", "clip-nested")
@@ -152,7 +173,7 @@ def _tree():
     footage = FakeFolder("FOOTAGE", "id-footage", subs=[day1])
     dest = FakeFolder("ARCHIVE", "id-archive")
     root = FakeFolder("Master", "id-root", clips=[top], subs=[footage, dest])
-    return FakeMP(root), top, nested, dest
+    return make_mp(root), top, nested, dest
 
 
 def _call(mp, action, params, *, require_confirm=False):
@@ -362,6 +383,63 @@ class BatchActionTest(unittest.TestCase):
                     out = _call(mp, action, {**extra, **ids})
                     self.assertIn("Provide clip_ids", out["error"]["message"])
                     self.assertEqual(mp.calls, [])
+
+
+class FalsyAppendTest(unittest.TestCase):
+    """AppendToTimeline answering None/False/[] is a failed append, not count 0."""
+
+    WHOLE_BATCH = {"clip_ids": ["clip-top", "clip-nested"]}
+
+    def test_a_falsy_answer_is_an_error(self):
+        for answer in (None, False, []):
+            with self.subTest(answer=answer):
+                mp, top, nested, _ = _tree(lambda root: FalsyAppendMP(root, answer))
+                out = _call(mp, "append_to_timeline", self.WHOLE_BATCH)
+                self.assertNotEqual(out.get("success"), True)
+                self.assertEqual(out["error"]["code"], "APPEND_TO_TIMELINE_FAILED")
+                self.assertEqual(out["error"]["category"], "resolve_api_failed")
+                self.assertEqual(out["error"]["message"], "Failed to append clip_ids to timeline")
+                self.assertEqual(mp.calls, [("AppendToTimeline", [top, nested])])
+
+    def test_the_readback_stays_on_the_error(self):
+        mp, _, _, _ = _tree(lambda root: FalsyAppendMP(root, None))
+        out = _call(mp, "append_to_timeline", self.WHOLE_BATCH)
+        op = out["verified_operation"]
+        self.assertEqual(op["verification_status"], "api_failed")
+        self.assertIs(op["execution"]["success"], False)
+        self.assertEqual(op["requested"]["expected_count"], 2)
+        self.assertEqual(op["readback"]["item_count_delta"], 0)
+        self.assertEqual(out["error"]["state"],
+                         {"expected_item_count_delta": 2, "item_count_delta": 0})
+
+    def test_retryable_only_when_the_readback_shows_nothing_landed(self):
+        # A retry after an append that did land puts the clips on twice.
+        mp, _, _, _ = _tree(lambda root: FalsyAppendMP(root, None))
+        self.assertTrue(_call(mp, "append_to_timeline", self.WHOLE_BATCH)["error"]["retryable"])
+
+        mp, _, _, _ = _tree(lambda root: FalsyAppendMP(root, None, lands=2))
+        out = _call(mp, "append_to_timeline", self.WHOLE_BATCH)
+        self.assertEqual(out["error"]["code"], "APPEND_TO_TIMELINE_FAILED")
+        self.assertFalse(out["error"]["retryable"])
+        self.assertEqual(out["error"]["state"]["item_count_delta"], 2)
+
+        # No current timeline: nothing to read back, so nothing is ruled out.
+        mp, _, _, _ = _tree(lambda root: FalsyAppendMP(root, None))
+        mp.timeline = None
+        out = _call(mp, "append_to_timeline", self.WHOLE_BATCH)
+        self.assertEqual(out["error"]["code"], "APPEND_TO_TIMELINE_FAILED")
+        self.assertFalse(out["error"]["retryable"])
+        self.assertIsNone(out["error"]["state"]["item_count_delta"])
+
+    def test_clip_infos_fails_the_same_way(self):
+        mp, top, _, _ = _tree(lambda root: FalsyAppendMP(root, None))
+        out = _call(mp, "append_to_timeline", {"clip_infos": [
+            {"clip_id": "clip-top", "start_frame": 0, "end_frame": 24,
+             "record_frame": 0, "track_index": 1}]})
+        self.assertEqual(out["error"]["code"], "APPEND_TO_TIMELINE_FAILED")
+        self.assertEqual(out["error"]["message"], "Failed to append clip_infos to timeline")
+        self.assertEqual(out["verified_operation"]["verification_status"], "api_failed")
+        self.assertEqual(len(mp.calls), 1)
 
 
 if __name__ == "__main__":

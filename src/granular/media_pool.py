@@ -233,7 +233,9 @@ def append_to_timeline(
     if clips_err:
         return clips_err
     result = mp.AppendToTimeline(clips)
-    return {"success": True, "count": len(result) if result else 0}
+    if not result:
+        return {"success": False, "error": "Failed to append clip_ids to timeline"}
+    return {"success": True, "count": len(result)}
 
 
 @mcp.tool()

@@ -14266,6 +14266,35 @@ def _append_to_timeline_verified_operation(requested: Dict[str, Any], verificati
     )
 
 
+def _append_to_timeline_failed(message: str, result, requested: Dict[str, Any], verification: Dict[str, Any], before):
+    """AppendToTimeline answered None/False/[]: an error that keeps the readback.
+
+    The answer alone does not prove nothing landed, so the call is retryable only
+    when the readback shows the timeline's item count unchanged; a retry after an
+    append that did land puts the clips on the timeline twice.
+    """
+    delta = verification.get("item_count_delta")
+    nothing_landed = delta == 0
+    out = _err(
+        message,
+        code="APPEND_TO_TIMELINE_FAILED",
+        category="resolve_api_failed",
+        retryable=nothing_landed,
+        reason=f"MediaPool.AppendToTimeline returned {result!r}",
+        remediation=(
+            "Nothing was appended. Check that the intended timeline is current and the clips can go on it, then retry."
+            if nothing_landed else
+            "The readback cannot rule out that clips were appended; inspect the current timeline before retrying so nothing is appended twice."
+        ),
+        state={
+            "expected_item_count_delta": verification.get("expected_item_count_delta"),
+            "item_count_delta": delta,
+        },
+    )
+    out["verified_operation"] = _append_to_timeline_verified_operation(requested, verification, before)
+    return out
+
+
 def _link_proxy_checked(root, p: Dict[str, Any]):
     clip = _find_clip(root, p.get("clip_id", ""))
     if not clip:
@@ -21175,6 +21204,9 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
           record_frame is relative to the current timeline start frame by default;
           pass record_frame_mode="absolute" for raw Resolve recordFrame values.
           Returns timeline_item_id per item.
+        Either form: Resolve answering None/False/[] is APPEND_TO_TIMELINE_FAILED,
+          with verified_operation (the timeline readback) kept on the error;
+          retryable only when the readback shows nothing was appended.
       import_media(paths) -> {imported}
         UNSAFE. No dry_run. Prefer safe_import_media.
         — simple: params.paths is a list of file/folder paths
@@ -21434,7 +21466,8 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
                 len(built),
             )
             if not result:
-                return _err("Failed to append clip_infos to timeline")
+                return _append_to_timeline_failed(
+                    "Failed to append clip_infos to timeline", result, requested, verification, before)
             items_out = []
             for i, item in enumerate(result):
                 item_out, item_err = _serialize_appended_timeline_item(item, i)
@@ -21469,7 +21502,10 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
             requested,
             len(clips),
         )
-        out = _ok(count=len(result) if result else 0)
+        if not result:
+            return _append_to_timeline_failed(
+                "Failed to append clip_ids to timeline", result, requested, verification, before)
+        out = _ok(count=len(result))
         out["verified_operation"] = _append_to_timeline_verified_operation(
             requested,
             verification,
