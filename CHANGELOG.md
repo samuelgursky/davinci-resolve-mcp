@@ -2,6 +2,86 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.8.7 — an append Resolve refuses is reported as a failure
+
+### Fixed
+
+- **`media_pool` `append_to_timeline` (legacy `clip_ids` mode) no longer answers
+  `{"success": true, "count": 0}` when Resolve appends nothing.** When
+  `MediaPool.AppendToTimeline` returned `None`, `False` or `[]`, the action still
+  built a success payload; only `verified_operation.verification_status: "api_failed"`
+  said otherwise. This is the gap the previous entry recorded from its live run
+  (`append_to_timeline([probe]) -> success=True` against a tripwire answering
+  `False`). It now fails with `APPEND_TO_TIMELINE_FAILED` / `resolve_api_failed`,
+  `error.reason` naming what Resolve returned, `error.state` carrying
+  `expected_item_count_delta` and `item_count_delta`, and `verified_operation` kept
+  on the error so the before/after readback is not lost.
+- **`retryable` follows the readback, not the category default.**
+  `resolve_api_failed` defaults to retryable, but Resolve's answer does not prove
+  nothing landed, and a retry after an append that did land puts the clips on the
+  timeline twice. The error is retryable only when the readback shows the current
+  timeline's item count unchanged. With no current timeline to read, or a changed
+  count, it is not, and the remediation says to inspect the timeline first.
+- **The positioned `clip_infos` mode fails the same way.** It already returned an
+  error, but as `UNSPECIFIED` with the readback dropped. Its message is unchanged;
+  the code, the `retryable` rule and the kept `verified_operation` are now shared.
+- **Granular `append_to_timeline` (`clip_ids` form)** answered
+  `{"success": True, "count": 0}` as well. It now returns
+  `{"success": false, "error": "Failed to append clip_ids to timeline"}`, the granular
+  server's flat shape, matching its own `clip_infos` form.
+
+### Not changed
+
+- A truthy but short answer (fewer timeline items than clips requested) is still
+  `success` with the real `count`; `verified_operation` reads
+  `api_success_unverified` when the item count falls short.
+- The other `AppendToTimeline` call sites in `src/` already treat an empty answer as
+  a failure or report `success: bool(appended)`. In the live check, the six other
+  whole-batch actions that reach the tripwire already report its `False` as a failure
+  (`success: false` or an error); `append_to_timeline` was the only one reporting
+  success.
+
+### Validation
+
+- `tests/test_media_pool_clip_ids.py` adds `FalsyAppendTest` (4 tests) against a fake
+  Media Pool whose `AppendToTimeline` returns `None` / `False` / `[]`: the error code,
+  category and message with the call recorded once; the readback kept on the error;
+  `retryable` true only when nothing landed (items that land anyway, and no current
+  timeline, are not retryable); `clip_infos` failing with the same code. Against the
+  pre-fix code all 4 fail; all pass after.
+- `tests/test_granular_media_pool_clip_ids.py` adds `FalsyAppendTest` (1 test, the same
+  three answers); it fails on the pre-fix code and passes after.
+- `tests/live_clip_ids_check.py` now expects `APPEND_TO_TIMELINE_FAILED` for the
+  whole-batch `append_to_timeline([probe])` (the tripwire answers `False`), with
+  `verified_operation.verification_status == "api_failed"` and `retryable` exactly when
+  `item_count_delta == 0`. Driven offline against a fake Resolve: PASS on this code;
+  on the pre-fix code 3 findings, reproducing `success=True`.
+- Offline suite (`unittest discover -s tests -t .`), run with Resolve open on the
+  machine and sealed off it: `DaVinciResolveScript` blocked in `sys.modules`, the
+  bridge config pointed at a path that does not exist, the granular launcher
+  replaced with a refusal. On top of v4.8.6: 3,762 tests run, 0 failures, 84
+  skipped, 13 errors, all environment gaps: `numpy` / `requests` absent from the
+  venv (five modules fail to import, one LUT test), `node_modules` not installed
+  (five `test_offline_fallback` cases), and `test_live_api` / `test_resolve20_api`, which import
+  `DaVinciResolveScript` directly and were kept from connecting. None touch
+  `media_pool`. The granular launcher was reached 10 times during the run:
+  `tests/offline_guard.py` still guards `src/server.py` only. Static checks,
+  api-parity, api-limitations, read/write symmetry, agent-rule generation and the
+  drift guards clean; `test_static_undefined_names` skipped because pyflakes is not
+  installed.
+- **Live-validated on Resolve Studio 21.1.0.14** with
+  `venv/bin/python tests/live_clip_ids_check.py` against the project the previous
+  release was checked on (144 folders, 2,600 clips, 24 timelines), probing a clip
+  seven folders deep: PASS. The whole-batch `append_to_timeline([probe])` now comes
+  back `APPEND_TO_TIMELINE_FAILED` for the tripwire's `False` (it answered
+  `success=True` before), with `verified_operation.verification_status ==
+  "api_failed"` and `retryable` matching the readback, and its operation envelope is
+  logged as `status: failed`. The other seven actions answer as in the previous
+  run. Folder tree, clip placement, the probe's File Path, the timeline count and
+  the current timeline's items read back identical, and no metadata file was
+  written. That run was on this change stacked on v4.8.3; v4.8.4 underneath
+  touches only Fusion nest controls (`fusion_comp`).
+
 ## What's New in v4.8.6 — every clip_ids batch is all-or-nothing
 
 ### Fixed
