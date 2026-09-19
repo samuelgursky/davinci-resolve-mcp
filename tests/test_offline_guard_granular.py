@@ -209,7 +209,8 @@ class GranularStandInTests(unittest.TestCase):
         before = len(offline_guard.LAUNCH_ATTEMPTS)
         self.assertFalse(self.common._launch_resolve())
         self.assertEqual(len(offline_guard.LAUNCH_ATTEMPTS), before + 1)
-        # Deliberate, so it must not show up in the pytest launch report.
+        # Deliberate. Deleting the entry keeps it out of the pytest launch
+        # report, and keeps the guard's launch check from failing this test.
         del offline_guard.LAUNCH_ATTEMPTS[before:]
 
     def test_a_tool_module_reaching_for_resolve_finds_none(self) -> None:

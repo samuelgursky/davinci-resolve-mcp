@@ -455,7 +455,11 @@ class McpSchema(unittest.TestCase):
         for path in sorted((pathlib.Path(__file__).resolve().parent.parent / "src" / "granular").glob("*.py")):
             module = importlib.import_module(f"src.granular.{path.stem}")
             for name, fn in vars(module).items():
-                if not hasattr(fn, "__granular_destructive__") or name not in self.tools:
+                # Read statically. Ten of these modules hold `resolve =
+                # ResolveProxy()`, whose `__getattr__` connects to Resolve and
+                # launches it when none answers; `hasattr` reached the launcher
+                # once per module.
+                if inspect.getattr_static(fn, "__granular_destructive__", None) is None or name not in self.tools:
                     continue
                 hooked += 1
                 original = set(inspect.signature(fn.__wrapped__).parameters)
@@ -464,6 +468,13 @@ class McpSchema(unittest.TestCase):
                     self.assertEqual(advertised, original | {dh.GRANULAR_OVERRIDE_PARAM})
                     self.assertTrue(self.tools[name].annotations.destructiveHint)
         self.assertGreater(hooked, 100, "the hook is not on the tools FastMCP registered")
+
+    def test_the_module_scan_asks_for_no_connection(self):
+        """Under the offline guard `get_resolve` answers None, so the scan above
+        would pass even if it asked. This makes asking fail."""
+        from src.granular import common
+        with mock.patch.object(common, "get_resolve", side_effect=AssertionError("asked for a connection")):
+            self.test_every_hooked_tool_advertises_the_override_and_nothing_else_new()
 
     def test_readers_and_plain_writes_do_not_carry_the_override(self):
         for name in ("ti_get_info", "timeline_get_track_name", "add_marker" if "add_marker" in self.tools else "ti_get_markers"):
