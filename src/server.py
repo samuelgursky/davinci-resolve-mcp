@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 377-tool granular server instead
 """
 
-VERSION = "4.8.1"
+VERSION = "4.8.2"
 
 import base64
 import os
@@ -2910,6 +2910,45 @@ def _find_clip(folder, clip_id):
         if found:
             return found
     return None
+
+
+def _clips_from_ids(root, clip_ids, *, verb):
+    """Resolve Media Pool clip unique IDs to clip objects. Returns (clips, error).
+
+    Unresolved ids abort the call instead of being dropped. The raw clip actions
+    used to filter misses out and hand Resolve whatever was left, so a mixed batch
+    deleted, moved, relinked or unlinked the subset that happened to resolve and
+    answered plain {"success": true} — indistinguishable from every id having
+    resolved. move_clips/relink/unlink did not even stop at an empty result:
+    MoveClips([], target) moved nothing and still reported success.
+
+    A non-list is refused rather than iterated: a bare string used to become one
+    id per character, each matching nothing and each silently dropped.
+    """
+    if not isinstance(clip_ids, list) or not clip_ids:
+        return None, _err(
+            "clip_ids must be a non-empty list of Media Pool clip unique IDs",
+            code="INVALID_CLIP_IDS", category="invalid_input",
+            remediation="Pass clip_ids as a list, e.g. params={\"clip_ids\": [\"<id>\"]}.")
+    clips, resolved, unresolved = [], [], []
+    for cid in clip_ids:
+        cid = str(cid)
+        found = _find_clip(root, cid)
+        if found is None:
+            unresolved.append(cid)
+        else:
+            clips.append(found)
+            resolved.append(cid)
+    if unresolved:
+        return None, _err(
+            f"Clip(s) not found: {', '.join(unresolved)}",
+            code="CLIP_NOT_FOUND", category="invalid_input",
+            reason=(f"{len(unresolved)} of {len(clip_ids)} clip_ids matched no clip "
+                    f"anywhere in the Media Pool; nothing was {verb}."),
+            remediation=("List clips with folder get_clips (or media_pool get_selected) "
+                         "and pass only ids that still exist."),
+            state={"unresolved_clip_ids": unresolved, "resolved_clip_ids": resolved})
+    return clips, None
 
 
 def _find_clip_with_parent(folder, clip_id, _parent=None):
@@ -21086,6 +21125,9 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
           Example: [{"FilePath": "frame_%03d.dpx", "StartIndex": 1, "EndIndex": 100}]
       delete_clips(clip_ids) -> {success}
         DESTRUCTIVE. Removes clips from the Media Pool (does not touch source files).
+        An id matching no clip fails the whole call (CLIP_NOT_FOUND) rather than
+        deleting the ids that did resolve; the same holds for move_clips, relink
+        and unlink.
       move_clips(clip_ids, target_path) -> {success}
       relink(clip_ids, folder_path) -> {success}
         UNSAFE. No dry_run. Prefer safe_relink.
@@ -21393,10 +21435,9 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
             result = mp.ImportMedia(paths)
         return {"imported": len(result) if result else 0}
     elif action == "delete_clips":
-        clips = [_find_clip(root, cid) for cid in p["clip_ids"]]
-        clips = [c for c in clips if c]
-        if not clips:
-            return _err("No clips found")
+        clips, clips_err = _clips_from_ids(root, p["clip_ids"], verb="deleted")
+        if clips_err:
+            return clips_err
         if "confirm_token" not in p and "confirmToken" not in p and _confirm_token_required():
             return _issue_confirm_token(
                 action="media_pool.delete_clips", params=p,
@@ -21413,16 +21454,19 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
         target = _navigate_folder(mp, p["target_path"])
         if not target:
             return _err(f"Target folder not found: {p['target_path']}")
-        clips = [_find_clip(root, cid) for cid in p["clip_ids"]]
-        clips = [c for c in clips if c]
+        clips, clips_err = _clips_from_ids(root, p["clip_ids"], verb="moved")
+        if clips_err:
+            return clips_err
         return {"success": bool(mp.MoveClips(clips, target))}
     elif action == "relink":
-        clips = [_find_clip(root, cid) for cid in p["clip_ids"]]
-        clips = [c for c in clips if c]
+        clips, clips_err = _clips_from_ids(root, p["clip_ids"], verb="relinked")
+        if clips_err:
+            return clips_err
         return {"success": bool(mp.RelinkClips(clips, p["folder_path"]))}
     elif action == "unlink":
-        clips = [_find_clip(root, cid) for cid in p["clip_ids"]]
-        clips = [c for c in clips if c]
+        clips, clips_err = _clips_from_ids(root, p["clip_ids"], verb="unlinked")
+        if clips_err:
+            return clips_err
         return {"success": bool(mp.UnlinkClips(clips))}
     elif action == "export_metadata":
         clip_ids = p.get("clip_ids")
