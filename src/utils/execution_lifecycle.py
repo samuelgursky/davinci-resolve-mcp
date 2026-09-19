@@ -378,6 +378,14 @@ class RiskClassificationHook(LifecycleHook):
         return BlastRadius.TIMELINE, "the timeline node graph (every clip on the timeline)"
 
     _READ_ONLY_PREFIXES = ("get_", "list_", "query_", "probe_", "inspect_", "export_", "check_")
+    #: Reads whose action name carries no read verb. Without an entry here a
+    #: pure read falls to the name-based MEDIUM default and every call reports
+    #: "risk unestablished" — noise on the one call an agent makes before
+    #: planning (project_manager.snapshot, #251).
+    _READ_ONLY_PAIRS = frozenset({
+        ("dctl", "validate_native"),
+        ("project_manager", "snapshot"),
+    })
 
     @classmethod
     def classify(cls, tool_name: str, action: str, params: Dict[str, Any]) -> RiskAssessment:
@@ -448,7 +456,7 @@ class RiskClassificationHook(LifecycleHook):
                 else BlastRadius.ITEM
             )
             reasons.append(f"Recoverable edit to existing state: {action}")
-        elif any(action.startswith(p) for p in cls._READ_ONLY_PREFIXES) or action in {"read", "status", "info"} or pair == ("dctl", "validate_native"):
+        elif any(action.startswith(p) for p in cls._READ_ONLY_PREFIXES) or action in {"read", "status", "info"} or pair in cls._READ_ONLY_PAIRS:
             level = RiskLevel.LOW
             destructive = False
             radius = BlastRadius.ITEM

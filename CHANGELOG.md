@@ -2,6 +2,42 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.8.0 — one read before planning: `project_manager snapshot`
+
+### Added
+
+- **`project_manager(action="snapshot")`** — a read-only readout of the state an agent
+  inspects before it plans an edit. ([#251](https://github.com/samuelgursky/davinci-resolve-mcp/pull/251), @tpellet)
+  Returns `project`, `timeline` (per-track items), `gaps_overlaps`, `render`
+  (`is_rendering` plus each job's status) and `media_pool` counts in one call, instead
+  of `get_current` + `timeline.get_current` + `probe_timeline_structure` +
+  `detect_gaps_overlaps` + `render.is_rendering` one LLM turn at a time. The
+  motivation is measured: in 8,407 mined agent tool turns from one real project,
+  2,222 were state inspection. It composes the existing helpers, so the values match
+  what those actions already return, and it never switches page, timeline or folder.
+  - `include` picks sections; an unknown name or an empty list is refused rather than
+    widened to everything. `item_limit` (default 200) caps the items returned across
+    tracks and sets `timeline.items_truncated`, while `item_count` and
+    `gaps_overlaps` still cover the whole timeline. A failing section reports
+    `{error}` in its own place; the others still return.
+  - It saves turns and response size, not read time: the timeline sections cost what
+    `probe_timeline_structure` costs and `media_pool` walks every pool clip, so on a
+    large project pass `include` with only the sections you need. `docs/SKILL.md` says
+    so.
+  - Tested against stubs only (16 tests, including parity with the actions it replaces
+    and a sixty-item readout kept under 16 KB); not yet run against a live Resolve.
+
+### Fixed
+
+- **The risk classifier now recognises `project_manager.snapshot` as a LOW read.** Its
+  name carries no read verb, so on the contributed branch it fell to the name-based
+  MEDIUM default with a "risk unestablished" reason on every call — noise on the one
+  read an agent makes before planning. Safe mode would not have blocked it (only an
+  established HIGH/CRITICAL is), but a pure read should not carry that. Explicit
+  verbless reads now live in `RiskClassificationHook._READ_ONLY_PAIRS` beside
+  `dctl.validate_native`; guard test `tests/test_snapshot_read_rule.py` also pins that
+  the table does not widen into a wildcard.
+
 ## What's New in v4.7.11 — `allow_partial_item_delete="false"` no longer lets a range delete take whole clips
 
 ### Fixed
