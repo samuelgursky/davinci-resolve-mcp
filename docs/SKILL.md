@@ -2047,7 +2047,10 @@ Key actions:
 - `get_inputs(tool_name)` / `get_outputs(tool_name)`
 - `set_attrs(tool_name, attrs)` / `get_attrs(tool_name)`
 - `add_keyframe(tool_name, input_name, time, value, modifier?)` — attaches a
-  BezierSpline (or `modifier`, e.g. `Path` for Point inputs) on first use
+  BezierSpline (or `modifier`, e.g. `Path` for Point inputs) on first use. A nest
+  control (a fold-down group header like `Softness1` or the Follower's
+  `TransformSize`) is refused with `FUSION_INPUT_IS_NEST_CONTROL` naming the
+  controls it folds (`SoftnessX1`/`SoftnessY1`, `CharacterSizeX`/`Y`, ...); keyframe those
 - `add_modifier(tool_name, input_name, modifier)` → `{modifier_tool, modifier_type}`
   — attach any modifier and get back the tool Fusion created, so a text modifier
   (`Follower` on a TextPlus `StyledText`) can be driven with `set_input` /

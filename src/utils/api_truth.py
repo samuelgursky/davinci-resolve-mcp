@@ -3440,6 +3440,34 @@ API_TRUTH: List[Dict[str, Any]] = [
                     "only StyledTextFollower attached (new tool Follower1).",
         "mitigation": ["fusion_comp.add_modifier", "fusion_comp.add_keyframe"],
     },
+    {
+        "symbol": "Tool.AddModifier (NestControl inputs)",
+        "object": "Fusion Tool",
+        "signature": "(inputName, modifierRegID) -> bool",
+        "reality": "Some inputs GetInputList() returns are not values at all: those whose "
+                   "INPID_InputControl attribute is 'NestControl' (INPB_Passive true) are "
+                   "the fold-down group headers the Fusion UI draws. AddModifier returns "
+                   "False for them on every modifier type, and assigning at a time sets "
+                   "nothing. Measured on TextPlus Softness1 and on the text Follower's "
+                   "TransformSize, Softness1 and Size1. The controls a header folds are "
+                   "the next INPI_LabelControl_NumInputs entries in GetInputList() order "
+                   "(Softness1 -> SoftnessX1, SoftnessY1, SoftnessOnFillColorToo1, "
+                   "SoftnessGlow1, SoftnessBlend1; TransformSize -> Line/Word/Character "
+                   "Size X and Y), and those take a BezierSpline normally.",
+        "recommended": "Keyframe the folded controls, never the header. fusion_comp "
+                       "add_keyframe and add_modifier refuse a nest control with "
+                       "FUSION_INPUT_IS_NEST_CONTROL and list its members.",
+        "tags": ["fusion", "silent-failure", "naming"],
+        "verified_on": "DaVinci Resolve Studio 19.1.3.7",
+        "measured": "2026-09-19 on a disposable timeline: Follower via add_modifier, then "
+                    "add_keyframe on TransformSize / Softness1 (FUSION_ADD_MODIFIER_FAILED, "
+                    "raw AddModifier False for BezierSpline, Path, TextScramble) versus "
+                    "Size / Opacity1 / Delay / SoftnessX1 / SoftnessY1 / SizeX1 / "
+                    "CharacterSizeX (BezierSpline attached); TextPlus Softness1 refused too. "
+                    "GetAttrs diff: INPID_InputControl NestControl vs SliderControl, "
+                    "INPB_Passive true, INPI_LabelControl_NumInputs 6 / 5 / 2.",
+        "mitigation": ["fusion_comp.add_keyframe", "fusion_comp.add_modifier"],
+    },
 
 ]
 
@@ -3500,7 +3528,8 @@ ACTION_SYMBOLS: Dict[Tuple[str, str], List[str]] = {
     ("timeline_item_color", "safe_export_lut"): ["TimelineItem.ExportLUT"],
     ("timeline", "duplicate"): ["Timeline.DuplicateTimeline"],
     ("project_manager", "archive"): ["ProjectManager.ArchiveProject"],
-    ("fusion_comp", "add_modifier"): ["Tool.AddModifier"],
+    ("fusion_comp", "add_modifier"): ["Tool.AddModifier", "Tool.AddModifier (NestControl inputs)"],
+    ("fusion_comp", "add_keyframe"): ["Tool.AddModifier (NestControl inputs)"],
     ("project_manager", "safe_project_archive"): ["ProjectManager.ArchiveProject"],
 }
 

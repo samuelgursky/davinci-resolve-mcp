@@ -2,6 +2,39 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.8.4 — a Fusion nest control is refused with the controls it folds named
+
+### Fixed
+
+- **`fusion_comp add_keyframe` on a nest control (`Softness1`, the Follower's
+  `TransformSize`, `Size1`, …) answered a generic `FUSION_ADD_MODIFIER_FAILED` with no
+  way forward.** ([#253](https://github.com/samuelgursky/davinci-resolve-mcp/issues/253), reported by @artpavelalex-ux as a follow-up to #250)
+  **Measured on Studio 19.1.3.7:** some entries `GetInputList()` returns are not
+  values at all. Inputs whose `INPID_InputControl` is `NestControl` (`INPB_Passive`
+  true) are the fold-down group headers the Fusion UI draws — `TextPlus Softness1`,
+  and on the text Follower `TransformSize` (display name "Size"), `Softness1` and
+  `Size1`. `Tool.AddModifier` returns False for them on every modifier type
+  (BezierSpline, Path, TextScramble all measured), so nothing could ever keyframe
+  them; this is not Follower-specific. The controls a header folds are the next
+  `INPI_LabelControl_NumInputs` entries in `GetInputList()` order —
+  `Softness1` → `SoftnessX1`, `SoftnessY1`, `SoftnessOnFillColorToo1`, `SoftnessGlow1`,
+  `SoftnessBlend1`; `TransformSize` → `LineSizeX/Y`, `WordSizeX/Y`, `CharacterSizeX/Y`;
+  `Size1` → `SizeX1`, `SizeY1` — and those take a spline normally.
+  - `add_keyframe` and `add_modifier` now detect a nest control before touching Fusion
+    and refuse it with **`FUSION_INPUT_IS_NEST_CONTROL`**, naming the folded controls
+    in the remediation and in `error.state.nest_members` (`_fusion_nest_members`).
+  - New `api_truth` entry `Tool.AddModifier (NestControl inputs)`, mapped on
+    `add_keyframe` and `add_modifier` results as a `known_limitation`.
+  - **Live-validated on landing through the real actions** on a disposable timeline:
+    the refusal named exactly those members on the Follower and on TextPlus;
+    `add_modifier` on `TransformSize` refused the same way; `SoftnessX1`,
+    `CharacterSizeX` and `Delay` keyframed and read back. Unit tests in
+    `tests/test_fusion_nest_control.py` against fakes whose input list is handed back
+    unsorted, so the member order is proven to come from the list order, not luck.
+  - The report itself arrived as an empty template with only its title; the
+    measurement was made from the title. Not measured: nests on tools other than
+    TextPlus and the Follower, and builds other than 19.1.3.7.
+
 ## What's New in v4.8.3 — nested folder ids resolve for delete and move
 
 ### Fixed

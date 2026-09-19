@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 377-tool granular server instead
 """
 
-VERSION = "4.8.3"
+VERSION = "4.8.4"
 
 import base64
 import os
@@ -30530,6 +30530,61 @@ def _fusion_modifier_id(name: Any) -> str:
     return _FUSION_MODIFIER_IDS.get(text.lower(), text)
 
 
+def _fusion_nest_members(tool, input_name: str):
+    """(is_nest, member_ids) for an input that is a Fusion NestControl header.
+
+    Measured on Studio 19.1.3.7 (issue #253): inputs whose `INPID_InputControl`
+    is "NestControl" (`INPB_Passive` true) are the fold-down group headers the
+    Fusion UI draws — TextPlus `Softness1`, Follower `TransformSize`, `Softness1`,
+    `Size1` — not animatable values. `Tool.AddModifier` returns False for them on
+    every modifier type, and so did every attempt to keyframe them. The controls
+    the header folds are the next `INPI_LabelControl_NumInputs` entries in
+    `GetInputList()` order (Softness1 -> SoftnessX1, SoftnessY1,
+    SoftnessOnFillColorToo1, SoftnessGlow1, SoftnessBlend1; TransformSize ->
+    Line/Word/CharacterSize X and Y), and those take a spline normally.
+    """
+    try:
+        attrs = tool[input_name].GetAttrs() or {}
+    except Exception:
+        return False, []
+    if attrs.get("INPID_InputControl") != "NestControl":
+        return False, []
+    try:
+        count = int(attrs.get("INPI_LabelControl_NumInputs") or 0)
+    except (TypeError, ValueError):
+        count = 0
+    members: List[str] = []
+    try:
+        input_list = tool.GetInputList() or {}
+        keys = list(input_list.keys())
+        try:
+            keys.sort(key=float)
+        except (TypeError, ValueError):
+            pass
+        ids = [((input_list[k].GetAttrs() or {}).get("INPS_ID") or "") for k in keys]
+        if input_name in ids:
+            start = ids.index(input_name) + 1
+            members = [i for i in ids[start:start + count] if i]
+    except Exception:
+        members = []
+    return True, members
+
+
+def _fusion_nest_control_error(tool_name: str, input_name: str, members: List[str], verb: str):
+    listed = ", ".join(members) if members else "see get_inputs(tool_name)"
+    return _err(
+        f"'{input_name}' on '{tool_name}' is a nest control (a group header), "
+        f"not an animatable input; it cannot be {verb}.",
+        code="FUSION_INPUT_IS_NEST_CONTROL", category="invalid_input", retryable=False,
+        reason="Fusion NestControl inputs are passive headers that fold a group of "
+               "controls. Tool.AddModifier returns False for them on every modifier "
+               "type (measured on Studio 19.1.3.7: TextPlus Softness1, Follower "
+               "TransformSize / Softness1 / Size1).",
+        remediation=f"Target one of the controls the nest folds instead: {listed}.",
+        state={"nest_control": input_name, "nest_members": members},
+    )
+
+
 def _fusion_input_spline(inp):
     """The modifier/spline tool driving `inp`, or None when it is not animated.
 
@@ -30686,7 +30741,10 @@ def fusion_comp(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
       add_keyframe(tool_name, input_name, time, value, modifier?) -> {success}
         Attaches a BezierSpline (or `modifier`, e.g. 'Path' for Point inputs)
         the first time an input is animated. Modifier names are mapped to
-        their registry ID ('Follower' -> 'StyledTextFollower').
+        their registry ID ('Follower' -> 'StyledTextFollower'). A nest control
+        (a fold-down group header such as Softness1 or TransformSize) is refused
+        with FUSION_INPUT_IS_NEST_CONTROL naming the controls it folds
+        (SoftnessX1/SoftnessY1, ...): keyframe those.
       add_modifier(tool_name, input_name, modifier) -> {success, modifier_tool, modifier_type}
         Attach any modifier and return the tool Fusion created for it, so a
         TEXT modifier (Follower on a TextPlus StyledText) can then be driven
@@ -30966,6 +31024,10 @@ def fusion_comp(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
             except Exception:
                 _already_animated = False
             if not _already_animated:
+                _is_nest, _members = _fusion_nest_members(tool, p["input_name"])
+                if _is_nest:
+                    return _fusion_nest_control_error(
+                        p["tool_name"], p["input_name"], _members, "keyframed")
                 # AddModifier reports through the Lua bridge, which resolves an
                 # unknown attribute to None rather than raising, so the return is
                 # not reliable evidence on its own. The readback below is: if the
@@ -31012,6 +31074,10 @@ def fusion_comp(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
         if not inp:
             return _err(f"Input '{input_name}' not found on tool '{p['tool_name']}'")
         modifier_id = _fusion_modifier_id(requested)
+        is_nest, members = _fusion_nest_members(tool, input_name)
+        if is_nest:
+            return _fusion_nest_control_error(p["tool_name"], input_name, members,
+                                              "given a modifier")
         try:
             existing = inp.GetConnectedOutput()
         except Exception:
