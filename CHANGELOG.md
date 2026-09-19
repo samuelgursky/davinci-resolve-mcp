@@ -2,6 +2,48 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.8.11 — the installer's live probe no longer runs in the offline suite
+
+Test-only. No tool, action or runtime code changed.
+
+### Fixed
+
+- **Every run of the offline suite connected to an open Resolve through the
+  installer probe.** `test_scripting_lib_discovery.test_the_live_probe_agrees_with_the_summary`
+  runs the real `install.verify_resolve_connection` whenever Resolve is
+  installed. The probe's child sets PYTHONPATH to Blackmagic's Modules
+  directory. So neither the offline guard's child site from v4.8.9 nor a
+  PYTHONPATH tripwire loads in it, and it imports the real module and calls
+  `scriptapp("Resolve")`, `GetProductName` and `GetVersionString`. v4.8.9 named
+  this path and left it open. In the four full runs behind v4.8.9, with Resolve
+  open, the test passed rather than skipped. It skips when the probe does not
+  answer, so each of those runs called `scriptapp("Resolve")` on the real module
+  (read-only).
+  - The test now runs only with `RESOLVE_VERIFY=1`, the switch the live harnesses
+    already use. The check happens when the test runs, not in a decorator at
+    import, so it can be tested. The installed-Resolve check still applies after
+    it.
+  - `docs/process/release-process.md` now names the command, for changes to the
+    installer's verification or summary.
+
+### Validation
+
+- New `test_the_live_test_runs_only_when_asked` runs the live test with the host
+  made to look installed, discovery pinned and the probe booby-trapped. With
+  `RESOLVE_VERIFY=1` the trap goes off once, which shows it is armed. Without it
+  the test skips, naming the switch, and never reaches the trap. With the opt-in
+  check removed, the new test fails.
+- Full suite, `python -m unittest discover -s tests -t .` and
+  `python -m unittest discover -s tests`: 3,771 tests each, 85 skipped. On v4.8.9
+  it was 84 of 3,770, and the one new skip is the live test. The 11 errors are the
+  same as on v4.8.8 in this environment (no `numpy` or `requests` in the venv, plus
+  `test_offline_fallback` and `test_lut_file_controls`).
+- The tripwire used for validation now also refuses a child that names
+  Blackmagic's module and points at the real install on its command line or
+  PYTHONPATH. That is the shape of the installer and doctor probes. It recorded no
+  `scriptapp` call, native load, launch or refused probe child in either run.
+- No Resolve behavior changed, so no live Resolve run is required. None was made.
+
 ## What's New in v4.8.9 — the offline suite's child processes no longer reach Resolve
 
 Test-only. No tool, action or runtime code changed.
