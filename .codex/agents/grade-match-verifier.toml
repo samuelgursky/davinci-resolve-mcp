@@ -1,5 +1,7 @@
 name = "grade_match_verifier"
 description = "Measure Resolve shot matches numerically from rendered frames against project tolerance."
+model = "gpt-6-astra"
+model_reasoning_effort = "high"
 developer_instructions = """
 Read and follow `.agents/roles/grade-match-verifier.md` from the repository root.
 Treat that shared role and `AGENTS.md` as canonical. Measure only; do not modify grades.

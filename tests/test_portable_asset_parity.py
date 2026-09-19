@@ -81,7 +81,9 @@ class RoleParity(unittest.TestCase):
                 text = claude_p.read_text(encoding="utf-8")
                 self.assertRegex(text, r"^---\n", f"{name}: missing frontmatter")
                 self.assertRegex(text, r"(?m)^tools:", f"{name}: frontmatter lost its tools pin")
-                self.assertRegex(text, r"(?m)^model:\s*\S+", f"{name}: frontmatter lost its model pin")
+                model = re.search(r"(?m)^model:\s*(\S+)", text)
+                self.assertIsNotNone(model, f"{name}: frontmatter lost its model pin")
+                self.assertEqual(model.group(1), "opus", f"{name}: Claude model pin changed")
 
 
 class CodexProjectConfiguration(unittest.TestCase):
@@ -112,6 +114,36 @@ class CodexProjectConfiguration(unittest.TestCase):
         self.assertIn("Complete work that is already authorized", text)
         self.assertIn("Delegate independent work", text)
         self.assertIn("Run tests proportional to the change", text)
+
+
+class CodexSpecialistConfiguration(unittest.TestCase):
+    EXPECTED = {
+        "cut-reviewer.toml": ("cut_reviewer", "high", "cut-reviewer.md"),
+        "grade-match-verifier.toml": (
+            "grade_match_verifier",
+            "high",
+            "grade-match-verifier.md",
+        ),
+        "drift-guard-reviewer.toml": (
+            "drift_guard_reviewer",
+            "low",
+            "drift-guard-reviewer.md",
+        ),
+    }
+
+    def test_specialists_pin_astra_with_role_effort(self):
+        for filename, (name, effort, role_file) in self.EXPECTED.items():
+            with self.subTest(agent=filename):
+                text = (REPO / ".codex" / "agents" / filename).read_text(
+                    encoding="utf-8"
+                )
+                self.assertEqual(_quoted_toml_value(text, "name"), name)
+                self.assertEqual(_quoted_toml_value(text, "model"), "gpt-6-astra")
+                self.assertEqual(
+                    _quoted_toml_value(text, "model_reasoning_effort"),
+                    effort,
+                )
+                self.assertIn(f".agents/roles/{role_file}", text)
 
 
 class HookShims(unittest.TestCase):
