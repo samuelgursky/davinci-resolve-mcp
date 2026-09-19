@@ -1,22 +1,34 @@
-"""Clip ids passed to media_pool.delete_clips / move_clips / relink / unlink must
-all resolve, or the call must fail having changed nothing.
+"""Clip ids passed to a media_pool clip batch must all resolve, or the call must
+fail having changed nothing.
 
-The four raw clip actions resolved ids with
+Eight actions resolved ids with
 
     clips = [_find_clip(root, cid) for cid in p["clip_ids"]]
     clips = [c for c in clips if c]
 
-so an id matching no clip was dropped and Resolve was handed the remainder:
+so an id matching no clip was dropped and Resolve was handed the remainder.
+v4.8.2 fixed the raw four (ACTIONS below):
 
 - delete_clips errored only when EVERY id missed ("No clips found"); a mixed
   batch deleted the subset that resolved and answered {"success": true}.
 - move_clips, relink and unlink never checked for an empty result at all, so an
   all-missing batch reached MoveClips([], target) / RelinkClips([], ...) /
   UnlinkClips([]) and answered whatever Resolve's bool said.
-- A bare string was iterated character by character, one id per character.
 
-The fake MediaPool records every mutation call, so "mutates nothing" is asserted
-as "Resolve was never asked", not inferred from the return value.
+v4.8.6 fixed the other four (BATCH_ACTIONS below):
+
+- create_timeline_from_clips (clip_ids) built the timeline from the subset.
+- append_to_timeline (clip_ids) appended the subset and set the readback's
+  expected_count to the RESOLVED count, so a partial append read back verified.
+- export_metadata (clip_ids) exported the subset, and with every id missing called
+  ExportMetadata(path, []) - unmeasured, possibly "export everything".
+- auto_sync_audio synced the subset, or called AutoSyncAudio([], settings).
+
+In all eight a bare string was iterated character by character, one id per
+character.
+
+The fake MediaPool records every call that reaches Resolve, so "mutates nothing"
+is asserted as "Resolve was never asked", not inferred from the return value.
 """
 import unittest
 from unittest import mock
@@ -56,12 +68,39 @@ class FakeFolder:
         return list(self._subs)
 
 
+class FakeTimeline:
+    """The current timeline, so append_to_timeline's readback has items to count."""
+
+    def __init__(self, name="Cut", uid="tl-current"):
+        self._name = name
+        self._uid = uid
+        self.items = []
+
+    def GetName(self):
+        return self._name
+
+    def GetUniqueId(self):
+        return self._uid
+
+    def GetTrackCount(self, track_type):
+        return 1 if track_type == "video" else 0
+
+    def GetItemListInTrack(self, track_type, track_index):
+        return list(self.items) if (track_type, track_index) == ("video", 1) else []
+
+
+# ExportMetadata(path) and ExportMetadata(path, []) are different requests; the
+# fake records which one it got.
+ALL_CLIPS = "<ExportMetadata without a clip list>"
+
+
 class FakeMP:
     """Records what was actually handed to Resolve, so a partial batch shows up."""
 
     def __init__(self, root):
         self._root = root
         self.calls = []
+        self.timeline = FakeTimeline()
 
     def GetRootFolder(self):
         return self._root
@@ -85,6 +124,25 @@ class FakeMP:
         self.calls.append(("UnlinkClips", list(clips)))
         return True
 
+    def CreateTimelineFromClips(self, name, clips):
+        self.calls.append(("CreateTimelineFromClips", list(clips), name))
+        return FakeTimeline(name, "tl-new")
+
+    def AppendToTimeline(self, clips):
+        self.calls.append(("AppendToTimeline", list(clips)))
+        start = len(self.timeline.items)
+        appended = [FakeClip(f"item {start + i}", f"ti-{start + i}") for i in range(len(clips))]
+        self.timeline.items.extend(appended)
+        return appended
+
+    def ExportMetadata(self, path, clips=ALL_CLIPS):
+        self.calls.append(("ExportMetadata", clips if clips is ALL_CLIPS else list(clips), path))
+        return True
+
+    def AutoSyncAudio(self, clips, settings):
+        self.calls.append(("AutoSyncAudio", list(clips), settings))
+        return True
+
 
 def _tree():
     # One clip at root, one two levels down, and an empty destination bin.
@@ -99,9 +157,13 @@ def _tree():
 
 def _call(mp, action, params, *, require_confirm=False):
     proj = mock.Mock()
+    proj.GetTimelineCount.return_value = 0          # no name clash for create_*
+    proj.GetCurrentTimeline.return_value = mp.timeline
+    # get_resolve is stubbed so auto_sync_audio cannot reach a running Resolve.
     with mock.patch.object(s, "_confirm_token_required", return_value=require_confirm), \
          mock.patch.object(s, "_check", return_value=(mock.Mock(), proj, None)), \
-         mock.patch.object(s, "_get_mp", return_value=(mock.Mock(), proj, mp, None)):
+         mock.patch.object(s, "_get_mp", return_value=(mock.Mock(), proj, mp, None)), \
+         mock.patch.object(s, "get_resolve", return_value=None):
         return s.media_pool(action, params)
 
 
@@ -113,12 +175,22 @@ ACTIONS = {
     "unlink": ({}, "UnlinkClips"),
 }
 
+# The four batches fixed in v4.8.6, same shape.
+BATCH_ACTIONS = {
+    "create_timeline_from_clips": ({"name": "Selects"}, "CreateTimelineFromClips"),
+    "append_to_timeline": ({}, "AppendToTimeline"),
+    "export_metadata": ({"path": "/scratch/clips.csv"}, "ExportMetadata"),
+    "auto_sync_audio": ({}, "AutoSyncAudio"),
+}
+
+ALL_ACTIONS = {**ACTIONS, **BATCH_ACTIONS}
+
 
 class ResolvedClipIdsTest(unittest.TestCase):
     """The happy path still reaches Resolve with exactly the requested clips."""
 
     def test_every_action_passes_all_resolved_clips(self):
-        for action, (extra, method) in ACTIONS.items():
+        for action, (extra, method) in ALL_ACTIONS.items():
             with self.subTest(action=action):
                 mp, top, nested, dest = _tree()
                 out = _call(mp, action, {"clip_ids": ["clip-top", "clip-nested"], **extra})
@@ -160,7 +232,7 @@ class UnresolvedClipIdTest(unittest.TestCase):
         self.assertEqual(out["error"]["state"]["resolved_clip_ids"], resolved)
 
     def test_partial_batch_mutates_nothing(self):
-        for action, (extra, _) in ACTIONS.items():
+        for action, (extra, _) in ALL_ACTIONS.items():
             with self.subTest(action=action):
                 mp, _, _, _ = _tree()
                 out = _call(mp, action,
@@ -171,7 +243,7 @@ class UnresolvedClipIdTest(unittest.TestCase):
     def test_all_unresolved_mutates_nothing(self):
         # move_clips / relink / unlink used to hand Resolve an empty list here
         # and report whatever its bool said.
-        for action, (extra, _) in ACTIONS.items():
+        for action, (extra, _) in ALL_ACTIONS.items():
             with self.subTest(action=action):
                 mp, _, _, _ = _tree()
                 out = _call(mp, action, {"clip_ids": ["clip-ghost"], **extra})
@@ -213,13 +285,83 @@ class ClipIdsShapeTest(unittest.TestCase):
     def test_bare_string_clip_ids_is_invalid_input(self):
         # A bare string used to be iterated character by character, so every
         # character became an id that matched nothing and was then dropped.
-        for action, (extra, _) in ACTIONS.items():
+        for action, (extra, _) in ALL_ACTIONS.items():
             with self.subTest(action=action):
                 mp, _, _, _ = _tree()
                 out = _call(mp, action, {"clip_ids": "clip-top", **extra})
                 self.assertEqual(out["error"]["code"], "INVALID_CLIP_IDS")
                 self.assertEqual(out["error"]["category"], "invalid_input")
                 self.assertEqual(mp.calls, [])
+
+
+class BatchActionTest(unittest.TestCase):
+    """Where the v4.8.6 batches differ from the original four."""
+
+    def test_append_verifies_against_the_requested_count(self):
+        mp, top, nested, _ = _tree()
+        out = _call(mp, "append_to_timeline", {"clip_ids": ["clip-top", "clip-nested"]})
+        op = out["verified_operation"]
+        self.assertEqual(out["count"], 2)
+        self.assertEqual(op["requested"]["expected_count"], 2)
+        self.assertEqual(op["requested"]["resolved_clip_count"], 2)
+        self.assertEqual(op["verification_status"], "readback_verified")
+        self.assertEqual(op["readback"]["item_count_delta"], 2)
+
+    def test_create_timeline_reports_the_new_timeline(self):
+        mp, top, nested, _ = _tree()
+        out = _call(mp, "create_timeline_from_clips",
+                    {"name": "Selects", "clip_ids": ["clip-top", "clip-nested"]})
+        self.assertEqual(out["name"], "Selects")
+        self.assertEqual(mp.calls, [("CreateTimelineFromClips", [top, nested], "Selects")])
+
+    def test_export_without_clip_ids_still_exports_every_clip(self):
+        for params in ({"path": "/scratch/all.csv"},
+                       {"path": "/scratch/all.csv", "clip_ids": None}):
+            with self.subTest(params=params):
+                mp, _, _, _ = _tree()
+                out = _call(mp, "export_metadata", params)
+                self.assertTrue(out["success"])
+                self.assertEqual(mp.calls, [("ExportMetadata", ALL_CLIPS, "/scratch/all.csv")])
+
+    def test_export_with_an_empty_clip_list_is_refused_not_widened(self):
+        # The old `if clip_ids:` turned an explicit empty selection into a
+        # whole-pool export.
+        mp, _, _, _ = _tree()
+        out = _call(mp, "export_metadata", {"path": "/scratch/x.csv", "clip_ids": []})
+        self.assertIn("error", out)
+        self.assertEqual(out["error"]["code"], "INVALID_CLIP_IDS")
+        self.assertEqual(mp.calls, [])
+
+    def test_export_without_path_is_missing_path(self):
+        mp, _, _, _ = _tree()
+        out = _call(mp, "export_metadata", {"clip_ids": ["clip-top"]})
+        self.assertEqual(out["error"]["code"], "MISSING_PATH")
+        self.assertEqual(mp.calls, [])
+
+    def test_auto_sync_missing_clip_ids_keeps_the_standard_error(self):
+        mp, _, _, _ = _tree()
+        out = _call(mp, "auto_sync_audio", {})
+        self.assertEqual(out["error"]["code"], "MISSING_CLIP_IDS")
+        self.assertEqual(mp.calls, [])
+
+    def test_auto_sync_empty_clip_ids_is_invalid_input(self):
+        mp, _, _, _ = _tree()
+        out = _call(mp, "auto_sync_audio", {"clip_ids": []})
+        self.assertIn("error", out)
+        self.assertEqual(out["error"]["code"], "INVALID_CLIP_IDS")
+        self.assertEqual(mp.calls, [])
+
+    def test_create_and_append_without_clip_ids_ask_for_either_form(self):
+        # These two also take clip_infos, so their "neither given" message stays.
+        for action, (extra, _) in BATCH_ACTIONS.items():
+            if action not in ("create_timeline_from_clips", "append_to_timeline"):
+                continue
+            for ids in ({}, {"clip_ids": []}):
+                with self.subTest(action=action, ids=ids):
+                    mp, _, _, _ = _tree()
+                    out = _call(mp, action, {**extra, **ids})
+                    self.assertIn("Provide clip_ids", out["error"]["message"])
+                    self.assertEqual(mp.calls, [])
 
 
 if __name__ == "__main__":

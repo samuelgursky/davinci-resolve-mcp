@@ -2,6 +2,93 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.8.6 — every clip_ids batch is all-or-nothing
+
+### Fixed
+
+- **The four `media_pool` actions v4.8.2 left alone no longer act on the part of a
+  batch that happened to resolve.** They used the same
+  `[_find_clip(root, cid) for cid in clip_ids]` + drop-the-misses pattern, and now go
+  through the same `_clips_from_ids` resolver, so an id matching no clip fails the call
+  with `CLIP_NOT_FOUND` / `invalid_input` (ids in `error.state.unresolved_clip_ids` /
+  `resolved_clip_ids`) before anything reaches Resolve:
+  - `create_timeline_from_clips` (simple `clip_ids` mode) built the timeline from the
+    subset. Now no timeline is created.
+  - `append_to_timeline` (legacy `clip_ids` mode) appended the subset and set the
+    readback's `expected_count` to the *resolved* count, so a partial append came back
+    `readback_verified`; an all-missing batch reached `AppendToTimeline([])` and
+    answered `{"success": true, "count": 0}`. Now nothing is appended, and a whole
+    batch verifies against the requested count.
+  - `export_metadata` with `clip_ids` exported the subset; an all-missing batch
+    reached `ExportMetadata(path, [])`, whose behaviour on an empty list is unmeasured
+    and may be "every clip". Now nothing is exported. **Behaviour change:** an
+    explicitly empty `clip_ids: []` used to fall through to `ExportMetadata(path)` and
+    export every clip; it is now `INVALID_CLIP_IDS`, so a selection that came back
+    empty cannot widen into a whole-pool export. Omitting `clip_ids` (or passing
+    `null`) still exports every clip.
+  - `auto_sync_audio` synced the subset, or called `AutoSyncAudio([], settings)`. Now
+    nothing is synced. `clip_ids` stays an item lookup, so a missing key is still
+    `MISSING_CLIP_IDS`.
+  - A bare-string `clip_ids` is `INVALID_CLIP_IDS` in all four instead of one id per
+    character. `create_timeline_from_clips` and `append_to_timeline` keep their
+    "Provide clip_ids or clip_infos" error when neither form is given.
+- **Granular server: `append_to_timeline` (clip_ids), `auto_sync_audio`,
+  `delete_media_pool_clips` and `move_clips_to_folder` are all-or-nothing too.** They
+  errored only when *every* id missed; a mixed batch acted on the subset (delete and
+  move did report a count). A granular `_clips_from_ids` now refuses the call with
+  `{"success": false, "error": "Clip(s) not found: …", "unresolved_clip_ids": […],
+  "resolved_clip_ids": […]}` in the granular server's flat error shape. It walks the
+  pool once, returns clips in request order, and keeps the old one-clip-per-id
+  collapsing for delete and move.
+
+### Validation
+
+- `tests/test_media_pool_clip_ids.py` now runs its partial / all-missing / bare-string
+  / happy-path cases over all eight compound actions and adds eight cases for where
+  the new four differ (append readback count, `export_metadata` without and with an
+  empty `clip_ids`, a missing `path`, `auto_sync_audio`'s `MISSING_CLIP_IDS` /
+  `INVALID_CLIP_IDS`, the kept "Provide clip_ids" message). Against the v4.8.2 code it
+  fails 14 cases (9 failures, 5 errors — every partial and all-missing case of the new
+  four, both shape cases); all 18 tests pass after.
+- New `tests/test_granular_media_pool_clip_ids.py` (9 tests) pins the four granular
+  tools the same way against a recording fake Media Pool; against the old code 8 fail
+  (every partial and all-missing case), all 9 pass after.
+- `tests/live_clip_ids_check.py` covers all eight compound actions. Its tripwire also
+  intercepts `CreateTimelineFromClips`, `AppendToTimeline`, `ExportMetadata` and
+  `AutoSyncAudio`, and it additionally checks that the project's timeline count, the
+  current timeline's item count and the absence of the export file are unchanged.
+  Driven offline against a fake Resolve (`_try_connect` / `get_resolve` replaced, no
+  connection possible): PASS on this code; 20 findings on the v4.8.2 code.
+- Offline suite (`python -m unittest discover -s tests -t .`) on top of v4.8.3:
+  3,749 tests run, 84 skipped, 11 errors — the same environment gaps v4.8.2 recorded (`numpy` and
+  `requests` absent from the venv, `node_modules` not installed for
+  `test_offline_fallback`); none touch `media_pool`. Static checks, api-parity,
+  api-limitations, read/write symmetry, agent-rule generation and the drift guards
+  clean; `test_static_undefined_names` skipped because pyflakes is not installed.
+- The suite was run with Resolve open on the machine, so it ran behind an import
+  hook that turns `DaVinciResolveScript` / `fusionscript` into an empty stub and a
+  bridge config path that does not exist: it logged 1,498 `scriptapp` lookups, none
+  of which could connect. `tests/offline_guard.py` guards `src/server.py` only, and
+  `src/granular/common.py` connects at import time — a gap in the offline guard,
+  not in this change.
+- **Live-validated on Resolve Studio 21.1.0.14** with
+  `venv/bin/python tests/live_clip_ids_check.py` against a real project of 144
+  folders, 2,600 clips and 24 timelines, probing a clip seven folders deep: PASS.
+  Partial and all-missing batches came back `CLIP_NOT_FOUND` for all eight actions
+  with nothing reaching the Media Pool; bare string / empty list →
+  `INVALID_CLIP_IDS`, no key → `MISSING_CLIP_IDS` for `move_clips` and
+  `auto_sync_audio`; a whole batch handed the tripwire exactly the probe clip for
+  all seven non-delete actions. Folder tree, clip placement, the probe's File
+  Path, the timeline count and the current timeline's items read back identical,
+  and no metadata file was written. That run was on this change applied to v4.8.2;
+  v4.8.3 and v4.8.4, which it now sits on, change only the folder-id actions
+  (`_folders_from_ids`) and Fusion nest controls (`fusion_comp`), none of which
+  the eight clip actions call.
+- Seen during the live run, not changed here: legacy `append_to_timeline`
+  (`clip_ids`) answers `{"success": true, "count": 0}` when `AppendToTimeline`
+  itself returns nothing; `verified_operation.verification_status` does say
+  `api_failed`.
+
 ## What's New in v4.8.4 — a Fusion nest control is refused with the controls it folds named
 
 ### Fixed

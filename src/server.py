@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 377-tool granular server instead
 """
 
-VERSION = "4.8.4"
+VERSION = "4.8.6"
 
 import base64
 import os
@@ -21186,14 +21186,16 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
       delete_clips(clip_ids) -> {success}
         DESTRUCTIVE. Removes clips from the Media Pool (does not touch source files).
         An id matching no clip fails the whole call (CLIP_NOT_FOUND) rather than
-        deleting the ids that did resolve; the same holds for move_clips, relink
-        and unlink.
+        deleting the ids that did resolve; the same holds for every clip_ids
+        batch in this tool (move_clips, relink, unlink, create_timeline_from_clips,
+        append_to_timeline, export_metadata, auto_sync_audio).
       move_clips(clip_ids, target_path) -> {success}
       relink(clip_ids, folder_path) -> {success}
         UNSAFE. No dry_run. Prefer safe_relink.
       unlink(clip_ids) -> {success}
         UNSAFE. No dry_run. Prefer safe_unlink.
       export_metadata(path, clip_ids?) -> {success}
+        — clip_ids omitted exports every clip; an empty clip_ids is INVALID_CLIP_IDS.
       get_unique_id() -> {id}
       create_stereo_clip(left_id, right_id) -> {success, name}
       auto_sync_audio(clip_ids, settings?) -> {success}
@@ -21338,10 +21340,9 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
         clip_ids = p.get("clip_ids")
         if not clip_ids:
             return _err("Provide clip_ids (simple) or clip_infos (positioned)")
-        clips = [_find_clip(root, cid) for cid in clip_ids]
-        clips = [c for c in clips if c]
-        if not clips:
-            return _err("No valid clips found")
+        clips, clips_err = _clips_from_ids(root, clip_ids, verb="created")
+        if clips_err:
+            return clips_err
         tl = mp.CreateTimelineFromClips(create_name, clips)
         return _ok(
             name=tl.GetName(),
@@ -21450,8 +21451,11 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
         clip_ids = p.get("clip_ids")
         if not clip_ids:
             return _err("Provide clip_ids (simple append) or clip_infos (positioned append)")
-        clips = [_find_clip(root, cid) for cid in clip_ids]
-        clips = [c for c in clips if c]
+        # All or nothing: expected_count below used to be the RESOLVED count, so a
+        # partial append read back as verified.
+        clips, clips_err = _clips_from_ids(root, clip_ids, verb="appended")
+        if clips_err:
+            return clips_err
         requested = {
             "mode": "clip_ids",
             "clip_ids": list(clip_ids),
@@ -21524,12 +21528,16 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
             return clips_err
         return {"success": bool(mp.UnlinkClips(clips))}
     elif action == "export_metadata":
-        clip_ids = p.get("clip_ids")
-        if clip_ids:
-            clips = [_find_clip(root, cid) for cid in clip_ids]
-            clips = [c for c in clips if c]
-            return {"success": bool(mp.ExportMetadata(p["path"], clips))}
-        return {"success": bool(mp.ExportMetadata(p["path"]))}
+        path = p["path"]
+        if p.get("clip_ids") is None:
+            return {"success": bool(mp.ExportMetadata(path))}
+        # Passing clip_ids at all asks for exactly those clips. An empty or
+        # all-missing list must not reach ExportMetadata(path, []), whose
+        # behaviour on an empty list is unmeasured and may be "export everything".
+        clips, clips_err = _clips_from_ids(root, p["clip_ids"], verb="exported")
+        if clips_err:
+            return clips_err
+        return {"success": bool(mp.ExportMetadata(path, clips))}
     elif action == "get_unique_id":
         return {"id": mp.GetUniqueId()}
     elif action == "create_stereo_clip":
@@ -21540,8 +21548,9 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
         result = mp.CreateStereoClip(left, right)
         return _ok(name=result.GetName()) if result else _err("Failed to create stereo clip")
     elif action == "auto_sync_audio":
-        clips = [_find_clip(root, cid) for cid in p["clip_ids"]]
-        clips = [c for c in clips if c]
+        clips, clips_err = _clips_from_ids(root, p["clip_ids"], verb="synced")
+        if clips_err:
+            return clips_err
         # Normalize string settings into live AUDIO_SYNC_* enum keys; passing raw
         # human-readable keys makes AutoSyncAudio silently reject the call.
         settings, ignored = _normalize_auto_sync_settings(dict(p.get("settings") or {}), get_resolve())

@@ -922,11 +922,18 @@ Key actions: `get_root_folder`, `get_current_folder`, `set_current_folder(path)`
 `setup_multicam_timeline(name, clip_ids|angles, sync_mode?, include_audio?, dry_run?)`,
 `get_selected`, `set_selected(clip_id)`, `export_metadata(path, clip_ids?)`
 
-`delete_clips`, `move_clips`, `relink` and `unlink` are all-or-nothing: if any id
-in `clip_ids` matches no clip, the call fails with `CLIP_NOT_FOUND` (the
-unresolved and resolved ids are in `error.state`) and no clip is changed. Drop the
-stale ids and retry; do not read a partial batch as done. `delete_folders(folder_ids)`
-and `move_folders(folder_ids, target_path)` work the same way with
+Every `clip_ids` batch is all-or-nothing: `delete_clips`, `move_clips`, `relink`,
+`unlink`, `create_timeline_from_clips`, `append_to_timeline`, `export_metadata`
+and `auto_sync_audio`. If any id in `clip_ids` matches no clip, the call fails
+with `CLIP_NOT_FOUND` (the unresolved and resolved ids are in `error.state`) and
+nothing reaches Resolve: no clip is changed, no timeline is created, nothing is
+appended, exported or synced. Drop the stale ids and retry; do not read a partial
+batch as done. `export_metadata` without `clip_ids` still exports every clip, but
+an empty `clip_ids: []` is `INVALID_CLIP_IDS`, not "everything". The granular
+server's `append_to_timeline`, `auto_sync_audio`, `delete_media_pool_clips` and
+`move_clips_to_folder` behave the same way, with the ids in
+`unresolved_clip_ids` / `resolved_clip_ids`. `delete_folders(folder_ids)` and
+`move_folders(folder_ids, target_path)` work the same way with
 `FOLDER_NOT_FOUND`; they resolve `folder_ids` at any depth (pass the ids
 `folder get_subfolders` returns) and refuse the Master folder itself.
 
