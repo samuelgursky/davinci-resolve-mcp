@@ -391,10 +391,15 @@ class SetupExitStatusTests(unittest.TestCase):
         else:
             verify_patch = contextlib.nullcontext()
 
+        # main() also asks GitHub for the latest release. Nothing here is about
+        # updates, and a live request made every suite run depend on the network;
+        # the offline guard refuses it anyway (tests/test_offline_network_isolation.py).
+        env = {**_env_without_overrides(), "DAVINCI_RESOLVE_MCP_UPDATE_CHECK": "0"}
+
         with mock.patch.object(
                 install, "RESOLVE_PATHS",
                 install.RESOLVE_PATHS if healthy else dead), \
-                mock.patch.dict(os.environ, _env_without_overrides(), clear=True), \
+                mock.patch.dict(os.environ, env, clear=True), \
                 mock.patch.object(sys, "argv", argv), \
                 paths_patch, \
                 verify_patch, \

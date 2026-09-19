@@ -60,6 +60,11 @@ every global in the granular modules, and ten of those globals are a
 now runs under a check that fails it when a launcher was reached during it, or
 since the previous test finished (at import, or in a class fixture). Plain
 pytest functions get the same check from `conftest.py`.
+The network is guarded here too. `install.py` checks GitHub for a newer release,
+and `test_scripting_lib_discovery` runs its `main()` in-process, so every full
+run sent a real request to `api.github.com/.../releases/latest` and wrote the
+answer into `logs/update-check.json`. `urllib.request.urlopen` now refuses any
+URL that would leave this machine; see `_install_network_guard`.
 """
 
 from __future__ import annotations
@@ -67,11 +72,16 @@ from __future__ import annotations
 import functools
 import importlib.abc
 import importlib.machinery
+import ipaddress
 import os
 import shutil
 import sys
 import tempfile
 import unittest
+import traceback
+import urllib.error
+import urllib.parse
+import urllib.request
 
 #: Every launch the suite attempted, so a failure names the test rather than
 #: leaving an application open with no explanation. Entries are `LaunchAttempt`s.
@@ -85,10 +95,19 @@ _running_tests: list = []
 
 #: Set on the `TestCase.run` wrapper, so a second install does not wrap it again.
 _LAUNCH_CHECK_FLAG = "_offline_guard_launch_check"
+#: Every outbound request the suite attempted, as `{"url", "caller", "test"}`.
+#: The guard refused each one, so this lists what would have gone out, not
+#: anything that did.
+NETWORK_ATTEMPTS: list = []
 
 #: Set on `src.server` once the swap is in place, so a second install is a no-op
 #: rather than a stub-wrapping-a-stub.
 _INSTALLED_FLAG = "_offline_guard_installed"
+
+#: Set on the `urlopen` wrapper for the same reason. It lives on the function in
+#: `urllib.request`, not in this module, so a second copy of this module (a bare
+#: `import offline_guard` under `discover -s tests`) still sees it.
+_NETWORK_FLAG = "_offline_guard_network"
 
 #: Mirrors `src.server._MEDIA_ANALYSIS_PREFS_ENV`. Named here rather than
 #: imported so installing the guard cannot depend on importing the server.
@@ -134,6 +153,16 @@ def _missing_third_party(exc: ModuleNotFoundError) -> str:
     if missing in ("src", "tests", ""):
         raise exc
     return missing
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+class NetworkRefused(urllib.error.URLError):
+    """Raised by the guard in place of an outbound request.
+
+    A `URLError`, so the code under test takes the path it takes on a machine
+    with no network: the update check reports `status: "error"` instead of
+    raising, exactly as it does offline.
+    """
 
 
 def _import_server():
@@ -300,24 +329,27 @@ def _offline_try_connect():
 
 
 def install() -> bool:
-    """Swap the live-Resolve entry points for offline stand-ins.
+    """Swap the live-Resolve entry points and `urlopen` for offline stand-ins.
 
-    Returns True if this call did the swap, False if it was already in place or
-    there was nothing to swap (see `_import_server`). The scripting-module stub
-    and the children's PYTHONPATH go in on every path. Neither needs a
-    third-party package, and they protect the code that none of the swaps below
-    can reach.
+    Returns True if this call installed anything, False if everything was
+    already in place. The network guard, the scripting-module stub and the
+    children's PYTHONPATH go in on every path: none of them needs a third-party
+    package, and they protect the code that none of the swaps below can reach.
+    Without `src.server` (see `_import_server`) only those are installed.
     """
-    # First, because importing `src.server` imports DaVinciResolveScript.
+    # First, so nothing `src.server` does at import time can reach the network,
+    # and so a module that binds `urlopen` at import binds the guard.
+    network_installed = _install_network_guard()
+    # Then the stub, because importing `src.server` imports DaVinciResolveScript.
     _install_scripting_stub()
     _guard_child_processes()
 
     server = _import_server()
     if server is None:
-        return False
+        return network_installed
 
     if getattr(server, _INSTALLED_FLAG, False):
-        return False
+        return network_installed
 
     _originals["_launch_resolve"] = server._launch_resolve
     _originals["get_resolve"] = server.get_resolve
@@ -672,8 +704,114 @@ def _restore_operation_log() -> None:
             pass
 
 
+def _install_network_guard() -> bool:
+    """Refuse every `urllib.request.urlopen` that would leave this machine.
+
+    Loopback (`127.0.0.0/8`, `::1`, `localhost`) and `file:`/`data:` URLs go
+    through untouched: the control-panel tests launch a real panel on the
+    loopback interface, and `_control_panel_probe` reaches it through this same
+    function. Anything else raises `NetworkRefused` before a socket is opened
+    and is appended to `NETWORK_ATTEMPTS` with the call site and the test.
+
+    Swapped on `urllib.request` because every caller in `src/` and `install.py`
+    looks it up there at call time. Refused centrally rather than only in the
+    test that was caught: the next test to reach a network-backed helper would
+    otherwise make a real request too, and pass or fail with the machine's
+    connection. A test that wants a response patches `urlopen` itself, which
+    still works — `mock.patch` swaps this wrapper out and puts it back.
+    """
+    current = urllib.request.urlopen
+    if getattr(current, _NETWORK_FLAG, None) is True:
+        return False
+
+    def offline_urlopen(url, *args, **kwargs):
+        target = str(getattr(url, "full_url", url))
+        if stays_on_this_machine(target):
+            # Looked up per call, so a test can put a spy downstream of the check.
+            return offline_urlopen.__wrapped__(url, *args, **kwargs)
+        attempt = _describe_attempt(target)
+        NETWORK_ATTEMPTS.append(attempt)
+        raise NetworkRefused(
+            f"offline test suite refused an outbound request to {target} "
+            f"(from {attempt['caller']}, in {attempt['test']})"
+        )
+
+    offline_urlopen.__wrapped__ = current
+    setattr(offline_urlopen, _NETWORK_FLAG, True)
+    urllib.request.urlopen = offline_urlopen
+    return True
+
+
+def _uninstall_network_guard() -> None:
+    current = urllib.request.urlopen
+    if getattr(current, _NETWORK_FLAG, None) is True:
+        urllib.request.urlopen = current.__wrapped__
+
+
+def network_guard_installed() -> bool:
+    return getattr(urllib.request.urlopen, _NETWORK_FLAG, None) is True
+
+
+def stays_on_this_machine(url: str) -> bool:
+    """True when opening `url` cannot send anything to another host."""
+    try:
+        parts = urllib.parse.urlsplit(url)
+        host = parts.hostname
+    except ValueError:
+        return False
+    if parts.scheme in ("file", "data"):
+        return True
+    if not host:
+        return False
+    host = host.rstrip(".")
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host.split("%", 1)[0]).is_loopback
+    except ValueError:
+        return False  # a name, and not `localhost`: resolving it is already a request
+
+
+def _describe_attempt(url: str) -> dict:
+    """Name the code that asked for `url`, and the test it ran under."""
+    here = os.path.abspath(__file__)
+    frames = [
+        frame
+        for frame in traceback.extract_stack()
+        if os.path.abspath(frame.filename) != here
+        and f"{os.sep}urllib{os.sep}" not in frame.filename
+    ]
+    test = next(
+        (
+            frame
+            for frame in reversed(frames)
+            if os.path.basename(frame.filename).startswith("test_")
+            and frame.name.startswith("test")
+        ),
+        None,
+    )
+    return {
+        "url": url,
+        "caller": _where(frames[-1] if frames else None),
+        "test": _where(test)
+        if test
+        else os.environ.get("PYTEST_CURRENT_TEST", "<unknown test>"),
+    }
+
+
+def _where(frame) -> str:
+    if frame is None:
+        return "<unknown caller>"
+    path = os.path.abspath(frame.filename)
+    if path.startswith(_REPO_ROOT + os.sep):
+        path = os.path.relpath(path, _REPO_ROOT)
+    return f"{path}:{frame.lineno} in {frame.name}"
+
+
 def uninstall() -> None:
     """Restore the originals. Safe to call when nothing was installed."""
+    _uninstall_network_guard()
+
     server = _import_server()
     if server is None:
         return

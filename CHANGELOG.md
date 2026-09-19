@@ -2,6 +2,64 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.8.10 — the offline suite no longer asks GitHub for the latest release
+
+No tool, action or runtime behaviour changed. This release changes the test
+harness only.
+
+### Fixed
+
+- **Every full offline run sent a live request to GitHub.** `install.py` checks
+  `https://api.github.com/repos/samuelgursky/davinci-resolve-mcp/releases/latest`
+  for a newer version, and `tests/test_scripting_lib_discovery.py` runs its
+  `main()` in-process (`install.py --clients manual --dry-run`) through
+  `_run_main`. So `python -m unittest discover -s tests -t .` made that request
+  on every run. The run's outcome depended on the machine being online, and the
+  release notes that came back were written into `logs/update-check.json`.
+  Redirecting that file moves the answer, not the request. Measured on a full
+  v4.8.4 run with a tripwire wrapped around `urllib.request.urlopen`: exactly one
+  outbound request, this one, from
+  `test_only_the_designated_live_test_touches_a_real_resolve` →
+  `test_a_failed_verification_exits_non_zero` → `_run_main` →
+  `update_check.check_for_updates` → `_fetch_latest_release`. The same run of
+  this release makes none.
+  - `tests/offline_guard.py` now also wraps `urllib.request.urlopen`. Loopback
+    URLs (`127.0.0.0/8`, `::1`, `localhost`) and `file:`/`data:` URLs pass
+    through, so the control-panel tests still serve and probe a real panel.
+    Anything else raises `NetworkRefused` before a socket is opened. That is a
+    `URLError`, so callers take their no-network path. Each refusal is recorded
+    in `NETWORK_ATTEMPTS` with the calling line and the test, and pytest lists
+    them in its summary. The wrapper is installed before `src.server` is imported
+    and does not need it, so a checkout without the runtime stack is guarded too.
+    Installing twice is a no-op, and `uninstall()` puts the original back.
+  - `_run_main` sets `DAVINCI_RESOLVE_MCP_UPDATE_CHECK=0`, so the installer tests
+    do not ask at all and a clean run records no attempt.
+
+### Validation
+
+- New `tests/test_offline_network_isolation.py` is the tripwire. It fails if
+  `urlopen` is not the guard, if a remote URL (as a string or a `Request`) gets
+  through or a loopback one (`127.0.0.1`, `localhost`, `[::1]`) is stopped, if
+  `check_for_updates` with its own defaults stops going through the guard, if the
+  refusal stops naming `update_check.py … _fetch_latest_release`, or if
+  `_run_main` reaches for the network again. The refusal tests put a spy
+  downstream of the guard, so a wrong verdict fails the test instead of sending a
+  request. With the `_run_main` switch removed, the installer test fails and
+  names the URL, the caller and the test. With the guard disabled, all eight tests
+  fail in `setUp` before opening any URL. `tests/test_offline_guard.py` now also
+  checks that the network guard installs without `src`.
+- Full suite, `python -m unittest discover -s tests -t .`, run behind a
+  `sitecustomize` tripwire that records and refuses off-machine `urlopen`,
+  DNS lookups and socket connects: 3,747 tests. Off-machine requests went from 1
+  on v4.8.4 to 0. The 14 errors are the same tests as on v4.8.4, all
+  environmental: six need `numpy` or `requests`, which the venv lacks, and five
+  in `test_offline_fallback` need `jszip`, because `node_modules` is not
+  installed. The last three are refusals by the tripwire itself: two
+  `test_doctor_paths` probe children, and the granular `get_resolve()` →
+  `open DaVinci Resolve.app` in `test_granular_destructive_op`, which v4.8.5
+  removes. pytest was not run locally.
+- No Resolve behaviour changed, so a live run is not required.
+
 ## What's New in v4.8.9 — the offline suite's child processes no longer reach Resolve
 
 Test-only. No tool, action or runtime code changed.
