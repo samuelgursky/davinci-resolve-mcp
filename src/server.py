@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 377-tool granular server instead
 """
 
-VERSION = "4.8.2"
+VERSION = "4.8.3"
 
 import base64
 import os
@@ -2967,6 +2967,13 @@ def _find_clip_with_parent(folder, clip_id, _parent=None):
             return found_clip, found_parent
     return None, None
 
+
+_FOLDER_ID_REMEDIATION = (
+    "List folders with folder get_subfolders (walking down from "
+    "path=\"Master\") and address by exact path or folder_id."
+)
+
+
 def _find_folder_by_id(folder, folder_id):
     if folder.GetUniqueId() == folder_id:
         return folder
@@ -2975,6 +2982,57 @@ def _find_folder_by_id(folder, folder_id):
         if found:
             return found
     return None
+
+
+def _folders_from_ids(root, folder_ids, *, verb):
+    """Resolve Media Pool folder unique IDs to folder objects. Returns (folders, error).
+
+    Searches the WHOLE tree. The ids callers hold come from GetUniqueId() /
+    folder.get_subfolders, which hand them out at every depth, so the shallow
+    scan of root's direct children this replaced answered "No folders found" for
+    any nested folder — verified live on Resolve Studio 21.1.0.14, where
+    deleting Master/OUTDOORS/1_FOOTAGE/<clip bin> by its own id failed while
+    mp.DeleteFolders() on the recursively resolved object worked.
+
+    Unresolved ids abort the call instead of being dropped. Skipping them let a
+    partial match delete or move the subset it did find and answer plain
+    {"success": true}, which is indistinguishable from every id having resolved.
+
+    The root (Master) folder is refused rather than passed to Resolve: it cannot
+    be deleted or moved, and the shallow search could never return it.
+    """
+    if not isinstance(folder_ids, list) or not folder_ids:
+        return None, _err(
+            "folder_ids must be a non-empty list of folder unique IDs",
+            code="INVALID_FOLDER_IDS", category="invalid_input",
+            remediation=_FOLDER_ID_REMEDIATION)
+    root_id = root.GetUniqueId()
+    folders, unresolved, named_root = [], [], False
+    for fid in folder_ids:
+        fid = str(fid)
+        if fid == root_id:
+            named_root = True
+            continue
+        found = _find_folder_by_id(root, fid)
+        if found is None:
+            unresolved.append(fid)
+        else:
+            folders.append(found)
+    if named_root:
+        return None, _err(
+            f"The root (Master) folder cannot be {verb}",
+            code="ROOT_FOLDER_NOT_ELIGIBLE", category="invalid_input",
+            state={"root_folder_id": root_id})
+    if unresolved:
+        return None, _err(
+            f"Folder(s) not found: {', '.join(unresolved)}",
+            code="FOLDER_NOT_FOUND", category="invalid_input",
+            reason=(f"{len(unresolved)} of {len(folder_ids)} folder_ids matched no folder "
+                    f"anywhere in the Media Pool; nothing was {verb}."),
+            remediation=_FOLDER_ID_REMEDIATION,
+            state={"unresolved_folder_ids": unresolved,
+                   "resolved_folder_ids": [f.GetUniqueId() for f in folders]})
+    return folders, None
 
 
 def _folder_from_params(mp, p, *path_keys, no_address="current"):
@@ -2997,8 +3055,7 @@ def _folder_from_params(mp, p, *path_keys, no_address="current"):
     `_navigate_folder(mp, "")`, which returns root). This fix must not also
     change what omitting the address means.
     """
-    remediation = ("List folders with folder get_subfolders (walking down from "
-                   "path=\"Master\") and address by exact path or folder_id.")
+    remediation = _FOLDER_ID_REMEDIATION
     path = _first_param(p, *path_keys)
     if path:
         f = _navigate_folder(mp, path)
@@ -21088,7 +21145,10 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
       add_subfolder(name, parent_path?) -> {success, name, id}
       delete_folders(folder_ids) -> {success}
         DESTRUCTIVE. Deletes folders + every clip they contain.
+        folder_ids resolve at ANY depth; an id matching nothing fails the whole
+        call (FOLDER_NOT_FOUND) rather than deleting the ids that did resolve.
       move_folders(folder_ids, target_path) -> {success}
+        folder_ids resolve at ANY depth; unresolved ids fail the whole call.
       refresh() -> {success}
       create_timeline(name, if_exists?) -> {success, name, id}
         — if_exists: version (default), reuse, or fail
@@ -21196,14 +21256,9 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
         f = mp.AddSubFolder(parent, p["name"])
         return _ok(name=f.GetName(), id=f.GetUniqueId()) if f else _err("Failed to create subfolder")
     elif action == "delete_folders":
-        folders = []
-        for fid in p["folder_ids"]:
-            # Search for folder by ID (simplified - searches root subfolders)
-            for sub in (root.GetSubFolderList() or []):
-                if sub.GetUniqueId() == fid:
-                    folders.append(sub)
-        if not folders:
-            return _err("No folders found")
+        folders, folders_err = _folders_from_ids(root, p["folder_ids"], verb="deleted")
+        if folders_err:
+            return folders_err
         if "confirm_token" not in p and "confirmToken" not in p and _confirm_token_required():
             return _issue_confirm_token(
                 action="media_pool.delete_folders", params=p,
@@ -21219,12 +21274,12 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
     elif action == "move_folders":
         target = _navigate_folder(mp, p["target_path"])
         if not target:
-            return _err(f"Target folder not found: {p['target_path']}")
-        folders = []
-        for fid in p["folder_ids"]:
-            for sub in (root.GetSubFolderList() or []):
-                if sub.GetUniqueId() == fid:
-                    folders.append(sub)
+            return _err(f"Target folder not found: {p['target_path']}",
+                        code="FOLDER_NOT_FOUND", category="invalid_input",
+                        remediation=_FOLDER_ID_REMEDIATION)
+        folders, folders_err = _folders_from_ids(root, p["folder_ids"], verb="moved")
+        if folders_err:
+            return folders_err
         return {"success": bool(mp.MoveFolders(folders, target))}
     elif action == "refresh":
         return {"success": bool(mp.RefreshFolders())}

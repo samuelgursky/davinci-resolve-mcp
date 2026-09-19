@@ -925,7 +925,10 @@ Key actions: `get_root_folder`, `get_current_folder`, `set_current_folder(path)`
 `delete_clips`, `move_clips`, `relink` and `unlink` are all-or-nothing: if any id
 in `clip_ids` matches no clip, the call fails with `CLIP_NOT_FOUND` (the
 unresolved and resolved ids are in `error.state`) and no clip is changed. Drop the
-stale ids and retry; do not read a partial batch as done.
+stale ids and retry; do not read a partial batch as done. `delete_folders(folder_ids)`
+and `move_folders(folder_ids, target_path)` work the same way with
+`FOLDER_NOT_FOUND`; they resolve `folder_ids` at any depth (pass the ids
+`folder get_subfolders` returns) and refuse the Master folder itself.
 
 Media Pool / Ingest kernel actions (v2.8.0+) add safer agent-facing workflows:
 `ingest_capabilities`, `probe_media_pool`, `probe_ingest_item`,
