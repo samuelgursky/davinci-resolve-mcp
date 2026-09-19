@@ -328,6 +328,19 @@ def _resolve_is_installed() -> bool:
     return False
 
 
+#: The switch the live harnesses already use, e.g. `tests/live_drp_roundtrip_verification.py`.
+LIVE_OPT_IN_ENV = "RESOLVE_VERIFY"
+
+
+def _live_resolve_requested() -> bool:
+    """Has whoever runs the suite asked for the test that talks to a live Resolve?
+
+    Read when the test runs, not in a decorator at import, so the regression test
+    below can run the live test with the switch off and on.
+    """
+    return os.environ.get(LIVE_OPT_IN_ENV) in ("1", "true", "yes")
+
+
 class SetupExitStatusTests(unittest.TestCase):
     """The summary line and the exit status have to agree with each other.
 
@@ -452,10 +465,6 @@ class SetupExitStatusTests(unittest.TestCase):
         self.assertIn("Environment incomplete", out)
         self.assertNotIn("Environment ready!", out)
 
-    @unittest.skipUnless(
-        _resolve_is_installed(),
-        "needs a real Resolve install — this exercises the real probe, and "
-        "without Resolve on the machine there is no probe result to check")
     def test_the_live_probe_agrees_with_the_summary(self) -> None:
         """Integration check: run the real probe and confirm the summary matches it.
 
@@ -472,7 +481,20 @@ class SetupExitStatusTests(unittest.TestCase):
         failure. What is still asserted, and is the whole point: whatever the
         probe said, the summary line and the exit status must agree with it.
         The reporting invariant itself is pinned deterministically above.
+
+        Opt-in with `RESOLVE_VERIFY=1`, like the live harnesses. It used to run
+        whenever Resolve was installed. The probe's child sets PYTHONPATH to
+        Blackmagic's Modules directory, so neither the offline guard's child site
+        nor a PYTHONPATH tripwire loads in it. With Resolve open, every run of the
+        offline suite connected to it: `scriptapp`, then `GetProductName` and
+        `GetVersionString`.
         """
+        if not _live_resolve_requested():
+            self.skipTest(f"talks to a live Resolve; set {LIVE_OPT_IN_ENV}=1 to run it")
+        if not _resolve_is_installed():
+            self.skipTest(
+                "needs a real Resolve install — this exercises the real probe, and "
+                "without Resolve on the machine there is no probe result to check")
         probe: list = []
         code, out = self._run_main(clients="", healthy=True, probe_result=probe)
         self.assertEqual(len(probe), 1, msg=f"probe ran {len(probe)} times:\n{out}")
@@ -580,6 +602,48 @@ class ReportingTestsStayMachineIndependentTests(unittest.TestCase):
                 self.assertEqual(code, expected, msg=out)
         finally:
             install.verify_resolve_connection = real
+
+    def test_the_live_test_runs_only_when_asked(self) -> None:
+        """`LIVE_TEST` stays off in the offline suite unless `RESOLVE_VERIFY=1` is set.
+
+        Its probe starts a child with PYTHONPATH set to Blackmagic's Modules
+        directory, so neither the offline guard nor a PYTHONPATH tripwire loads in
+        it. It used to run whenever Resolve was installed, and with Resolve open
+        every run of the suite connected to it. Here the host is made to look
+        installed, discovery is pinned and the probe is booby-trapped. With the
+        switch on, the trap goes off, which shows it is armed. With the switch off,
+        only the opt-in can have kept the test away from it.
+        """
+        calls: list = []
+
+        def _explode(*args, **kwargs):
+            calls.append(args)
+            raise AssertionError("reached the real verify_resolve_connection")
+
+        def run_live_test(opted_in: bool):
+            del calls[:]
+            env = {"DAVINCI_RESOLVE_MCP_UPDATE_CHECK": "0"}  # no request to GitHub
+            with mock.patch.dict(os.environ, env), \
+                    mock.patch.object(install, "verify_resolve_connection", _explode), \
+                    mock.patch.object(install, "find_resolve_paths", return_value=_PINNED_PATHS), \
+                    mock.patch.object(sys.modules[__name__], "_resolve_is_installed", return_value=True), \
+                    open(os.devnull, "w", encoding="utf-8") as sink:
+                if opted_in:
+                    os.environ[LIVE_OPT_IN_ENV] = "1"
+                else:
+                    os.environ.pop(LIVE_OPT_IN_ENV, None)
+                return unittest.TextTestRunner(stream=sink, verbosity=0).run(
+                    SetupExitStatusTests(self.LIVE_TEST))
+
+        result = run_live_test(opted_in=True)
+        self.assertEqual(len(calls), 1, "the booby-trapped probe was not reached with the switch on")
+        self.assertFalse(result.wasSuccessful())
+
+        result = run_live_test(opted_in=False)
+        self.assertEqual(calls, [], "the live test reached the probe without RESOLVE_VERIFY=1")
+        self.assertTrue(result.wasSuccessful(), result.failures + result.errors)
+        self.assertEqual(len(result.skipped), 1)
+        self.assertIn(LIVE_OPT_IN_ENV, result.skipped[0][1])
 
     def test_the_skip_gate_covers_everything_the_probe_branch_needs(self) -> None:
         """`_resolve_is_installed()` gates the one test that uses the real probe.

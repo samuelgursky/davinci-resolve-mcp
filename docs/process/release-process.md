@@ -157,6 +157,14 @@ The same rule generalises: **"the file round-trips" and "Resolve honours it" are
 different claims.** Only a live import establishes the second one. Do not write
 "verified live" in a doc unless a runnable command produced that result.
 
+**Changes to `install.py`'s verification or summary must run the installer's live
+probe.** It is the offline suite's one live test, and it is opt-in, because its
+child process reaches the open Resolve past the offline guard:
+
+```bash
+RESOLVE_VERIFY=1 venv/bin/python -m unittest tests.test_scripting_lib_discovery.SetupExitStatusTests.test_the_live_probe_agrees_with_the_summary
+```
+
 Examples:
 
 ```bash
