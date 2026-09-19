@@ -4705,6 +4705,8 @@ def _normalize_include_linked(raw):
         lowered = raw.strip().lower()
         if lowered in {"all", "true", "yes"}:
             return {"video", "audio"}
+        if lowered in {"false", "no", "0", "off", "none"}:
+            return set()
         return {part.strip().lower() for part in lowered.split(",") if part.strip()}
     if isinstance(raw, list):
         return {str(part).strip().lower() for part in raw if str(part).strip()}
