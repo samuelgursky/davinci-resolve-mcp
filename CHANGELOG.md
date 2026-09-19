@@ -2,6 +2,76 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.8.2 — a clip id that resolves to nothing fails the whole clip batch
+
+### Fixed
+
+- **`media_pool` `delete_clips`, `move_clips`, `relink` and `unlink` no longer act on
+  the part of a batch that happened to resolve.** All four resolved `clip_ids` with
+  `[_find_clip(root, cid) for cid in ...]` and then dropped every miss, so Resolve was
+  handed whatever was left. `delete_clips` errored only when *every* id missed
+  (`"No clips found"`); a mixed batch deleted the subset that resolved and answered
+  `{"success": true}`, and with confirm tokens on, the preview and the token covered
+  that subset too. `move_clips`, `relink` and `unlink` did not check for an empty
+  result at all: an all-missing batch reached `MoveClips([], target)` /
+  `RelinkClips([], path)` / `UnlinkClips([])` and reported whatever Resolve's bool
+  said. The caller could not tell a partial change from a whole one.
+  - A new `_clips_from_ids` resolver fails the call before anything reaches Resolve
+    (and before a confirm token is issued) with `CLIP_NOT_FOUND` /
+    `invalid_input`, naming the ids in `error.state.unresolved_clip_ids` and
+    `error.state.resolved_clip_ids`. Nothing is deleted, moved, relinked or unlinked.
+  - An empty or non-list `clip_ids` returns `INVALID_CLIP_IDS` instead of iterating a
+    bare string character by character; a missing one keeps the surface-wide
+    `MISSING_CLIP_IDS`.
+
+### Not changed
+
+- The same drop-the-misses pattern remains in four other `media_pool` actions, which
+  this release does not touch: `create_timeline_from_clips` (simple `clip_ids` mode)
+  builds the timeline from the subset, `append_to_timeline` (legacy `clip_ids` mode)
+  appends the subset and verifies against the resolved count, `export_metadata`
+  exports the subset — and with every id missing calls `ExportMetadata(path, [])`,
+  whose behaviour on an empty list is not measured — and `auto_sync_audio` syncs the
+  subset. The granular server's `delete_media_pool_clips` and `move_clips_to_folder`
+  have the same partial-batch behaviour (they do report a count). The `safe_*` /
+  `organize_clips` family reports its misses in `missing` rather than dropping them
+  silently.
+
+### Validation
+
+- New `tests/test_media_pool_clip_ids.py` pins all four actions against a fake
+  Media Pool that records every mutation call: a partial batch, an all-missing
+  batch, a partial `delete_clips` under confirm-token gating (no token is issued),
+  and the missing / empty / bare-string `clip_ids` shapes, plus the happy path with
+  a clip two folders deep. Against the pre-fix code 5 of its 10 tests fail
+  (17 subtests — every partial and all-missing case, the token case and both
+  shape cases); the 5 that pin preserved behaviour pass on both. All 10 pass after.
+- Offline suite: 3,721 tests run, 84 skipped, 11 errors — all environment gaps on the
+  machine that ran it (`numpy` and `requests` absent from the venv, so five test
+  modules fail to import and one LUT test cannot do arithmetic; `node_modules` not
+  installed, so five `test_offline_fallback` cases cannot load `jszip`). None touch
+  `media_pool`. Drift guards, api-parity, api-limitations and read/write symmetry
+  clean; `test_static_undefined_names` skipped because pyflakes is not installed.
+- **Live-validated on Resolve Studio 21.1.0.14** with the new
+  `tests/live_clip_ids_check.py` (`venv/bin/python tests/live_clip_ids_check.py`)
+  against a real project of 144 folders and 2,600 clips, probing a clip seven
+  folders deep. Partial and all-missing batches came back `CLIP_NOT_FOUND` for all
+  four actions, with no confirm token for the partial delete; bare string and
+  empty list → `INVALID_CLIP_IDS`, no key → `MISSING_CLIP_IDS`; a whole batch still
+  resolved to the real clip. The check is strictly non-destructive: the MediaPool it
+  hands the actions forwards only `GetRootFolder` / `GetCurrentFolder` and
+  intercepts every other method, so `DeleteClips` / `MoveClips` / `RelinkClips` /
+  `UnlinkClips` never reach Resolve whatever the code does; token gating is forced
+  on and no token is passed; the destructive hook's analysis-root writes are
+  disabled and its logs go to a temp directory. Every clip's folder, every folder's
+  parent and the probe clip's File Path read back identical after the run.
+- The same live check against the pre-fix code fails with 18 findings: the tripwire
+  intercepted 10 MediaPool mutations the old code sent — `MoveClips`,
+  `RelinkClips` and `UnlinkClips` with just the probe clip for the partial batches,
+  the same three with an empty list for the all-missing batches, `UnlinkClips([])`
+  for `clip_ids: []` — and the partial `delete_clips` was issued a confirm token.
+  The pool was unchanged after that run too.
+
 ## What's New in v4.8.1 — text modifiers (Follower) attach to TextPlus inputs
 
 ### Added

@@ -922,6 +922,11 @@ Key actions: `get_root_folder`, `get_current_folder`, `set_current_folder(path)`
 `setup_multicam_timeline(name, clip_ids|angles, sync_mode?, include_audio?, dry_run?)`,
 `get_selected`, `set_selected(clip_id)`, `export_metadata(path, clip_ids?)`
 
+`delete_clips`, `move_clips`, `relink` and `unlink` are all-or-nothing: if any id
+in `clip_ids` matches no clip, the call fails with `CLIP_NOT_FOUND` (the
+unresolved and resolved ids are in `error.state`) and no clip is changed. Drop the
+stale ids and retry; do not read a partial batch as done.
+
 Media Pool / Ingest kernel actions (v2.8.0+) add safer agent-facing workflows:
 `ingest_capabilities`, `probe_media_pool`, `probe_ingest_item`,
 `safe_import_media`, `safe_import_sequence`, `safe_import_folder`,
