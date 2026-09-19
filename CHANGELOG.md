@@ -2,6 +2,26 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.7.11 — `allow_partial_item_delete="false"` no longer lets a range delete take whole clips
+
+### Fixed
+
+- **The flag that decides whether a range delete may take clips the range only
+  partially covers was read with bare truthiness.** ([#249](https://github.com/samuelgursky/davinci-resolve-mcp/pull/249), @Dev-next-gen)
+  `_timeline_lift_range_impl` collects every item the range touches and blocks the
+  partially covered ones unless the caller opted in — but `bool("false")` is `True`,
+  so a caller who sent `allow_partial_item_delete="false"` to protect exactly that
+  case had a clip spanning frames 0–48 deleted whole by `lift_range(0, 24)`, with a
+  `{"success": true, "deleted": 1}` response and no `blocked` list. `timeline
+  apply_cuts` read the same flag the same way and passed it to every cut. Both reads
+  now go through `coerce_bool`, the helper the `ripple`, `overwrite` and
+  `allow_non_mcp_name` fixes used; `apply_cuts` keeps its `True` default as the
+  helper's default argument, and `lift_range` still reads the `allowPartialItemDelete`
+  alias. Real booleans and the true spellings are unchanged. Guard test:
+  `tests/test_lift_range_allow_partial_string.py` — 5 of 7 fail on the previous code.
+  Left alone on purpose, as a design call: `apply_cuts` does not accept the camelCase
+  alias that `lift_range` does, and neither alias is documented.
+
 ## What's New in v4.7.10 — drop-frame sync events are reported at the timecode they happen
 
 ### Fixed
