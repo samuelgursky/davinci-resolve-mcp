@@ -2,6 +2,22 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.8.13 — `include_linked="false"` no longer relinks
+
+### Fixed
+
+- **`_normalize_include_linked` handled the boolean `False` but not the string
+  spellings.** ([#262](https://github.com/samuelgursky/davinci-resolve-mcp/pull/262), @Dev-next-gen)
+  A caller sending `include_linked="false"` (or `"no"`, `"0"`, `"off"`, `"none"`) to a
+  timeline move got a set containing the literal string instead of an empty set;
+  `bool({"false"})` is `True`, so the `relink` flag defaulted to on — the opposite of
+  what was asked. The twin of the `ripple`, `overwrite`, permission-flag,
+  `allow_non_mcp_name` and `allow_partial_item_delete` fixes, in the one normaliser
+  that parses its own strings. The false spellings now return an empty set; `True`,
+  `False`, `"all"`, type lists and real lists are unchanged. Guard test: seven
+  subtests in `tests/test_append_clip_infos_result_handling.py`, all failing on the
+  previous code.
+
 ## What's New in v4.8.12 — the offline suite no longer writes traces, reports or update state into `logs/`
 
 Test-harness fix only. No tool, action, or Resolve behaviour changed.
