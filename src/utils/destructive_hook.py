@@ -96,7 +96,7 @@ DESTRUCTIVE_ACTIONS_BY_TOOL: Dict[str, FrozenSet[str]] = {
     # them. Plus the 21.0 AI deblur, rated MEDIUM: it creates media, and is
     # registered so it is audited and its dry run is honest.
     "folder": frozenset({"remove_motion_blur"}),
-    "fusion_comp": frozenset({"delete_keyframe", "delete_tool"}),
+    "fusion_comp": frozenset({"add_modifier", "delete_keyframe", "delete_tool"}),
     "gallery_stills": frozenset({"delete_stills"}),
     "media_pool_item": frozenset({"remove_motion_blur"}),
     "media_pool_item_markers": frozenset({

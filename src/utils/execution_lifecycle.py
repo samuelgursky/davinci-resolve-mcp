@@ -203,6 +203,9 @@ class RiskClassificationHook(LifecycleHook):
     #: them unrecognised, i.e. it warns that the risk is unestablished for the
     #: actions whose risk is the best established of any we dispatch.
     _LOW_RISK_ACTIONS: Set[Tuple[str, str]] = {
+        # Attaching a modifier to one Fusion input: one undo step, and
+        # disconnect(tool, input) removes it. (#250)
+        ("fusion_comp", "add_modifier"),
         ("dctl", "encrypt_native"),  # Creates a new file; never replaces existing content.
         ("timeline_markers", "add"),
         ("timeline_markers", "update_custom_data"),

@@ -2038,7 +2038,13 @@ Key actions:
   `get_input(tool_name, input_name, time?)`
 - `get_inputs(tool_name)` / `get_outputs(tool_name)`
 - `set_attrs(tool_name, attrs)` / `get_attrs(tool_name)`
-- `add_keyframe(tool_name, input_name, time, value)`
+- `add_keyframe(tool_name, input_name, time, value, modifier?)` — attaches a
+  BezierSpline (or `modifier`, e.g. `Path` for Point inputs) on first use
+- `add_modifier(tool_name, input_name, modifier)` → `{modifier_tool, modifier_type}`
+  — attach any modifier and get back the tool Fusion created, so a text modifier
+  (`Follower` on a TextPlus `StyledText`) can be driven with `set_input` /
+  `add_keyframe` on that tool (e.g. `Delay`). Fusion wants the registry ID
+  (`StyledTextFollower`, measured on Studio 19.1.3.7); `Follower` is mapped for you
 - `get_position(tool_name)` / `set_position(tool_name, x, y)` — read/write a node's
   position on the FlowView canvas; `set_position` returns a position read-back
 - `copy_tool(tool_name, name?, x?, y?)` — duplicate a node (settings copied via a

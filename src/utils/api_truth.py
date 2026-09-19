@@ -3414,6 +3414,32 @@ API_TRUTH: List[Dict[str, Any]] = [
         "mitigation": ["project_manager.archive", "project_manager.safe_project_archive",
                        "archive_project"],
     },
+    {
+        "symbol": "Tool.AddModifier",
+        "object": "Fusion Tool",
+        "signature": "(inputName, modifierRegID) -> bool",
+        "reality": "The second argument is the modifier's REGISTRY ID, not its "
+                   "display name. On a TextPlus StyledText input, "
+                   "AddModifier('StyledText', 'Follower') and 'TextFollower' return "
+                   "False and attach nothing; 'StyledTextFollower' returns True, "
+                   "creates a tool named Follower1 of that ID and connects it to the "
+                   "input. Spline modifiers already go by registry ID (BezierSpline, "
+                   "Path). Through the Lua bridge the bool is not reliable evidence; "
+                   "the input's connected-output readback is.",
+        "recommended": "Pass the registry ID. fusion_comp add_modifier maps 'Follower' "
+                       "to 'StyledTextFollower', verifies by readback and returns the "
+                       "created modifier tool so it can be driven with set_input / "
+                       "add_keyframe (Delay for a per-character stagger).",
+        "tags": ["fusion", "naming", "silent-failure"],
+        "verified_on": "DaVinci Resolve Studio 19.1.3.7",
+        "measured": "2026-09-19 on a disposable timeline: "
+                    "InsertFusionCompositionIntoTimeline, AddTool('TextPlus'), then "
+                    "AddModifier('StyledText', X) for X in Follower / "
+                    "StyledTextFollower / TextFollower, with a GetToolList diff and "
+                    "StyledText.GetConnectedOutput().GetTool() readback after each; "
+                    "only StyledTextFollower attached (new tool Follower1).",
+        "mitigation": ["fusion_comp.add_modifier", "fusion_comp.add_keyframe"],
+    },
 
 ]
 
@@ -3474,6 +3500,7 @@ ACTION_SYMBOLS: Dict[Tuple[str, str], List[str]] = {
     ("timeline_item_color", "safe_export_lut"): ["TimelineItem.ExportLUT"],
     ("timeline", "duplicate"): ["Timeline.DuplicateTimeline"],
     ("project_manager", "archive"): ["ProjectManager.ArchiveProject"],
+    ("fusion_comp", "add_modifier"): ["Tool.AddModifier"],
     ("project_manager", "safe_project_archive"): ["ProjectManager.ArchiveProject"],
 }
 

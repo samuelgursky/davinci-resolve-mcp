@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 377-tool granular server instead
 """
 
-VERSION = "4.8.0"
+VERSION = "4.8.1"
 
 import base64
 import os
@@ -30412,6 +30412,25 @@ def _fusion_keyframe_frames(inp) -> List[float]:
     return sorted(float(frame) for frame in kfs.values())
 
 
+#: Modifier names callers use -> the registry ID `Tool.AddModifier` wants.
+#: Measured on Studio 19.1.3.7 (issue #250) on a TextPlus StyledText input:
+#: AddModifier("StyledText", "Follower") and "TextFollower" return False and
+#: attach nothing; "StyledTextFollower" returns True, creates a `Follower1` tool
+#: of that ID and connects it to the input. Spline modifiers already go by their
+#: registry ID (BezierSpline, Path). Keys are compared case-insensitively.
+_FUSION_MODIFIER_IDS = {
+    "follower": "StyledTextFollower",
+    "textfollower": "StyledTextFollower",
+    "styledtextfollower": "StyledTextFollower",
+}
+
+
+def _fusion_modifier_id(name: Any) -> str:
+    """The registry ID for a modifier a caller named; unknown names pass through."""
+    text = str(name or "").strip()
+    return _FUSION_MODIFIER_IDS.get(text.lower(), text)
+
+
 def _fusion_input_spline(inp):
     """The modifier/spline tool driving `inp`, or None when it is not animated.
 
@@ -30565,7 +30584,17 @@ def fusion_comp(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
       get_input(tool_name, input_name, time?) -> {value}
       set_attrs(tool_name, attrs) -> {success}
       get_attrs(tool_name) -> {attrs}
-      add_keyframe(tool_name, input_name, time, value) -> {success}
+      add_keyframe(tool_name, input_name, time, value, modifier?) -> {success}
+        Attaches a BezierSpline (or `modifier`, e.g. 'Path' for Point inputs)
+        the first time an input is animated. Modifier names are mapped to
+        their registry ID ('Follower' -> 'StyledTextFollower').
+      add_modifier(tool_name, input_name, modifier) -> {success, modifier_tool, modifier_type}
+        Attach any modifier and return the tool Fusion created for it, so a
+        TEXT modifier (Follower on a TextPlus StyledText) can then be driven
+        with set_input / add_keyframe on that tool (e.g. Delay). Refuses an
+        input that already has a modifier. Measured on Studio 19.1.3.7:
+        Fusion wants the registry ID ('StyledTextFollower'); 'Follower' is
+        mapped for you.
       get_keyframes(tool_name, input_name) -> {keyframes}
       delete_keyframe(tool_name, input_name, time) -> {success, time, remaining_keyframes}
         Deletes on the spline attached to the input. Structured errors when the
@@ -30844,7 +30873,8 @@ def fusion_comp(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
                 # input still has no connected output, the assignment on the next
                 # line would set a STATIC value and _ok() would report a keyframe
                 # that does not exist.
-                tool.AddModifier(p["input_name"], p.get("modifier", "BezierSpline"))
+                _modifier_id = _fusion_modifier_id(p.get("modifier", "BezierSpline"))
+                tool.AddModifier(p["input_name"], _modifier_id)
                 try:
                     attached = tool[p["input_name"]].GetConnectedOutput() is not None
                 except Exception:
@@ -30860,11 +30890,83 @@ def fusion_comp(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
                                "Reporting success here would claim a keyframe that "
                                "does not exist.",
                         remediation="Check the input accepts the modifier type "
-                                    f"({p.get('modifier', 'BezierSpline')!r}); Point "
-                                    "inputs take 'Path'.",
+                                    f"({_modifier_id!r}); Point inputs take 'Path'. "
+                                    "A TEXT modifier (Follower) is not a spline: "
+                                    "attach it with add_modifier, then drive the "
+                                    "modifier tool it returns.",
                     )
             tool[p["input_name"]][p["time"]] = p["value"]
             return _ok()
+        finally:
+            comp.EndUndo(True)
+
+    elif action == "add_modifier":
+        tool = comp.FindTool(p["tool_name"])
+        if not tool:
+            return _err(f"Tool '{p['tool_name']}' not found")
+        input_name = p.get("input_name")
+        requested = p.get("modifier")
+        if not input_name or not requested:
+            return _err("add_modifier requires input_name and modifier",
+                        category="invalid_input")
+        inp = tool[input_name]
+        if not inp:
+            return _err(f"Input '{input_name}' not found on tool '{p['tool_name']}'")
+        modifier_id = _fusion_modifier_id(requested)
+        try:
+            existing = inp.GetConnectedOutput()
+        except Exception:
+            existing = None
+        if existing is not None:
+            existing_tool = existing.GetTool()
+            attrs = (existing_tool.GetAttrs() or {}) if existing_tool else {}
+            return _err(
+                f"'{p['tool_name']}.{input_name}' already has a modifier attached.",
+                code="FUSION_INPUT_ALREADY_CONNECTED", category="precondition",
+                retryable=False,
+                state={"modifier_tool": attrs.get("TOOLS_Name", ""),
+                       "modifier_type": attrs.get("TOOLS_RegID", "")},
+                remediation="Drive the existing modifier tool, or "
+                            "disconnect(tool_name, input_name) first.",
+            )
+        # Same undo bracket as add_keyframe; no comp.Lock() — a lock is for
+        # value writes and this is a graph edit, but see _FUSION_VALUE_WRITE_NOTE
+        # for why writes under a lock are not trusted here.
+        comp.StartUndo(f"Add modifier {modifier_id} to {input_name}")
+        try:
+            tool.AddModifier(input_name, modifier_id)
+            # AddModifier's bool is unreliable through the Lua bridge (an unknown
+            # attribute resolves to None). The readback is the evidence: the
+            # input must now be connected to a modifier tool.
+            try:
+                out = tool[input_name].GetConnectedOutput()
+            except Exception:
+                out = None
+            modifier_tool = out.GetTool() if out else None
+            if modifier_tool is None:
+                return _err(
+                    f"Could not attach {modifier_id!r} to "
+                    f"'{p['tool_name']}.{input_name}': no modifier is connected "
+                    "after AddModifier.",
+                    code="FUSION_ADD_MODIFIER_FAILED", category="api_error",
+                    retryable=False,
+                    reason="Fusion rejects a modifier whose registry ID it does not "
+                           "know for that input type, and reports it only as False.",
+                    remediation="Pass the modifier's REGISTRY ID, not its display "
+                                "name: the text Follower is 'StyledTextFollower' "
+                                "(add_modifier maps 'Follower' to it; measured on "
+                                "Studio 19.1.3.7). Spline modifiers are "
+                                "'BezierSpline' and, for Point inputs, 'Path'.",
+                )
+            attrs = modifier_tool.GetAttrs() or {}
+            return _ok(
+                tool_name=p["tool_name"], input_name=input_name,
+                requested=requested, modifier_id=modifier_id,
+                modifier_tool=attrs.get("TOOLS_Name", ""),
+                modifier_type=attrs.get("TOOLS_RegID", modifier_id),
+                next="Drive the modifier tool with set_input / add_keyframe "
+                     "(e.g. its Delay input for a per-character stagger).",
+            )
         finally:
             comp.EndUndo(True)
 
@@ -31057,7 +31159,7 @@ def fusion_comp(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
         "add_tool","delete_tool","get_tool_list","find_tool",
         "connect","disconnect","get_inputs","get_outputs",
         "set_input","get_input","set_attrs","get_attrs",
-        "add_keyframe","get_keyframes","delete_keyframe",
+        "add_keyframe","add_modifier","get_keyframes","delete_keyframe",
         "get_comp_info","set_frame_range","get_frame_range","render",
         "start_undo","end_undo",
         "get_position","set_position","copy_tool","auto_arrange",

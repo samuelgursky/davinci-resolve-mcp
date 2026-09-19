@@ -2,6 +2,41 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.8.1 — text modifiers (Follower) attach to TextPlus inputs
+
+### Added
+
+- **`fusion_comp add_modifier(tool_name, input_name, modifier)`** — attach any modifier
+  to a Fusion input and get back the tool Fusion created for it
+  (`modifier_tool`, `modifier_type`), so a TEXT modifier can then be driven with
+  `set_input` / `add_keyframe` on that tool. ([#250](https://github.com/samuelgursky/davinci-resolve-mcp/issues/250), reported by @artpavelalex-ux — the first report filed through this server's own `report_issue` action)
+  The reporter wanted a Follower on a TextPlus `StyledText` for per-character
+  typewriter animation, and `add_keyframe(modifier="Follower")` failed with
+  `FUSION_ADD_MODIFIER_FAILED` because Fusion rejects the attach. **Measured on
+  Studio 19.1.3.7:** `Tool.AddModifier` wants the modifier's REGISTRY ID, not its
+  display name — `AddModifier("StyledText", "Follower")` and `"TextFollower"` return
+  False and attach nothing; `"StyledTextFollower"` returns True, creates a `Follower1`
+  tool of that ID and connects it to the input. The mapping now lives in
+  `_FUSION_MODIFIER_IDS` and both `add_modifier` and `add_keyframe`'s `modifier`
+  parameter use it, so `Follower` works as written. Attachment is verified by
+  readback (the input's connected output), never by AddModifier's bool, which is
+  unreliable through the Lua bridge. An input that already has a modifier is refused
+  with `FUSION_INPUT_ALREADY_CONNECTED` and the existing tool named; a modifier
+  Fusion rejects is reported with the registry-ID remediation rather than claimed.
+  - Rated a LOW bounded reversible edit and registered in the destructive hook, so it
+    gets safe-mode, an audit row, and the timeline archive copy before the edit like
+    every other compound write; `add_keyframe` itself stays on the ratchet backlog.
+  - New `api_truth` entry `Tool.AddModifier` (`verified_on` 19.1.3.7) mapped through
+    `ACTION_SYMBOLS`, so `add_modifier` results carry the fact as a `known_limitation`.
+  - **Live-validated on landing through the real action** on a disposable timeline:
+    `add_modifier(Follower)` → `Follower1` / `StyledTextFollower`; `set_input(Delay=5)`
+    on the returned tool read back `5.0`; a second attach → `FUSION_INPUT_ALREADY_CONNECTED`
+    naming `Follower1`; a bogus modifier → `FUSION_ADD_MODIFIER_FAILED`. Unit tests in
+    `tests/test_fusion_add_modifier.py` against fakes that accept only the registry ID.
+  - Not measured: other text modifiers (the mapping table holds only the Follower),
+    builds other than 19.1.3.7, and whether the per-character transforms the reporter
+    wants animate as expected once driven — that is theirs to confirm.
+
 ## What's New in v4.8.0 — one read before planning: `project_manager snapshot`
 
 ### Added
