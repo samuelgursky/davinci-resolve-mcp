@@ -39,7 +39,7 @@ if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
 from tests import offline_guard  # noqa: E402 - after the sys.path fix above
-from tests.offline_guard import LAUNCH_ATTEMPTS  # noqa: F401 - re-exported
+from tests.offline_guard import LAUNCH_ATTEMPTS, NETWORK_ATTEMPTS  # noqa: F401 - re-exported
 
 
 @pytest.fixture(autouse=True, scope="session")
@@ -79,3 +79,13 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
         )
         for where in dict.fromkeys(LAUNCH_ATTEMPTS):
             terminalreporter.write_line("  " + where, red=True)
+    if NETWORK_ATTEMPTS:
+        terminalreporter.write_line("")
+        terminalreporter.write_line(
+            "offline suite refused %d outbound request(s):" % len(NETWORK_ATTEMPTS),
+            red=True,
+        )
+        for attempt in NETWORK_ATTEMPTS:
+            terminalreporter.write_line(
+                "  %(url)s\n    from %(caller)s\n    in %(test)s" % attempt, red=True
+            )

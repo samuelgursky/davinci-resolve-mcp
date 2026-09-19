@@ -73,11 +73,25 @@ class NoEntryPointToGuardTests(unittest.TestCase):
         offline_guard.SKIPPED_REASON = None
 
     def test_the_public_helpers_survive_an_unimportable_server(self) -> None:
+        # uninstall() lifts the network guard whether or not src imports, since
+        # that guard does not depend on src. Put it back for the rest of the run.
+        self.addCleanup(offline_guard.install)
         exc = ModuleNotFoundError("No module named 'anyio'", name="anyio")
         with mock.patch.object(builtins, "__import__", _raising_import(exc)):
             self.assertFalse(offline_guard.install())
             offline_guard.uninstall()
+            self.assertFalse(offline_guard.network_guard_installed())
             offline_guard.clear_cached_handle()
+
+    def test_the_network_guard_installs_without_src(self) -> None:
+        """No runtime stack still means no network: the guard needs only urllib."""
+        self.addCleanup(offline_guard.install)
+        offline_guard._uninstall_network_guard()  # only this half; the swap stays
+        self.assertFalse(offline_guard.network_guard_installed())
+        exc = ModuleNotFoundError("No module named 'anyio'", name="anyio")
+        with mock.patch.object(builtins, "__import__", _raising_import(exc)):
+            self.assertTrue(offline_guard.install())
+        self.assertTrue(offline_guard.network_guard_installed())
 
 
 if __name__ == "__main__":
