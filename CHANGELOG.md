@@ -75,9 +75,16 @@ connect explicitly at startup instead.
   as a child process. An in-process guard cannot reach a child, and the child
   still calls `scriptapp("Resolve")` read-only: 5 calls from 3 children in the
   run above, the same as on v4.8.4.
-- Not validated against a live Resolve: the launchers' startup connection was not
-  run against a real Resolve. Before tagging, start `src/resolve_mcp_server.py`
-  with Resolve open and check that the log shows `Connected to DaVinci Resolve: …`.
+- **Live-validated** on Resolve Studio 21.1.0.14, with Resolve already open. Both
+  launchers log `Connected to DaVinci Resolve: DaVinci Resolve Studio 21.1.0.14` at
+  startup, and neither started anything:
+  - `src/resolve_mcp_server.py` logs it before `Starting DaVinci Resolve MCP Server
+    v4.8.5 (389 granular tools)`, where the import-time connect used to log it.
+  - `src/server.py --full` logs it right after the granular import, before
+    `Threaded tool dispatch installed for 389 tools`.
+- Not measured: startup with Resolve closed. That path logs `Failed to get Resolve
+  object` and leaves launching to the first tool call. The offline suite was never
+  run against the live Resolve.
 
 ## What's New in v4.8.4 — a Fusion nest control is refused with the controls it folds named
 
