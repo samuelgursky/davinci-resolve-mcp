@@ -19097,9 +19097,13 @@ def _project_state_snapshot(r, proj, p: Dict[str, Any]) -> Dict[str, Any]:
     what those actions return. Each section fails on its own: an exception is
     reported as that section's {"error"}, never as a whole-call failure.
     """
-    include = p.get("include") or list(_SNAPSHOT_SECTIONS)
-    if not isinstance(include, list):
-        return _err("include must be a list", category="invalid_input")
+    include = p.get("include")
+    if include is None:
+        include = list(_SNAPSHOT_SECTIONS)
+    # An empty include is refused: falling back to every section would hand a
+    # caller that filtered down to nothing the most expensive read instead.
+    if not isinstance(include, list) or not include:
+        return _err("include must be a non-empty list", category="invalid_input")
     unknown = [name for name in include if name not in _SNAPSHOT_SECTIONS]
     if unknown:
         return _err(
@@ -19208,8 +19212,12 @@ def project_manager(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         switches page, timeline or folder. include picks sections (default all);
         item_limit caps the items returned across tracks (default 200) and sets
         timeline.items_truncated, while item_count and gaps_overlaps still cover
-        the whole timeline. A section that fails reports {error} in its own
-        place. Frame fields are probe_timeline_structure's, unchanged: start/end
+        the whole timeline. item_limit bounds the response, not the read: the
+        timeline sections cost what probe_timeline_structure costs (they scale
+        with item_count) and media_pool walks every pool clip, so on a large
+        project leave out the sections you do not need. A section that fails
+        reports {error} in its own place; an empty include is refused. Frame
+        fields are probe_timeline_structure's, unchanged: start/end
         are TimelineItem GetStart/GetEnd record frames; source_start/source_end
         are file-relative frames at source_fps, source_end exclusive.
       create(name, media_location_path?) -> {success, name}

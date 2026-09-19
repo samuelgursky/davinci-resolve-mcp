@@ -198,10 +198,28 @@ class ProjectSnapshotTest(unittest.TestCase):
 
     def test_bad_params_are_refused(self):
         proj = SnapshotProject(_timeline())
-        for params in ({"include": "timeline"}, {"track_types": "video"},
+        for params in ({"include": "timeline"}, {"include": []}, {"track_types": "video"},
                        {"item_limit": "many"}, {"item_limit": -1}):
             with self.subTest(params=params):
                 self.assertEqual(self._snapshot(proj, params)["error"]["category"], "invalid_input")
+
+    def test_item_limit_zero_keeps_counts_and_gaps(self):
+        out = self._snapshot(SnapshotProject(_timeline()), {"item_limit": 0})
+        timeline = out["timeline"]
+        self.assertEqual(timeline["items_returned"], 0)
+        self.assertTrue(timeline["items_truncated"])
+        self.assertEqual(timeline["item_count"], 4)
+        self.assertEqual(out["gaps_overlaps"]["gap_count"], 1)
+
+    def test_gaps_only_include_omits_the_timeline_section(self):
+        out = self._snapshot(SnapshotProject(_timeline()), {"include": ["gaps_overlaps"]})
+        self.assertEqual(list(out), ["gaps_overlaps"])
+        self.assertEqual(out["gaps_overlaps"]["gap_count"], 1)
+
+    def test_render_row_without_a_job_id_is_kept_without_status(self):
+        out = self._snapshot(SnapshotProject(_timeline(), jobs=[{"TimelineName": "No Id"}]),
+                             {"include": ["render"]})
+        self.assertEqual(out["render"]["jobs"], [{"TimelineName": "No Id"}])
 
     def test_default_output_stays_compact_for_a_sixty_item_timeline(self):
         media = MediaPoolItemStub("A.mov", "mpi-a", __file__)
