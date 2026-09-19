@@ -38,9 +38,16 @@ alone.
 So the guard now closes the door at the module as well as at the call sites.
 `DaVinciResolveScript` and `fusionscript` are answered by an empty stand-in from
 a `sys.meta_path` finder, and the granular server's entry points are swapped
-the same way as the compound server's. None of this reaches a child process:
-a test that starts a real server or the control panel as a subprocess is still
-on its own.
+the same way as the compound server's.
+
+None of that reaches a child process, and some tests start real Python
+children. `server._open_control_panel` runs `src/analysis_dashboard.py`, which
+imported Blackmagic's module and called `scriptapp("Resolve")` on whatever was
+open. On v4.8.4 that was 6 calls from 3 panel children in one full run. So the
+guard also exports an environment for children. `offline_child_site` goes first
+on PYTHONPATH, and its `sitecustomize.py` answers the scripting modules with the
+same kind of stand-in inside every Python child that inherits the environment.
+The bridge redirect below reaches children through the environment as well.
 
 A stand-in that is reached still means a test asked for a real Resolve, and
 until v4.8.8 nothing failed when it happened. The launches went into
@@ -99,6 +106,11 @@ SCRIPTING_MODULES = ("DaVinciResolveScript", "fusionscript")
 #: Set on every stand-in module, so a test can tell the guard's stub apart from
 #: the real library and from a stub of its own.
 STUB_MARKER = "__resolve_offline_guard_stub__"
+
+#: Holds only `sitecustomize.py`, which stands in for the scripting modules in a
+#: child process. That file repeats `SCRIPTING_MODULES` and `STUB_MARKER` because
+#: it cannot import this one, and a test keeps the copies equal.
+CHILD_SITE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "offline_child_site")
 
 #: The granular server's copies of the entry points swapped on `src.server`.
 GRANULAR_ENTRY_POINTS = ("_try_connect", "_launch_resolve", "get_resolve")
@@ -292,11 +304,13 @@ def install() -> bool:
 
     Returns True if this call did the swap, False if it was already in place or
     there was nothing to swap (see `_import_server`). The scripting-module stub
-    goes in on every path. It needs no third-party package, and it is what
-    protects the code that none of the swaps below can reach.
+    and the children's PYTHONPATH go in on every path. Neither needs a
+    third-party package, and they protect the code that none of the swaps below
+    can reach.
     """
     # First, because importing `src.server` imports DaVinciResolveScript.
     _install_scripting_stub()
+    _guard_child_processes()
 
     server = _import_server()
     if server is None:
@@ -464,6 +478,10 @@ def _redirect_bridge_config() -> None:
     deferring to it. A path exported in the shell points at the operator's real
     bridge. Tests that exercise the bridge set their own path with
     `mock.patch.dict`, and that still wins inside their scope.
+
+    Child processes inherit the variable. That includes the doctor probe, which
+    replaces PYTHONPATH and so never loads `offline_child_site`, and which calls
+    `connect_resolve(None)`, the bridge's own route.
     """
     _originals["_bridge_config_env"] = os.environ.get(_BRIDGE_CONFIG_ENV)
     directory = tempfile.mkdtemp(prefix="resolve-bridge-offline-")
@@ -480,6 +498,41 @@ def _restore_bridge_config() -> None:
     else:
         os.environ[_BRIDGE_CONFIG_ENV] = previous
     shutil.rmtree(_originals.pop("_bridge_config_dir"), ignore_errors=True)
+
+
+def _guard_child_processes() -> None:
+    """Put `CHILD_SITE_DIR` first on PYTHONPATH, for every child this run starts.
+
+    A Python child that inherits the environment then runs its `sitecustomize.py`
+    at startup, before any code of its own. That file answers
+    `DaVinciResolveScript` and `fusionscript` with an empty stand-in, refuses a
+    `subprocess` launch of the application, and still runs the `sitecustomize` it
+    shadows. See its docstring for the measurements and for the children it cannot
+    reach. The existing entries keep their order behind it.
+
+    Idempotent across copies of this module (`offline_guard` and
+    `tests.offline_guard` can both be imported in one run). The state lives in the
+    environment, and a copy that finds the directory already in front changes
+    nothing and records nothing to restore.
+    """
+    current = os.environ.get("PYTHONPATH")
+    entries = current.split(os.pathsep) if current else []
+    if entries[:1] == [CHILD_SITE_DIR]:
+        return
+    _originals["_child_pythonpath"] = current
+    os.environ["PYTHONPATH"] = os.pathsep.join(
+        [CHILD_SITE_DIR] + [entry for entry in entries if entry != CHILD_SITE_DIR]
+    )
+
+
+def _unguard_child_processes() -> None:
+    if "_child_pythonpath" not in _originals:
+        return
+    previous = _originals.pop("_child_pythonpath")
+    if previous is None:
+        os.environ.pop("PYTHONPATH", None)
+    else:
+        os.environ["PYTHONPATH"] = previous
 
 
 def _redirect_security_audit_log() -> None:
@@ -638,8 +691,9 @@ def uninstall() -> None:
     _restore_bridge_config()
     # Only on this path: a call that found nothing to restore, such as the one
     # `test_offline_guard` makes with `src` unimportable, must not strip the stub
-    # from under the rest of the run.
+    # or the children's PYTHONPATH from under the rest of the run.
     _uninstall_scripting_stub()
+    _unguard_child_processes()
     setattr(server, _INSTALLED_FLAG, False)
 
 
