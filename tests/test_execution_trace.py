@@ -432,12 +432,22 @@ class TraceLogLocationTests(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.addCleanup(lambda: os.chdir(self._cwd))
-        self.addCleanup(lambda: os.environ.pop("RESOLVE_MCP_TRACE_FILE", None))
-        os.environ.pop("RESOLVE_MCP_TRACE_FILE", None)
+        # Scoped, never a bare pop. The offline guard points this variable away
+        # from the repo's logs/ for the whole run, and a pop here would outlive
+        # the class and send every later test's traces into the real log.
+        # Each test starts on a throwaway file; the two about the built-in
+        # default unset it themselves, inside this scope.
+        env = mock.patch.dict(
+            os.environ,
+            {"RESOLVE_MCP_TRACE_FILE": os.path.join(self._tmp.name, "unset.jsonl")},
+        )
+        env.start()
+        self.addCleanup(env.stop)
 
     def test_the_path_does_not_move_with_the_working_directory(self):
         import os
 
+        os.environ.pop("RESOLVE_MCP_TRACE_FILE")
         here = self.et.trace_log_path()
         os.chdir(self._tmp.name)
         self.assertEqual(self.et.trace_log_path(), here)
@@ -446,6 +456,7 @@ class TraceLogLocationTests(unittest.TestCase):
         import os
 
         from pathlib import Path
+        os.environ.pop("RESOLVE_MCP_TRACE_FILE")
         path = Path(self.et.trace_log_path())
         self.assertEqual(path.parent.name, "logs")
         self.assertEqual(path.parent, Path(__file__).resolve().parents[1] / "logs")
@@ -558,8 +569,11 @@ class UnverifiedIsNotAPassTests(unittest.TestCase):
         self.et.clear_executions()
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
-        os.environ["RESOLVE_MCP_TRACE_REPORT_DIR"] = self._tmp.name
-        self.addCleanup(lambda: os.environ.pop("RESOLVE_MCP_TRACE_REPORT_DIR", None))
+        # Scoped for the same reason as in TraceLogLocationTests: popping it
+        # afterwards would remove the guard's redirect for the rest of the run.
+        env = mock.patch.dict(os.environ, {"RESOLVE_MCP_TRACE_REPORT_DIR": self._tmp.name})
+        env.start()
+        self.addCleanup(env.stop)
 
     def _report(self, verification=None):
         import src.server as compound

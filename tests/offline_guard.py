@@ -133,6 +133,16 @@ CHILD_SITE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "offli
 
 #: The granular server's copies of the entry points swapped on `src.server`.
 GRANULAR_ENTRY_POINTS = ("_try_connect", "_launch_resolve", "get_resolve")
+#: The overrides for the other files the server writes under `logs/` by default,
+#: mapped to the name each gets inside the run's temp directory. The first two
+#: are read by `src.utils.execution_trace`, the third is
+#: `src.utils.update_check.ENV_STATE_PATH`. Named here for the same reason as
+#: `_PREFS_ENV`.
+RUN_STATE_ENVS = {
+    "RESOLVE_MCP_TRACE_FILE": "execution-traces.jsonl",
+    "RESOLVE_MCP_TRACE_REPORT_DIR": "execution-reports",
+    "DAVINCI_RESOLVE_MCP_UPDATE_STATE": "update-check.json",
+}
 
 #: The originals, kept for `uninstall`.
 _originals: dict = {}
@@ -376,6 +386,7 @@ def install() -> bool:
     _redirect_operation_log()
     _redirect_media_analysis_preferences()
     _redirect_bridge_config()
+    _redirect_run_state()
 
     setattr(server, _INSTALLED_FLAG, True)
     return True
@@ -670,6 +681,50 @@ def _restore_media_analysis_preferences() -> None:
             pass
 
 
+def _redirect_run_state() -> None:
+    """Point execution traces, audit reports and update-check state at a temp dir.
+
+    Each of these defaults to a path under the repo's `logs/`, beside
+    `server.log`. `execution-traces.jsonl` takes one append per tool call,
+    `execution-reports/` receives `export_execution_report` output, and
+    `update-check.json` holds the update policy the operator chose. One
+    `python -m unittest discover -s tests -t .` from a fresh checkout left
+    1,865 fabricated tool-call records (672 KB) in the trace log, a synthetic
+    audit report and an update-check file. In an operator's main checkout those
+    records share a file with the real ones, and that file is where
+    `list_recent_executions` sends someone asking "why did the editor do this?".
+
+    Redirected through the environment rather than by swapping functions. The
+    server already reads these variables, `src.server` holds its own binding of
+    `update_state_path`, and a child process the suite starts inherits the
+    environment, which no swap reaches. A variable an outer harness already set
+    is left alone, as with the preferences above.
+
+    A test that needs the built-in default has to unset the variable inside a
+    `mock.patch.dict(os.environ)` scope. A bare `os.environ.pop` outlives the
+    test and hands every later test the repo's `logs/` again.
+    `test_repo_logs_isolation` is the tripwire.
+    """
+    directory = tempfile.mkdtemp(prefix="resolve-mcp-test-run-state-")
+    redirected = []
+    for name, filename in RUN_STATE_ENVS.items():
+        if os.environ.get(name):
+            continue  # An outer harness already chose a path; don't fight it.
+        os.environ[name] = os.path.join(directory, filename)
+        redirected.append(name)
+    _originals["_run_state_dir"] = directory
+    _originals["_run_state_envs"] = redirected
+
+
+def _restore_run_state() -> None:
+    directory = _originals.pop("_run_state_dir", None)
+    if directory is None:
+        return
+    for name in _originals.pop("_run_state_envs", ()):
+        os.environ.pop(name, None)
+    shutil.rmtree(directory, ignore_errors=True)
+
+
 def _restore_security_audit_log() -> None:
     if "_audit_log_path" not in _originals:
         return
@@ -827,6 +882,7 @@ def uninstall() -> None:
     _restore_operation_log()
     _restore_media_analysis_preferences()
     _restore_bridge_config()
+    _restore_run_state()
     # Only on this path: a call that found nothing to restore, such as the one
     # `test_offline_guard` makes with `src` unimportable, must not strip the stub
     # or the children's PYTHONPATH from under the rest of the run.
