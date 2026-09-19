@@ -42,10 +42,11 @@ Limits. A child started with its own PYTHONPATH, with `-E` or `-I`, or with an
 environment built from scratch never loads this file. `scripts/doctor.py`'s probe
 sets PYTHONPATH to the Modules directory. That is why the fake DaVinciResolveScript
 in `test_doctor_paths` still loads in its probe, and why every doctor test patches
-the paths it probes. `install.verify_resolve_connection` does the same, and
-`test_scripting_lib_discovery.test_the_live_probe_agrees_with_the_summary` runs it
-for real whenever Resolve is installed. Its child imports Blackmagic's module and
-calls `scriptapp("Resolve")` on the open application, and nothing here stops it.
+the paths it probes. `install.verify_resolve_connection` does the same. Its child
+imports Blackmagic's module and calls `scriptapp("Resolve")` on the open
+application, and nothing here stops it. That is why the one test that runs it for
+real, `test_scripting_lib_discovery.test_the_live_probe_agrees_with_the_summary`,
+runs only with `RESOLVE_VERIFY=1`.
 Launches that bypass `subprocess` (`os.system`, `os.exec*`) are not intercepted.
 
 Kept free of `src` and `tests` imports, and of syntax newer than Python 3.6,
