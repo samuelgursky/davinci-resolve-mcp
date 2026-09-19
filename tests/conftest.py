@@ -70,6 +70,20 @@ def _no_cached_resolve_handle_between_tests():
         offline_guard.clear_cached_handle()
 
 
+@pytest.fixture(autouse=True)
+def _fail_a_test_that_reaches_a_launcher():
+    """The launch check for plain test functions.
+
+    A `unittest.TestCase` is failed by the guard's `TestCase.run` wrapper, which
+    has marked its attempts reported before this runs. Plain functions never
+    pass through that wrapper, so they are checked here.
+    """
+    yield
+    pending = offline_guard.unreported_launch_attempts()
+    if pending:
+        pytest.fail(offline_guard.launch_failure_message(pending), pytrace=False)
+
+
 def pytest_terminal_summary(terminalreporter, exitstatus, config):
     if LAUNCH_ATTEMPTS:
         terminalreporter.write_line("")

@@ -41,20 +41,43 @@ a `sys.meta_path` finder, and the granular server's entry points are swapped
 the same way as the compound server's. None of this reaches a child process:
 a test that starts a real server or the control panel as a subprocess is still
 on its own.
+
+A stand-in that is reached still means a test asked for a real Resolve, and
+until v4.8.8 nothing failed when it happened. The launches went into
+`LAUNCH_ATTEMPTS`, which pytest printed in its summary and `unittest` never
+read, labelled "<unknown test>". On v4.8.4, with the granular launcher replaced
+by a counting stub, one full `unittest discover` run reached it 10 times, all
+from `test_granular_destructive_op.McpSchema`. That test asked `hasattr` of
+every global in the granular modules, and ten of those globals are a
+`ResolveProxy` that connects on attribute access. So every `unittest.TestCase`
+now runs under a check that fails it when a launcher was reached during it, or
+since the previous test finished (at import, or in a class fixture). Plain
+pytest functions get the same check from `conftest.py`.
 """
 
 from __future__ import annotations
 
+import functools
 import importlib.abc
 import importlib.machinery
 import os
 import shutil
 import sys
 import tempfile
+import unittest
 
 #: Every launch the suite attempted, so a failure names the test rather than
-#: leaving an application open with no explanation.
+#: leaving an application open with no explanation. Entries are `LaunchAttempt`s.
+#: A test that calls a stand-in on purpose deletes its own entry, and the check
+#: below then has nothing to fail it for.
 LAUNCH_ATTEMPTS: list = []
+
+#: The tests running right now, innermost last. A test that runs another test,
+#: as the launch-check tests do, nests.
+_running_tests: list = []
+
+#: Set on the `TestCase.run` wrapper, so a second install does not wrap it again.
+_LAUNCH_CHECK_FLAG = "_offline_guard_launch_check"
 
 #: Set on `src.server` once the swap is in place, so a second install is a no-op
 #: rather than a stub-wrapping-a-stub.
@@ -152,9 +175,96 @@ def _import_granular_common():
     return common
 
 
+class LaunchAttempt(str):
+    """One `LAUNCH_ATTEMPTS` entry: which test reached a launcher, and from where.
+
+    A `str`, so the pytest summary and the tests that count entries read it as
+    before. `reported` is set once a test has failed for it, so each attempt
+    fails exactly one test.
+    """
+
+    reported = False
+
+
+def _current_test_label() -> str:
+    if _running_tests:
+        return _running_tests[-1].id()
+    # pytest sets this for plain test functions, which never pass through
+    # `TestCase.run`. Outside any test, nothing names the caller.
+    return os.environ.get("PYTEST_CURRENT_TEST") or "<outside any test>"
+
+
 def _blocked_launch(*_args, **_kwargs):
-    LAUNCH_ATTEMPTS.append(os.environ.get("PYTEST_CURRENT_TEST", "<unknown test>"))
+    # One stand-in serves both servers. The caller's module says which launcher
+    # it stood in for: `get_resolve` in `src.server` or `src.granular.common`.
+    caller = sys._getframe(1).f_globals.get("__name__", "<unknown module>")
+    LAUNCH_ATTEMPTS.append(LaunchAttempt(f"{_current_test_label()} (called from {caller})"))
     return False
+
+
+def unreported_launch_attempts() -> list:
+    """The attempts no test has failed for yet, now marked as reported."""
+    pending = [
+        attempt
+        for attempt in LAUNCH_ATTEMPTS
+        if isinstance(attempt, LaunchAttempt) and not attempt.reported
+    ]
+    for attempt in pending:
+        attempt.reported = True
+    return pending
+
+
+def launch_failure_message(pending) -> str:
+    listed = "\n".join(f"  - {attempt}" for attempt in pending)
+    return (
+        f"A DaVinci Resolve launcher was reached:\n{listed}\n"
+        "The offline guard's stand-in answered. Without the guard this opens "
+        "Resolve, or connects to the one already open. Give the code under test a "
+        "Resolve stub it controls instead. A test that calls the stand-in on "
+        "purpose deletes its own entry from `offline_guard.LAUNCH_ATTEMPTS`."
+    )
+
+
+def _fail_on_launch_attempts() -> None:
+    pending = unreported_launch_attempts()
+    if pending:
+        raise AssertionError(launch_failure_message(pending))
+
+
+def _install_launch_check() -> None:
+    """Fail every `unittest.TestCase` that reaches a launcher, under either runner.
+
+    A cleanup rather than a check after `run` returns: unittest reports an
+    exception in a cleanup as a failure of that test, and pytest's unittest
+    integration drives the same `run`. Registered before the test's own
+    cleanups, so it runs after them.
+    """
+    current = unittest.TestCase.run
+    if getattr(current, _LAUNCH_CHECK_FLAG, False):
+        return
+    _originals["TestCase.run"] = current
+
+    @functools.wraps(current)
+    def run(self, result=None):
+        self.addCleanup(_fail_on_launch_attempts)
+        _running_tests.append(self)
+        try:
+            return current(self, result)
+        finally:
+            _running_tests.pop()
+
+    setattr(run, _LAUNCH_CHECK_FLAG, True)
+    unittest.TestCase.run = run
+
+
+def launch_check_installed() -> bool:
+    return bool(getattr(unittest.TestCase.run, _LAUNCH_CHECK_FLAG, False))
+
+
+def _uninstall_launch_check() -> None:
+    original = _originals.pop("TestCase.run", None)
+    if original is not None:
+        unittest.TestCase.run = original
 
 
 def _offline_resolve_is_running():
@@ -215,6 +325,7 @@ def install() -> bool:
     server.resolve_is_running = _offline_resolve_is_running
 
     _guard_granular_server()
+    _install_launch_check()
     _redirect_security_audit_log()
     _redirect_operation_log()
     _redirect_media_analysis_preferences()
@@ -520,6 +631,7 @@ def uninstall() -> None:
     server.get_resolve = _originals["get_resolve"]
     server.resolve_is_running = _originals["resolve_is_running"]
     _unguard_granular_server()
+    _uninstall_launch_check()
     _restore_security_audit_log()
     _restore_operation_log()
     _restore_media_analysis_preferences()

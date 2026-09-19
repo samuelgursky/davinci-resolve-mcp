@@ -2,6 +2,73 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.8.8 — a test that reaches a Resolve launcher fails
+
+Test-only. No tool, action or runtime code changed.
+
+### Fixed
+
+- **`test_granular_destructive_op.McpSchema` asked for a Resolve connection ten
+  times per run.** `test_every_hooked_tool_advertises_the_override_and_nothing_else_new`
+  called `hasattr(value, "__granular_destructive__")` on every global of every
+  granular module. Ten of those modules hold `resolve = ResolveProxy()`, and the
+  proxy's `__getattr__` calls `get_resolve()`, which falls through to
+  `_launch_resolve()` when nothing answers. Measured on v4.8.4 with the granular
+  `_launch_resolve` replaced by a counting stub: a full
+  `python -m unittest discover -s tests -t .` run reached it 10 times, once per
+  module, all from this test and from no other. With Resolve closed, each reach
+  would have run `open` on the application. Since v4.8.5 the guard's `get_resolve`
+  answers `None` first, so the launcher is no longer reached, but the scan still
+  asked for a connection. It now reads the marker with `inspect.getattr_static`
+  and asks for nothing. The new `test_the_module_scan_asks_for_no_connection`
+  fails if it asks again.
+
+### Changed
+
+- **A test that reaches a launcher now fails.** Until now the guard's stand-in
+  recorded the attempt in `LAUNCH_ATTEMPTS` and the test passed. pytest printed
+  the list in its summary without failing the run, `unittest` never read it, and
+  every entry recorded under `unittest` read `<unknown test>`. Now every
+  `unittest.TestCase` runs under a cleanup that fails it when an attempt was
+  recorded during the test or since the previous test finished, which covers
+  imports and class fixtures. Plain pytest functions get the same check from an
+  autouse fixture in `tests/conftest.py`. Each attempt fails exactly one test.
+  Each entry names the test and the module that called the launcher, for example
+  `tests.test_x.Case.test_y (called from src.granular.common)`. A test that calls
+  the stand-in on purpose deletes its own entry, as `test_offline_guard_granular`
+  already does, and passes.
+
+### Validation
+
+- New `tests/test_offline_launch_check.py` runs small inner tests that reach the
+  granular launcher through a `ResolveProxy`, the compound launcher through the
+  real `get_resolve`, and a launcher from `setUpClass`. Each reach fails exactly
+  one inner test; the `setUpClass` reach fails the class's first test and not its
+  second. An inner test that deletes the entry for its deliberate call passes. With the `TestCase.run`
+  wrapper removed, 4 of its 6 tests fail.
+- The v4.8.4 `McpSchema` test fails under the new check when the guard's
+  `get_resolve` is swapped back to the real one. It records 10 attempts, each
+  `…McpSchema.test_every_hooked_tool_advertises_the_override_and_nothing_else_new (called from src.granular.common)`.
+  With `hasattr` restored in the scan, the new pin test fails with
+  `asked for a connection`.
+- Full suite, `python -m unittest discover -s tests -t .`: 3,756 tests. No test
+  failed the launch check, and `LAUNCH_ATTEMPTS` was empty at exit. The 11 errors
+  are the same as on v4.8.5 in this environment (no `numpy` or `requests` in the
+  venv, plus `test_offline_fallback` and `test_lut_file_controls`).
+  `python -m unittest discover -s tests`, the runner that skips `tests/__init__.py`,
+  gives the same result.
+  Both runs used a scratch `sitecustomize` tripwire, because Resolve was open on
+  the machine. It set `sys.modules["DaVinciResolveScript"] = None`, answered any
+  later import with a recording module, pointed `DAVINCI_RESOLVE_BRIDGE_CONFIG`
+  at a file that does not exist, and blocked `Popen` of the application. It
+  recorded no `scriptapp` call and no launch in the test process or in any of its
+  59 child processes. The children were kept away by the tripwire's `None`
+  entry, not by this change. The control-panel children noted under v4.8.5 are
+  still outside the in-process guard.
+- pytest is not installed here, so the `conftest.py` fixture was not run locally.
+  CI runs `python -m pytest tests -q`.
+- No Resolve behavior changed, so no live Resolve run is required. None was made.
+
 ## What's New in v4.8.7 — an append Resolve refuses is reported as a failure
 
 ### Fixed
