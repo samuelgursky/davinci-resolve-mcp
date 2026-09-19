@@ -19077,6 +19077,120 @@ def _project_lint_live(r, pm) -> Dict[str, Any]:
     return _ok(**_project_lint.lint_report(state))
 
 
+_SNAPSHOT_SECTIONS = ["project", "timeline", "gaps_overlaps", "render", "media_pool"]
+
+# The per-item fields a planning read needs. probe_timeline_structure carries
+# the rest (file path, media status, seconds, clip properties) for a caller
+# that wants them; repeating them here is what makes a 60-item readout too big
+# to be the first call of every turn.
+_SNAPSHOT_ITEM_FIELDS = (
+    "item_index", "timeline_item_id", "name", "start", "end",
+    "source_start", "source_end", "source_fps", "media_pool_item_id",
+)
+
+
+def _project_state_snapshot(r, proj, p: Dict[str, Any]) -> Dict[str, Any]:
+    """One read-only readout of the state an agent inspects before planning.
+
+    Composes the helpers behind project_summary, probe_timeline_structure,
+    detect_gaps_overlaps and the render status actions, so the numbers match
+    what those actions return. Each section fails on its own: an exception is
+    reported as that section's {"error"}, never as a whole-call failure.
+    """
+    include = p.get("include") or list(_SNAPSHOT_SECTIONS)
+    if not isinstance(include, list):
+        return _err("include must be a list", category="invalid_input")
+    unknown = [name for name in include if name not in _SNAPSHOT_SECTIONS]
+    if unknown:
+        return _err(
+            f"Unknown snapshot section(s): {unknown}",
+            code="UNKNOWN_SECTION", category="invalid_input",
+            state={"unknown": unknown, "supported": list(_SNAPSHOT_SECTIONS)},
+        )
+    track_types = p.get("track_types")
+    if track_types is not None and not isinstance(track_types, list):
+        return _err("track_types must be a list", category="invalid_input")
+    try:
+        item_limit = int(p.get("item_limit", 200))
+    except (TypeError, ValueError):
+        return _err("item_limit must be an integer", category="invalid_input")
+    if item_limit < 0:
+        return _err("item_limit must be 0 or greater", category="invalid_input")
+
+    out: Dict[str, Any] = {}
+
+    if "project" in include:
+        try:
+            section = _project_object_summary(proj) or {}
+            section["current_page"] = r.GetCurrentPage()
+            section["timeline_count"] = proj.GetTimelineCount()
+            section["settings"] = {
+                key: _ser(proj.GetSetting(key))
+                for key in ("timelineFrameRate", "timelineResolutionWidth", "timelineResolutionHeight")
+            }
+            out["project"] = section
+        except Exception as exc:
+            out["project"] = {"error": str(exc)}
+
+    if "timeline" in include or "gaps_overlaps" in include:
+        wanted = [name for name in ("timeline", "gaps_overlaps") if name in include]
+        try:
+            tl = proj.GetCurrentTimeline()
+            if not tl:
+                for name in wanted:
+                    out[name] = {"available": False, "error": "No current timeline"}
+            else:
+                snapshot = _timeline_conform_snapshot(
+                    tl, {"track_types": track_types, "include_markers": False})
+                # Gaps are measured on the whole snapshot, before item_limit
+                # trims what is returned.
+                gaps_overlaps = _detect_gaps_overlaps_from_snapshot(
+                    snapshot, {"track_types": track_types})
+                if "timeline" in include:
+                    snapshot.pop("markers", None)
+                    try:
+                        snapshot["fps"] = float(tl.GetSetting("timelineFrameRate"))
+                    except Exception:
+                        snapshot["fps"] = None
+                    remaining = item_limit
+                    for type_payload in snapshot["tracks"].values():
+                        for track in type_payload["tracks"]:
+                            kept = track["items"][:remaining]
+                            remaining -= len(kept)
+                            track["items"] = [
+                                {field: item.get(field) for field in _SNAPSHOT_ITEM_FIELDS}
+                                for item in kept
+                            ]
+                    snapshot["items_returned"] = item_limit - remaining
+                    snapshot["items_truncated"] = snapshot["items_returned"] < snapshot["item_count"]
+                    out["timeline"] = snapshot
+                if "gaps_overlaps" in include:
+                    out["gaps_overlaps"] = gaps_overlaps
+        except Exception as exc:
+            for name in wanted:
+                out.setdefault(name, {"error": str(exc)})
+
+    if "render" in include:
+        try:
+            jobs = []
+            for job in (proj.GetRenderJobList() or []):
+                row = _ser(job)
+                if isinstance(row, dict) and row.get("JobId"):
+                    row["status"] = _ser(proj.GetRenderJobStatus(row["JobId"]))
+                jobs.append(row)
+            out["render"] = {"is_rendering": bool(proj.IsRenderingInProgress()), "jobs": jobs}
+        except Exception as exc:
+            out["render"] = {"error": str(exc)}
+
+    if "media_pool" in include:
+        try:
+            out["media_pool"] = _project_summary(proj)["media_pool"]
+        except Exception as exc:
+            out["media_pool"] = {"error": str(exc)}
+
+    return out
+
+
 @mcp.tool()
 @_guard_missing_params
 @_destructive_op("project_manager")
@@ -19089,6 +19203,15 @@ def project_manager(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         — Resolve 21.0.4+. Per-project attributes for the current folder without
           loading any project.
       get_current() -> {name, id}
+      snapshot(include?, track_types?, item_limit?) -> {project, timeline, gaps_overlaps, render, media_pool}
+        One read-only readout of what an agent inspects before planning; it never
+        switches page, timeline or folder. include picks sections (default all);
+        item_limit caps the items returned across tracks (default 200) and sets
+        timeline.items_truncated, while item_count and gaps_overlaps still cover
+        the whole timeline. A section that fails reports {error} in its own
+        place. Frame fields are probe_timeline_structure's, unchanged: start/end
+        are TimelineItem GetStart/GetEnd record frames; source_start/source_end
+        are file-relative frames at source_fps, source_end exclusive.
       create(name, media_location_path?) -> {success, name}
       load(name) -> {success}
       save() -> {success}
@@ -19181,6 +19304,11 @@ def project_manager(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
     elif action == "get_current":
         proj = pm.GetCurrentProject()
         return {"name": proj.GetName(), "id": proj.GetUniqueId()} if proj else _err("No project open")
+    elif action == "snapshot":
+        proj = pm.GetCurrentProject()
+        if not proj:
+            return _err("No project open")
+        return _project_state_snapshot(r, proj, p)
     elif action == "create":
         if not p.get("name"):
             return _err("create requires name")
@@ -19280,7 +19408,7 @@ def project_manager(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         if not p.get("path"):
             return _err("restore requires path")
         return {"success": bool(pm.RestoreProject(p["path"], p.get("name")))}
-    return _unknown(action, ["list","list_attributes","get_current","create","load","save","close","delete","import_project","export_project","archive","restore","lint","diff_to_spec","plan_spec","apply_spec", *_PROJECT_KERNEL_ACTIONS])
+    return _unknown(action, ["list","list_attributes","get_current","snapshot","create","load","save","close","delete","import_project","export_project","archive","restore","lint","diff_to_spec","plan_spec","apply_spec", *_PROJECT_KERNEL_ACTIONS])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
