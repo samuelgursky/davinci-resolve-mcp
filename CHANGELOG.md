@@ -2,6 +2,90 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.8.5 — the offline suite no longer reaches Resolve through the granular server
+
+No tool or action changed. One runtime change outside the tests: importing
+`src.granular` no longer connects to Resolve, and the granular launchers now
+connect explicitly at startup instead.
+
+### Fixed
+
+- **With Resolve open, the offline suite connected to it through the granular server.**
+  `src/granular/common.py` ran `import DaVinciResolveScript` and `connect_resolve()`
+  at import time, so any test that imported a granular module called
+  `scriptapp("Resolve")` on the real `fusionscript.so`. `tests/offline_guard.py`
+  swapped `_launch_resolve`, `get_resolve` and `resolve_is_running` on `src.server`
+  only. The granular `get_resolve()` still fell through to its own `_launch_resolve()`.
+  Whether the real module loaded at all came down to import order, because the test
+  modules that `sys.modules.setdefault()` a stub only win when they run first.
+  `tests/test_live_api.py`, which pytest collects, calls `scriptapp` whenever the
+  real module wins. The compound server leaked the same way: the execution-lifecycle
+  state provider calls `src.server._try_connect()` directly before tool calls, and
+  the guard never swapped that function. Measured with a full
+  `python -m unittest discover -s tests -t .` run of v4.8.4, with a tripwire
+  standing in for the native library. The test process called `scriptapp("Resolve")`
+  1,165 times, 1,162 of them from `_get_resolve_lifecycle_state`. It also tried
+  once to `open` the application, through the granular `ResolveProxy` →
+  `get_resolve()` → `_launch_resolve()`. The same run on this release makes
+  neither call.
+  - Before it imports `src.server`, the guard installs a `sys.meta_path` finder that
+    answers `DaVinciResolveScript` and `fusionscript` with an empty stub. It is a
+    finder rather than a `sys.modules` entry, so a test that pops the module cannot
+    let the next import reach the real library. The stub has no `scriptapp`, so
+    `connect_resolve()` raises before its bridge fallback instead of falling
+    through to it.
+  - `_try_connect`, `_launch_resolve` and `get_resolve` in `src.granular.common`
+    are swapped the same way as the compound server's. The swap covers every
+    granular module that holds one: `src/granular/__init__.py` imports each tool
+    module, and each binds its own copy through `from src.granular.common import *`
+    before the guard can swap `common`. The originals stay reachable as
+    `_*_unpatched`.
+  - For the duration of the run, the in-app bridge client points at a config file
+    that does not exist. `DAVINCI_RESOLVE_BRIDGE=1` in a developer's shell therefore
+    cannot open a socket to a bridge running inside Resolve.
+
+### Changed
+
+- **`src/granular/common.py` no longer connects at import.** It still imports
+  DaVinciResolveScript, with the same diagnostics when that fails. The connection
+  moved to `connect_at_startup()`, which `src/resolve_mcp_server.py` and
+  `src/server.py --full` call right after importing the package. Starting the
+  granular server behaves as before: it connects to a Resolve that is already
+  open, logs it, and never launches one. Launching stays with `get_resolve()` on
+  the first tool call. Code that only imports the package no longer talks to
+  Resolve.
+
+### Validation
+
+- New `tests/test_offline_guard_granular.py` puts a module shaped like Blackmagic's
+  loader first on `sys.path` and checks that a path import would load it. It then
+  asserts that neither a fresh import of `src.granular.common` nor
+  `connect_at_startup()` ever executes that module. It also pins the stand-ins in
+  every granular module, the stub's missing `scriptapp`, and the bridge redirect.
+  With the finder disabled it fails with
+  `['imported DaVinciResolveScript', "scriptapp ('Resolve',)"]`.
+  `tests/test_0000_offline_bootstrap.py` now also asserts that the finder is in
+  place before `src.server` imports.
+- Full suite, `python -m unittest discover -s tests -t .`: 3,749 tests. The
+  errors are the same 11 as on v4.8.4 in this environment (no `numpy` or
+  `requests` in the venv, plus `test_offline_fallback` and
+  `test_lut_file_controls`). pytest was not run locally.
+- Not covered: the control-panel tests (`test_control_panel_ipv6_loopback` and
+  one in `test_open_control_panel`) start the real `src/analysis_dashboard.py`
+  as a child process. An in-process guard cannot reach a child, and the child
+  still calls `scriptapp("Resolve")` read-only: 5 calls from 3 children in the
+  run above, the same as on v4.8.4.
+- **Live-validated** on Resolve Studio 21.1.0.14, with Resolve already open. Both
+  launchers log `Connected to DaVinci Resolve: DaVinci Resolve Studio 21.1.0.14` at
+  startup, and neither started anything:
+  - `src/resolve_mcp_server.py` logs it before `Starting DaVinci Resolve MCP Server
+    v4.8.5 (389 granular tools)`, where the import-time connect used to log it.
+  - `src/server.py --full` logs it right after the granular import, before
+    `Threaded tool dispatch installed for 389 tools`.
+- Not measured: startup with Resolve closed. That path logs `Failed to get Resolve
+  object` and leaves launching to the first tool call. The offline suite was never
+  run against the live Resolve.
+
 ## What's New in v4.8.4 — a Fusion nest control is refused with the controls it folds named
 
 ### Fixed

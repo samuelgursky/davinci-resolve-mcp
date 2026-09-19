@@ -26,13 +26,14 @@ if modules_path and modules_path not in sys.path:
     sys.path.append(modules_path)
 
 from src.granular import VERSION, mcp
-from src.granular.common import logger
+from src.granular.common import connect_at_startup, logger
 from src.utils.mcp_stdio import run_fastmcp_stdio
 from src.utils.update_check import start_background_update_check
 
 
 if __name__ == "__main__":
     try:
+        connect_at_startup()
         start_background_update_check(VERSION, project_dir, logger)
         logger.info(f"Starting DaVinci Resolve MCP Server v{VERSION} (389 granular tools)")
         run_fastmcp_stdio(mcp)
