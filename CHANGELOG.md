@@ -2,6 +2,67 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.8.3 — nested folder ids resolve for delete and move
+
+### Fixed
+
+- **`media_pool.delete_folders` and `media_pool.move_folders` resolve
+  `folder_ids` anywhere in the Media Pool tree.** Both actions scanned only the
+  root folder's direct children, so an id belonging to any nested folder came
+  back `{"error":{"message":"No folders found"}}` — even though the caller was
+  holding the id `GetUniqueId()` had just handed them, and `mp.DeleteFolders()`
+  on the resolved object worked fine. Both now use the existing recursive
+  `_find_folder_by_id` walk through a shared `_folders_from_ids` resolver.
+- **An unresolved id fails the call instead of being dropped** — the same
+  all-or-nothing rule 4.8.2 applied to the clip actions. Previously only an
+  all-empty result errored, so a mixed batch deleted or moved the subset that
+  happened to resolve and answered `{"success": true}`; `move_folders` did not
+  even stop at an empty result and answered `success: true` after
+  `MoveFolders([], target)`. Unresolved ids now return `FOLDER_NOT_FOUND` /
+  `invalid_input` naming both the unresolved and the resolved ids in `state`,
+  with nothing deleted or moved.
+- An empty or non-list `folder_ids` returns `INVALID_FOLDER_IDS` instead of
+  iterating a bare string character by character; a missing one keeps the
+  surface-wide `MISSING_FOLDER_IDS`. The root (Master) folder — newly reachable
+  now that the search is recursive — is refused with
+  `ROOT_FOLDER_NOT_ELIGIBLE` before Resolve sees it. `move_folders`' "Target
+  folder not found" now carries `FOLDER_NOT_FOUND` / `invalid_input` too.
+
+### Validation
+
+- New `tests/test_media_pool_folder_ids.py` pins both actions against a
+  three-level-deep folder, the partial-batch case, and the boundary inputs.
+  Against the 4.8.2 code 10 of its 11 tests fail; all 11 pass after.
+- Offline suite: 3,732 tests run, 84 skipped, 11 errors — the same environment
+  gaps as in 4.8.2 (`numpy` and `requests` absent from the venv, `node_modules`
+  not installed). None touch `media_pool`. Drift guards, api-parity,
+  api-limitations and read/write symmetry clean; tool counts unchanged.
+- Live reproduction on Resolve Studio 21.1.0.14 (reporter): deleting
+  `Master/OUTDOORS/1_FOOTAGE/wetransfer_dscf1065-mov_2022-01-31_1207` by its
+  `GetUniqueId()` returned `No folders found`, while `mp.DeleteFolders()` with
+  the recursively resolved folder object succeeded.
+- **Live-validated on Resolve Studio 21.1.0.14** with the new
+  `tests/live_nested_folder_ids_check.py`
+  (`venv/bin/python tests/live_nested_folder_ids_check.py`) against a real project
+  of 144 folders and 2,600 clips, probing a folder seven levels below Master.
+  `delete_folders` on its id reached `confirmation_required` naming exactly that
+  folder; `move_folders` resolved it and its current parent as the target;
+  partial and all-missing batches came back `FOLDER_NOT_FOUND` for both actions,
+  Master `ROOT_FOLDER_NOT_ELIGIBLE`, bare string and empty list
+  `INVALID_FOLDER_IDS`, no key `MISSING_FOLDER_IDS`. The check is strictly
+  non-destructive, with the same tripwire as the 4.8.2 clip check: the MediaPool
+  it hands the actions forwards only `GetRootFolder` / `GetCurrentFolder` and
+  intercepts every other method, so `DeleteFolders` / `MoveFolders` never reach
+  Resolve whatever the code does; token gating is forced on and no token is
+  passed; move probes aim at the folder's current parent; the destructive hook's
+  analysis-root writes are disabled and its logs go to a temp directory. Every
+  folder's parent and every clip's folder read back identical after the run.
+- The same live check against the 4.8.2 code fails with 14 findings and
+  reproduces the reported bug: the depth-7 id came back `No folders found` from
+  `delete_folders`, and the tripwire intercepted five `MoveFolders` calls with an
+  empty folder list, each answered as a plain result rather than an error. The
+  pool was unchanged after that run too.
+
 ## What's New in v4.8.2 — a clip id that resolves to nothing fails the whole clip batch
 
 ### Fixed
