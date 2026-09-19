@@ -2,6 +2,76 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.8.12 — the offline suite no longer writes traces, reports or update state into `logs/`
+
+Test-harness fix only. No tool, action, or Resolve behaviour changed.
+
+### Fixed
+
+- **The offline suite wrote synthetic records into the operator's `logs/`.**
+  `logs/execution-traces.jsonl`, `logs/execution-reports/` and
+  `logs/update-check.json` are the server's defaults, and `tests/offline_guard.py`
+  did not move them the way it already moves the audit log, the operation log and
+  the media-analysis preferences. Measured with
+  `python -m unittest discover -s tests -t .` from a checkout with an empty `logs/`:
+  one run appended 1,865 tool-call records (672 KB) to the trace log, wrote an audit
+  report for a synthetic execution, and created `update-check.json`. In a main
+  checkout the trace records share a file with the real ones, and that file is
+  where `list_recent_executions` sends a reviewer.
+  - `offline_guard` now points `RESOLVE_MCP_TRACE_FILE`,
+    `RESOLVE_MCP_TRACE_REPORT_DIR` and `DAVINCI_RESOLVE_MCP_UPDATE_STATE` at a temp
+    directory for the run, unless the caller already set them, and restores them on
+    `uninstall`. It sets environment variables instead of swapping functions: the
+    server already reads these variables, `src.server` binds its own
+    `update_state_path`, and a child process inherits the environment.
+  - `tests/test_execution_trace.py` unset two of these variables with a bare
+    `os.environ.pop`, which would have removed the redirect for every later test.
+    Both classes now scope the change with `mock.patch.dict`.
+  - New tripwire `tests/test_repo_logs_isolation.py`. It fails if any of the three
+    variables is unset or points into the repo's `logs/`, if the server resolves a
+    path other than the one the guard set, or if a traced tool call and its exported
+    report reach the real `logs/`. It looks for a unique execution id, so a live
+    server appending to the same log cannot make it pass or fail.
+
+### Validation
+
+- Full offline suite from an empty `logs/`, before and after the change: 1,865 trace
+  lines, one report and `update-check.json` before; only `.gitkeep` after. 3,741
+  tests run (3 new), 84 skipped, 12 errors, the same 12 as before the change:
+  `numpy` and `requests` absent from the venv, `jszip` not installed, and one launch
+  attempt stopped by the verification tripwire described below.
+- The new tripwire against the previous guard: 4 failures. With the previous
+  `test_execution_trace.py` run first in the same process, it fails on the two
+  variables that file popped.
+- Both runs used a `sitecustomize` tripwire that stood in for `DaVinciResolveScript`
+  and blocked Resolve launches and outbound requests. It recorded 1,174
+  `scriptapp("Resolve")` calls and one `open DaVinci Resolve.app` from the granular
+  server, before and after this change.
+  [#255](https://github.com/samuelgursky/davinci-resolve-mcp/pull/255) closes that
+  gap; it is unrelated to this one. It also recorded one request to GitHub's
+  `releases/latest` endpoint, made by `test_scripting_lib_discovery` running
+  `install.py`'s update check. The state that check writes is now redirected. The
+  request itself is refused by
+  [#259](https://github.com/samuelgursky/davinci-resolve-mcp/pull/259).
+- That tripwire missed one child process. `install.verify_resolve_connection`
+  replaces `PYTHONPATH` with Resolve's `Modules` directory, so its probe child never
+  loaded the tripwire. In both runs `test_the_live_probe_agrees_with_the_summary`
+  passed instead of skipping. That child therefore loaded the real scripting module
+  and called `scriptapp("Resolve")` against the Resolve that was open, one
+  read-only probe per run. This change does not touch that path;
+  [#260](https://github.com/samuelgursky/davinci-resolve-mcp/pull/260) puts the test
+  behind `RESOLVE_VERIFY=1`.
+- Re-run for this release behind a tripwire that also refuses any child whose
+  command line imports the scripting module: 3,741 tests, 85 skipped, 14 errors.
+  The extra skip is that probe test. The two extra errors are the `test_doctor_paths`
+  probe children the stricter tripwire refuses. The error set matches v4.8.4 under
+  the same tripwire, and `logs/` held only `.gitkeep` afterwards.
+- Not run under pytest, which is not installed here. `tests/conftest.py` calls the
+  same idempotent `install()`/`uninstall()`. That lifecycle was checked directly:
+  a second install is a no-op, uninstall restores the environment, and a value the
+  caller set is left alone.
+- No Resolve behaviour changed; live test not required.
+
 ## What's New in v4.8.4 — a Fusion nest control is refused with the controls it folds named
 
 ### Fixed
