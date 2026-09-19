@@ -146,6 +146,24 @@ class CodexSpecialistConfiguration(unittest.TestCase):
                 self.assertIn(f".agents/roles/{role_file}", text)
 
 
+class CodexModelDocumentation(unittest.TestCase):
+    def test_codex_docs_cover_activation_override_failure_and_rollback(self):
+        text = (REPO / "docs" / "README.md").read_text(encoding="utf-8")
+
+        required = (
+            "### Codex model defaults",
+            "`gpt-6-astra`",
+            "trusted project",
+            "explicit model selection",
+            "does not silently fall back",
+            "remove `.codex/config.toml`",
+            "Claude `model: opus` pins remain unchanged",
+        )
+        for phrase in required:
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, text)
+
+
 class HookShims(unittest.TestCase):
     def test_every_canonical_hook_has_working_shims(self):
         canonical = sorted((REPO / ".agents" / "hooks").glob("*.py"))

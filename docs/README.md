@@ -194,6 +194,25 @@ definitions under `.codex/agents/` and Claude adapters under `.claude/agents/`:
   (the same checks `npm-publish.yml` runs before every release) and reports
   which files are stale relative to their source, without fixing them.
 
+### Codex model defaults
+
+For a trusted project, `.codex/config.toml` selects `gpt-6-astra` with high
+reasoning effort for the main Codex session and Astra with medium effort for
+otherwise unpinned subagents. Codex loads project configuration only after the
+checkout is trusted, and a new session is required after changing these files.
+
+The native profiles under `.codex/agents/` pin both model and effort: the
+vision-heavy `cut_reviewer` and `grade_match_verifier` use high effort, while
+the deterministic `drift_guard_reviewer` uses low effort. An explicit model selection
+made at launch or in the Codex UI takes precedence for the parent session. If the
+signed-in account cannot use Astra, Codex reports that failure; it does not silently fall back
+to another model.
+
+These defaults affect Codex only. The Claude `model: opus` pins remain unchanged,
+and the MCP servers still contain no OpenAI chat-model dependency. To roll the
+project back to inherited Codex defaults, remove `.codex/config.toml` and delete
+the `model` and `model_reasoning_effort` lines from the three Codex agent files.
+
 ## Authoring References
 
 - [Fuse + DCTL Authoring](authoring/fuse-dctl-authoring.md)
