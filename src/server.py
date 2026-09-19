@@ -33130,7 +33130,9 @@ if __name__ == "__main__":
         logger.info("Starting full 377-tool granular server...")
         sys.argv = [arg for arg in sys.argv if arg != "--full"]
         from src.granular import mcp as granular_mcp
+        from src.granular.common import connect_at_startup
 
+        connect_at_startup()
         _install_threaded_tool_dispatch(granular_mcp)
         run_fastmcp_stdio(granular_mcp)
         sys.exit(0)

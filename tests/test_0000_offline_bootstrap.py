@@ -58,6 +58,22 @@ class OfflineBootstrapTests(unittest.TestCase):
             "offline_guard.install() did not run before the test modules loaded",
         )
 
+    def test_blackmagics_module_and_the_granular_server_are_guarded(self) -> None:
+        if offline_guard.SKIPPED_REASON:
+            self.skipTest(offline_guard.SKIPPED_REASON)
+        self.assertTrue(
+            offline_guard.scripting_stub_installed(),
+            "no finder is answering `import DaVinciResolveScript` with the stub",
+        )
+        # `src.server` imports the module at import time, so this also shows the
+        # finder went in before the server was imported, not after.
+        self.assertTrue(offline_guard.is_scripting_stub(sys.modules["src.server"].dvr_script))
+        if offline_guard.GRANULAR_SKIPPED_REASON:
+            self.skipTest(offline_guard.GRANULAR_SKIPPED_REASON)
+        common = sys.modules.get("src.granular.common")
+        self.assertIsNotNone(common, "the bootstrap did not import src.granular.common")
+        self.assertTrue(getattr(common, "_offline_guard_installed", False))
+
     def test_this_module_still_sorts_first(self) -> None:
         """The bootstrap only runs first while its name sorts first.
 

@@ -18,11 +18,38 @@ So the stand-ins live here, both runners install them, and installation is
 idempotent — installing twice would capture the first stub as the "real"
 function, leaving `_get_resolve_unpatched` pointing at a stub and silently
 hollowing out the tests that call it on purpose.
+
+Swapping `src.server` alone left a second server wide open. `src/granular/common.py`
+connected at *import* time, `import DaVinciResolveScript` then `connect_resolve()`,
+so `import src.granular.media_pool` called `scriptapp("Resolve")` on the real
+`fusionscript.so`. Confirmed with Resolve open: `connect_resolve` received
+`<module 'fusionscript' from '/Applications/DaVinci Resolve/...'>`. Its own
+`get_resolve()` falls through to its own `_launch_resolve()`, and nothing here
+swapped either. Whether the real module loaded at all came down to import order,
+because the handful of test modules that `sys.modules.setdefault()` a stub only
+win when they happen to run first.
+
+The compound server had a hole the swaps never covered either. Its
+execution-lifecycle state provider calls `server._try_connect()` directly before
+tool calls. A full `unittest discover` run of the previous guard, with a
+tripwire standing in for the library, recorded 1,162 connections from there
+alone.
+
+So the guard now closes the door at the module as well as at the call sites.
+`DaVinciResolveScript` and `fusionscript` are answered by an empty stand-in from
+a `sys.meta_path` finder, and the granular server's entry points are swapped
+the same way as the compound server's. None of this reaches a child process:
+a test that starts a real server or the control panel as a subprocess is still
+on its own.
 """
 
 from __future__ import annotations
 
+import importlib.abc
+import importlib.machinery
 import os
+import shutil
+import sys
 import tempfile
 
 #: Every launch the suite attempted, so a failure names the test rather than
@@ -37,6 +64,22 @@ _INSTALLED_FLAG = "_offline_guard_installed"
 #: imported so installing the guard cannot depend on importing the server.
 _PREFS_ENV = "DAVINCI_RESOLVE_MCP_MEDIA_ANALYSIS_PREFS"
 
+#: Mirrors `src.utils.resolve_bridge_client.ENV_CONFIG_PATH`, for the same reason.
+_BRIDGE_CONFIG_ENV = "DAVINCI_RESOLVE_BRIDGE_CONFIG"
+
+#: Blackmagic's scripting modules. `DaVinciResolveScript.py` is only a loader: it
+#: tries `import fusionscript`, then loads the native library from
+#: `RESOLVE_SCRIPT_LIB` or the install path. Both names are answered here, so
+#: neither route reaches the real library.
+SCRIPTING_MODULES = ("DaVinciResolveScript", "fusionscript")
+
+#: Set on every stand-in module, so a test can tell the guard's stub apart from
+#: the real library and from a stub of its own.
+STUB_MARKER = "__resolve_offline_guard_stub__"
+
+#: The granular server's copies of the entry points swapped on `src.server`.
+GRANULAR_ENTRY_POINTS = ("_try_connect", "_launch_resolve", "get_resolve")
+
 #: The originals, kept for `uninstall`.
 _originals: dict = {}
 
@@ -44,6 +87,18 @@ _originals: dict = {}
 #: dependency is absent. Read by tests that need to tell "guard installed" apart
 #: from "there was nothing to guard".
 SKIPPED_REASON: str | None = None
+
+#: The same, for `src.granular.common`. Kept separate so a granular-only gap
+#: cannot make the bootstrap test skip its check on `src.server`.
+GRANULAR_SKIPPED_REASON: str | None = None
+
+
+def _missing_third_party(exc: ModuleNotFoundError) -> str:
+    """The absent package's top-level name, or re-raise when it is our own code."""
+    missing = (exc.name or "").split(".")[0]
+    if missing in ("src", "tests", ""):
+        raise exc
+    return missing
 
 
 def _import_server():
@@ -66,9 +121,7 @@ def _import_server():
     try:
         from src import server
     except ModuleNotFoundError as exc:
-        missing = (exc.name or "").split(".")[0]
-        if missing in ("src", "tests", ""):
-            raise
+        missing = _missing_third_party(exc)
         SKIPPED_REASON = (
             f"src.server not importable: no module named {missing!r}. The "
             "offline guard has nothing to swap; this is expected when running "
@@ -79,36 +132,68 @@ def _import_server():
     return server
 
 
+def _import_granular_common():
+    """Import `src.granular.common`, or return None when its runtime deps are absent.
+
+    Same rule as `_import_server`, and the same statement form, so a test that
+    fakes `__import__` reaches both.
+    """
+    global GRANULAR_SKIPPED_REASON
+    try:
+        from src.granular import common
+    except ModuleNotFoundError as exc:
+        missing = _missing_third_party(exc)
+        GRANULAR_SKIPPED_REASON = (
+            f"src.granular.common not importable: no module named {missing!r}. "
+            "There is no granular server to guard."
+        )
+        return None
+    GRANULAR_SKIPPED_REASON = None
+    return common
+
+
+def _blocked_launch(*_args, **_kwargs):
+    LAUNCH_ATTEMPTS.append(os.environ.get("PYTEST_CURRENT_TEST", "<unknown test>"))
+    return False
+
+
+def _offline_resolve_is_running():
+    # False, so error messages derived from it are the same on every machine.
+    # Without this a test asserting on the "no Resolve" message passed or failed
+    # according to whether the developer happened to have Resolve open — which
+    # is exactly the host dependence this file exists to remove.
+    return False
+
+
+def _offline_get_resolve():
+    # None is the honest answer for an offline suite: it is exactly what a
+    # machine with Resolve closed reports, so actions take their
+    # "not connected" path deterministically instead of depending on what
+    # happens to be running.
+    return None
+
+
+def _offline_try_connect():
+    return None
+
+
 def install() -> bool:
     """Swap the live-Resolve entry points for offline stand-ins.
 
     Returns True if this call did the swap, False if it was already in place or
-    there was nothing to swap (see `_import_server`).
+    there was nothing to swap (see `_import_server`). The scripting-module stub
+    goes in on every path. It needs no third-party package, and it is what
+    protects the code that none of the swaps below can reach.
     """
+    # First, because importing `src.server` imports DaVinciResolveScript.
+    _install_scripting_stub()
+
     server = _import_server()
     if server is None:
         return False
 
     if getattr(server, _INSTALLED_FLAG, False):
         return False
-
-    def blocked_launch():
-        LAUNCH_ATTEMPTS.append(os.environ.get("PYTEST_CURRENT_TEST", "<unknown test>"))
-        return False
-
-    def offline_resolve_is_running():
-        # False, so error messages derived from it are the same on every machine.
-        # Without this a test asserting on the "no Resolve" message passed or failed
-        # according to whether the developer happened to have Resolve open — which
-        # is exactly the host dependence this file exists to remove.
-        return False
-
-    def offline_get_resolve():
-        # None is the honest answer for an offline suite: it is exactly what a
-        # machine with Resolve closed reports, so actions take their
-        # "not connected" path deterministically instead of depending on what
-        # happens to be running.
-        return None
 
     _originals["_launch_resolve"] = server._launch_resolve
     _originals["get_resolve"] = server.get_resolve
@@ -125,16 +210,165 @@ def install() -> bool:
     server._get_resolve_unpatched = _originals["get_resolve"]
     server._resolve_is_running_unpatched = _originals["resolve_is_running"]
 
-    server._launch_resolve = blocked_launch
-    server.get_resolve = offline_get_resolve
-    server.resolve_is_running = offline_resolve_is_running
+    server._launch_resolve = _blocked_launch
+    server.get_resolve = _offline_get_resolve
+    server.resolve_is_running = _offline_resolve_is_running
 
+    _guard_granular_server()
     _redirect_security_audit_log()
     _redirect_operation_log()
     _redirect_media_analysis_preferences()
+    _redirect_bridge_config()
 
     setattr(server, _INSTALLED_FLAG, True)
     return True
+
+
+class _ScriptingModuleStub(importlib.abc.MetaPathFinder, importlib.abc.Loader):
+    """Answer `import DaVinciResolveScript` / `import fusionscript` with an empty module.
+
+    A finder rather than a `sys.modules` entry, because an entry lasts only
+    until a test removes it. `test_dashboard_bridge_connect` pops it to
+    simulate the free edition, which leaves the next `import` to walk
+    `sys.path` to the real library. A finder answers every import that `sys.modules` misses,
+    whenever it happens. A test that installs its own module, or its own finder,
+    still wins: this sits behind `sys.modules`, and a later finder goes in front.
+
+    Empty on purpose, with no `scriptapp`. `connect_resolve()` calls
+    `dvr_script.scriptapp(...)` before its bridge fallback, so on this stub it
+    raises AttributeError. Every caller already catches that as "not connected",
+    and the call never gets as far as the bridge. A `scriptapp` that returned
+    None would fall through to the bridge instead.
+    """
+
+    #: Checked instead of `isinstance`, which would miss an instance made by a
+    #: second copy of this file (`offline_guard` vs `tests.offline_guard`).
+    resolve_offline_guard = True
+
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname not in SCRIPTING_MODULES:
+            return None
+        return importlib.machinery.ModuleSpec(fullname, self, origin="tests.offline_guard stub")
+
+    def create_module(self, spec):
+        return None
+
+    def exec_module(self, module):
+        module.__doc__ = "Offline stand-in for Blackmagic's scripting module; no scriptapp."
+        setattr(module, STUB_MARKER, True)
+
+
+def is_scripting_stub(module) -> bool:
+    return bool(getattr(module, STUB_MARKER, False))
+
+
+def scripting_stub_installed() -> bool:
+    return any(getattr(finder, "resolve_offline_guard", False) for finder in sys.meta_path)
+
+
+def _install_scripting_stub() -> None:
+    if scripting_stub_installed():
+        return
+    # Anything imported before the guard existed would be served straight from
+    # `sys.modules` and never reach the finder. On the first install that can
+    # only be the real library, so it goes.
+    for name in SCRIPTING_MODULES:
+        if name in sys.modules and not is_scripting_stub(sys.modules[name]):
+            del sys.modules[name]
+    sys.meta_path.insert(0, _ScriptingModuleStub())
+
+
+def _uninstall_scripting_stub() -> None:
+    sys.meta_path[:] = [f for f in sys.meta_path if not getattr(f, "resolve_offline_guard", False)]
+    for name in SCRIPTING_MODULES:
+        if is_scripting_stub(sys.modules.get(name)):
+            del sys.modules[name]
+
+
+def _loaded_granular_modules() -> list:
+    return [
+        module
+        for name, module in list(sys.modules.items())
+        if module is not None and (name == "src.granular" or name.startswith("src.granular."))
+    ]
+
+
+def _guard_granular_server() -> None:
+    """Swap the granular server's entry points, in every module that holds one.
+
+    Swapping the attribute on `common` is not enough. `src/granular/__init__.py`
+    imports every tool module, and each one runs `from src.granular.common import *`.
+    So by the time `import src.granular.common` returns here, every tool module
+    already holds its own binding of the real functions, and
+    `resolve_211.get_resolve()` would still connect. Every binding that is the
+    original function object gets the stand-in. Tool modules imported later
+    bind from `common`, which is swapped by then.
+    """
+    common = _import_granular_common()
+    if common is None or getattr(common, _INSTALLED_FLAG, False):
+        return
+
+    stand_ins = {
+        "_try_connect": _offline_try_connect,
+        "_launch_resolve": _blocked_launch,
+        "get_resolve": _offline_get_resolve,
+    }
+    rebound = []
+    for name in GRANULAR_ENTRY_POINTS:
+        real = getattr(common, name)
+        # Reachable for the same reason as on `src.server`.
+        setattr(common, f"_{name.lstrip('_')}_unpatched", real)
+        for module in _loaded_granular_modules():
+            if getattr(module, name, None) is real:
+                setattr(module, name, stand_ins[name])
+                rebound.append((module, name, real))
+    # A handle cached before the guard ran is unreachable once `get_resolve` is
+    # stubbed, but a test reading `common.resolve` directly would still find it.
+    common.resolve = None
+
+    _originals["granular_rebound"] = rebound
+    _originals["granular_common"] = common
+    setattr(common, _INSTALLED_FLAG, True)
+
+
+def _unguard_granular_server() -> None:
+    for module, name, real in _originals.pop("granular_rebound", ()):
+        setattr(module, name, real)
+    common = _originals.pop("granular_common", None)
+    if common is not None:
+        setattr(common, _INSTALLED_FLAG, False)
+
+
+def _redirect_bridge_config() -> None:
+    """Point the in-app bridge client at a config file that does not exist.
+
+    The bridge is the third transport `connect_resolve()` takes, and the stub
+    above does not close it on its own. With `DAVINCI_RESOLVE_BRIDGE=1` in the
+    developer's shell, or a caller passing `dvr_script=None`, the client reads
+    `~/.config/davinci-resolve-mcp/bridge.json` and opens a socket to the script
+    running inside Resolve. Without a config file there is no token and no port,
+    so `connect()` raises BridgeUnavailable before it touches the network.
+
+    Unlike the preferences redirect, this replaces an inherited value instead of
+    deferring to it. A path exported in the shell points at the operator's real
+    bridge. Tests that exercise the bridge set their own path with
+    `mock.patch.dict`, and that still wins inside their scope.
+    """
+    _originals["_bridge_config_env"] = os.environ.get(_BRIDGE_CONFIG_ENV)
+    directory = tempfile.mkdtemp(prefix="resolve-bridge-offline-")
+    _originals["_bridge_config_dir"] = directory
+    os.environ[_BRIDGE_CONFIG_ENV] = os.path.join(directory, "bridge.json")
+
+
+def _restore_bridge_config() -> None:
+    if "_bridge_config_dir" not in _originals:
+        return
+    previous = _originals.pop("_bridge_config_env", None)
+    if previous is None:
+        os.environ.pop(_BRIDGE_CONFIG_ENV, None)
+    else:
+        os.environ[_BRIDGE_CONFIG_ENV] = previous
+    shutil.rmtree(_originals.pop("_bridge_config_dir"), ignore_errors=True)
 
 
 def _redirect_security_audit_log() -> None:
@@ -285,9 +519,15 @@ def uninstall() -> None:
     server._launch_resolve = _originals["_launch_resolve"]
     server.get_resolve = _originals["get_resolve"]
     server.resolve_is_running = _originals["resolve_is_running"]
+    _unguard_granular_server()
     _restore_security_audit_log()
     _restore_operation_log()
     _restore_media_analysis_preferences()
+    _restore_bridge_config()
+    # Only on this path: a call that found nothing to restore, such as the one
+    # `test_offline_guard` makes with `src` unimportable, must not strip the stub
+    # from under the rest of the run.
+    _uninstall_scripting_stub()
     setattr(server, _INSTALLED_FLAG, False)
 
 
@@ -305,3 +545,6 @@ def clear_cached_handle() -> None:
         return
 
     server.resolve = None
+    common = sys.modules.get("src.granular.common")
+    if common is not None:
+        common.resolve = None

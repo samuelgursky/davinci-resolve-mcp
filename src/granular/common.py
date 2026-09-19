@@ -297,16 +297,13 @@ _OPTIONAL_DEPENDENCY_CONTRACT = (
     "DaVinciResolveScript: always routed through connect_resolve(), which is None-tolerant"
 )
 
+# Loading the module is not connecting. `scriptapp` is what reaches a running
+# Resolve, and it waits for `connect_at_startup()` or the first `get_resolve()`.
+# Connecting here made *importing* this module talk to whatever Resolve was
+# open, including from the offline test suite, where any `import src.granular.*`
+# connected before a single test could stop it.
 try:
     import DaVinciResolveScript as dvr_script  # type: ignore
-
-    resolve = connect_resolve(dvr_script)
-    if resolve:
-        logger.info(
-            f"Connected to DaVinci Resolve: {resolve.GetProductName()} {resolve.GetVersionString()}"
-        )
-    else:
-        logger.error("Failed to get Resolve object. Is DaVinci Resolve running?")
 except ImportError as exc:
     logger.error(f"Failed to import DaVinciResolveScript: {exc}")
     logger.error("Check that DaVinci Resolve is installed and running.")
@@ -314,10 +311,38 @@ except ImportError as exc:
     logger.error(f"RESOLVE_SCRIPT_LIB: {RESOLVE_LIB_PATH}")
     logger.error(f"RESOLVE_MODULES_PATH: {RESOLVE_MODULES_PATH}")
     logger.error(f"sys.path: {sys.path}")
-    resolve = None
+    dvr_script = None
 except Exception as exc:
     logger.error(f"Unexpected error initializing Resolve: {exc}")
-    resolve = None
+    dvr_script = None
+
+
+def connect_at_startup():
+    """Connect to a running Resolve as the granular server starts, and log it.
+
+    This is the connection that used to run at import. The launchers
+    (`src/resolve_mcp_server.py` and `src/server.py --full`) call it right after
+    importing the package, so starting the server behaves as before: it
+    connects to a Resolve that is already open and never launches one. Launching
+    is still left to `get_resolve()` on the first tool call. A missing
+    DaVinciResolveScript was already reported above and skips the attempt, as
+    the import failure did before.
+    """
+    global resolve
+    if dvr_script is None:
+        return None
+    try:
+        resolve = connect_resolve(dvr_script)
+        if resolve:
+            logger.info(
+                f"Connected to DaVinci Resolve: {resolve.GetProductName()} {resolve.GetVersionString()}"
+            )
+        else:
+            logger.error("Failed to get Resolve object. Is DaVinci Resolve running?")
+    except Exception as exc:
+        logger.error(f"Unexpected error initializing Resolve: {exc}")
+        resolve = None
+    return resolve
 
 
 def _normalize_cdl(cdl):
