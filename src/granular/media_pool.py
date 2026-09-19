@@ -71,6 +71,37 @@ def _appended_item_summary(item):
         name = None
     return {"timeline_item_id": item_id, "name": name}
 
+
+def _clips_from_ids(root, clip_ids, *, verb, distinct=False):
+    """Resolve Media Pool clip unique IDs to clips, all or nothing. Returns (clips, error).
+
+    The granular twin of src/server.py's _clips_from_ids. append_to_timeline,
+    auto_sync_audio, delete_media_pool_clips and move_clips_to_folder used to drop
+    every id that matched no clip and hand Resolve the rest, so a mixed batch acted
+    on a subset and answered like a full one. Clips come back in request order;
+    distinct=True collapses repeated ids, as the old set-based lookup did for
+    delete and move.
+    """
+    if not isinstance(clip_ids, list) or not clip_ids:
+        return None, {"success": False,
+                      "error": "clip_ids must be a non-empty list of Media Pool clip unique IDs"}
+    wanted = [str(cid) for cid in clip_ids]
+    if distinct:
+        wanted = list(dict.fromkeys(wanted))
+    by_id = {c.GetUniqueId(): c for c in _find_clips_by_ids(root, set(wanted))}
+    unresolved = [cid for cid in wanted if cid not in by_id]
+    if unresolved:
+        return None, {
+            "success": False,
+            "error": (f"Clip(s) not found: {', '.join(unresolved)}. {len(unresolved)} of "
+                      f"{len(wanted)} clip_ids matched no clip anywhere in the Media Pool; "
+                      f"nothing was {verb}. Pass only ids that still exist."),
+            "unresolved_clip_ids": unresolved,
+            "resolved_clip_ids": [cid for cid in wanted if cid in by_id],
+        }
+    return [by_id[cid] for cid in wanted], None
+
+
 @mcp.resource("resolve://media-pool-clips")
 def list_media_pool_clips() -> List[Dict[str, Any]]:
     """List all clips in the root folder of the media pool."""
@@ -156,6 +187,8 @@ def append_to_timeline(
 
     Args:
         clip_ids: Simple form — list of MediaPoolItem unique IDs to append in order.
+            Every id must resolve: one that matches no clip fails the call and
+            nothing is appended.
         clip_infos: Positioned form — list of dicts with keys clip_id (or
             media_pool_item_id), start_frame, end_frame, record_frame, track_index,
             and optional media_type (1=video only, 2=audio only). record_frame is
@@ -196,13 +229,13 @@ def append_to_timeline(
         return {"success": True, "count": len(items_out), "items": items_out}
     if not clip_ids:
         return {"error": "Provide clip_ids (simple) or clip_infos (positioned)"}
-    root = mp.GetRootFolder()
-    clips = [_find_clip_by_id(root, cid) for cid in clip_ids]
-    clips = [c for c in clips if c]
-    if not clips:
-        return {"error": "No valid clips found"}
+    clips, clips_err = _clips_from_ids(mp.GetRootFolder(), clip_ids, verb="appended")
+    if clips_err:
+        return clips_err
     result = mp.AppendToTimeline(clips)
-    return {"success": True, "count": len(result) if result else 0}
+    if not result:
+        return {"success": False, "error": "Failed to append clip_ids to timeline"}
+    return {"success": True, "count": len(result)}
 
 
 @mcp.tool()
@@ -343,7 +376,8 @@ def auto_sync_audio(
     Mirrors MediaPool.AutoSyncAudio([items], {audioSyncSettings}) per docs lines 600-614.
 
     Args:
-        clip_ids: List of MediaPoolItem unique IDs to sync.
+        clip_ids: List of MediaPoolItem unique IDs to sync. Every id must resolve:
+            one that matches no clip fails the call and nothing is synced.
         sync_mode: 'waveform' or 'timecode' (default on Resolve side: 'timecode').
         channel_number: int >= 1 for channel offset, or 'automatic' (-1) / 'mix' (-2).
             Only used in waveform mode.
@@ -358,11 +392,9 @@ def auto_sync_audio(
         return err
     if not clip_ids:
         return {"error": "clip_ids must be a non-empty list"}
-    root = mp.GetRootFolder()
-    clips = [_find_clip_by_id(root, cid) for cid in clip_ids]
-    clips = [c for c in clips if c]
-    if not clips:
-        return {"error": "No valid clips found"}
+    clips, clips_err = _clips_from_ids(mp.GetRootFolder(), clip_ids, verb="synced")
+    if clips_err:
+        return clips_err
     settings, settings_err = _build_audio_sync_settings(
         r, sync_mode=sync_mode, channel_number=channel_number,
         retain_embedded_audio=retain_embedded_audio,
@@ -465,14 +497,15 @@ def delete_media_pool_clips(clip_ids: List[str]) -> Dict[str, Any]:
     """Delete clips from the Media Pool by their unique IDs.
 
     Args:
-        clip_ids: List of clip unique IDs to delete.
+        clip_ids: List of clip unique IDs to delete. Every id must resolve: one
+            that matches no clip fails the call and nothing is deleted.
     """
     _, mp, err = _get_mp()
     if err:
         return err
-    clips = _find_clips_by_ids(mp.GetRootFolder(), set(clip_ids))
-    if not clips:
-        return {"error": "No matching clips found"}
+    clips, clips_err = _clips_from_ids(mp.GetRootFolder(), clip_ids, verb="deleted", distinct=True)
+    if clips_err:
+        return clips_err
     result = mp.DeleteClips(clips)
     return {"success": bool(result), "deleted_count": len(clips)}
 
@@ -515,15 +548,16 @@ def move_clips_to_folder(clip_ids: List[str], target_folder_path: str) -> Dict[s
     """Move clips to a different Media Pool folder.
 
     Args:
-        clip_ids: List of clip unique IDs to move.
+        clip_ids: List of clip unique IDs to move. Every id must resolve: one
+            that matches no clip fails the call and nothing is moved.
         target_folder_path: Path to target folder (e.g. 'Master/Footage').
     """
     _, mp, err = _get_mp()
     if err:
         return err
-    clips = _find_clips_by_ids(mp.GetRootFolder(), set(clip_ids))
-    if not clips:
-        return {"error": "No matching clips found"}
+    clips, clips_err = _clips_from_ids(mp.GetRootFolder(), clip_ids, verb="moved", distinct=True)
+    if clips_err:
+        return clips_err
     target = _navigate_to_folder(mp, target_folder_path)
     if not target:
         return {"error": f"Target folder '{target_folder_path}' not found"}

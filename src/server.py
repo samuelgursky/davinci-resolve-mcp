@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 377-tool granular server instead
 """
 
-VERSION = "4.8.5"
+VERSION = "4.8.7"
 
 import base64
 import os
@@ -14266,6 +14266,35 @@ def _append_to_timeline_verified_operation(requested: Dict[str, Any], verificati
     )
 
 
+def _append_to_timeline_failed(message: str, result, requested: Dict[str, Any], verification: Dict[str, Any], before):
+    """AppendToTimeline answered None/False/[]: an error that keeps the readback.
+
+    The answer alone does not prove nothing landed, so the call is retryable only
+    when the readback shows the timeline's item count unchanged; a retry after an
+    append that did land puts the clips on the timeline twice.
+    """
+    delta = verification.get("item_count_delta")
+    nothing_landed = delta == 0
+    out = _err(
+        message,
+        code="APPEND_TO_TIMELINE_FAILED",
+        category="resolve_api_failed",
+        retryable=nothing_landed,
+        reason=f"MediaPool.AppendToTimeline returned {result!r}",
+        remediation=(
+            "Nothing was appended. Check that the intended timeline is current and the clips can go on it, then retry."
+            if nothing_landed else
+            "The readback cannot rule out that clips were appended; inspect the current timeline before retrying so nothing is appended twice."
+        ),
+        state={
+            "expected_item_count_delta": verification.get("expected_item_count_delta"),
+            "item_count_delta": delta,
+        },
+    )
+    out["verified_operation"] = _append_to_timeline_verified_operation(requested, verification, before)
+    return out
+
+
 def _link_proxy_checked(root, p: Dict[str, Any]):
     clip = _find_clip(root, p.get("clip_id", ""))
     if not clip:
@@ -21175,6 +21204,9 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
           record_frame is relative to the current timeline start frame by default;
           pass record_frame_mode="absolute" for raw Resolve recordFrame values.
           Returns timeline_item_id per item.
+        Either form: Resolve answering None/False/[] is APPEND_TO_TIMELINE_FAILED,
+          with verified_operation (the timeline readback) kept on the error;
+          retryable only when the readback shows nothing was appended.
       import_media(paths) -> {imported}
         UNSAFE. No dry_run. Prefer safe_import_media.
         — simple: params.paths is a list of file/folder paths
@@ -21186,14 +21218,16 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
       delete_clips(clip_ids) -> {success}
         DESTRUCTIVE. Removes clips from the Media Pool (does not touch source files).
         An id matching no clip fails the whole call (CLIP_NOT_FOUND) rather than
-        deleting the ids that did resolve; the same holds for move_clips, relink
-        and unlink.
+        deleting the ids that did resolve; the same holds for every clip_ids
+        batch in this tool (move_clips, relink, unlink, create_timeline_from_clips,
+        append_to_timeline, export_metadata, auto_sync_audio).
       move_clips(clip_ids, target_path) -> {success}
       relink(clip_ids, folder_path) -> {success}
         UNSAFE. No dry_run. Prefer safe_relink.
       unlink(clip_ids) -> {success}
         UNSAFE. No dry_run. Prefer safe_unlink.
       export_metadata(path, clip_ids?) -> {success}
+        — clip_ids omitted exports every clip; an empty clip_ids is INVALID_CLIP_IDS.
       get_unique_id() -> {id}
       create_stereo_clip(left_id, right_id) -> {success, name}
       auto_sync_audio(clip_ids, settings?) -> {success}
@@ -21338,10 +21372,9 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
         clip_ids = p.get("clip_ids")
         if not clip_ids:
             return _err("Provide clip_ids (simple) or clip_infos (positioned)")
-        clips = [_find_clip(root, cid) for cid in clip_ids]
-        clips = [c for c in clips if c]
-        if not clips:
-            return _err("No valid clips found")
+        clips, clips_err = _clips_from_ids(root, clip_ids, verb="created")
+        if clips_err:
+            return clips_err
         tl = mp.CreateTimelineFromClips(create_name, clips)
         return _ok(
             name=tl.GetName(),
@@ -21433,7 +21466,8 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
                 len(built),
             )
             if not result:
-                return _err("Failed to append clip_infos to timeline")
+                return _append_to_timeline_failed(
+                    "Failed to append clip_infos to timeline", result, requested, verification, before)
             items_out = []
             for i, item in enumerate(result):
                 item_out, item_err = _serialize_appended_timeline_item(item, i)
@@ -21450,8 +21484,11 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
         clip_ids = p.get("clip_ids")
         if not clip_ids:
             return _err("Provide clip_ids (simple append) or clip_infos (positioned append)")
-        clips = [_find_clip(root, cid) for cid in clip_ids]
-        clips = [c for c in clips if c]
+        # All or nothing: expected_count below used to be the RESOLVED count, so a
+        # partial append read back as verified.
+        clips, clips_err = _clips_from_ids(root, clip_ids, verb="appended")
+        if clips_err:
+            return clips_err
         requested = {
             "mode": "clip_ids",
             "clip_ids": list(clip_ids),
@@ -21465,7 +21502,10 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
             requested,
             len(clips),
         )
-        out = _ok(count=len(result) if result else 0)
+        if not result:
+            return _append_to_timeline_failed(
+                "Failed to append clip_ids to timeline", result, requested, verification, before)
+        out = _ok(count=len(result))
         out["verified_operation"] = _append_to_timeline_verified_operation(
             requested,
             verification,
@@ -21524,12 +21564,16 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
             return clips_err
         return {"success": bool(mp.UnlinkClips(clips))}
     elif action == "export_metadata":
-        clip_ids = p.get("clip_ids")
-        if clip_ids:
-            clips = [_find_clip(root, cid) for cid in clip_ids]
-            clips = [c for c in clips if c]
-            return {"success": bool(mp.ExportMetadata(p["path"], clips))}
-        return {"success": bool(mp.ExportMetadata(p["path"]))}
+        path = p["path"]
+        if p.get("clip_ids") is None:
+            return {"success": bool(mp.ExportMetadata(path))}
+        # Passing clip_ids at all asks for exactly those clips. An empty or
+        # all-missing list must not reach ExportMetadata(path, []), whose
+        # behaviour on an empty list is unmeasured and may be "export everything".
+        clips, clips_err = _clips_from_ids(root, p["clip_ids"], verb="exported")
+        if clips_err:
+            return clips_err
+        return {"success": bool(mp.ExportMetadata(path, clips))}
     elif action == "get_unique_id":
         return {"id": mp.GetUniqueId()}
     elif action == "create_stereo_clip":
@@ -21540,8 +21584,9 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
         result = mp.CreateStereoClip(left, right)
         return _ok(name=result.GetName()) if result else _err("Failed to create stereo clip")
     elif action == "auto_sync_audio":
-        clips = [_find_clip(root, cid) for cid in p["clip_ids"]]
-        clips = [c for c in clips if c]
+        clips, clips_err = _clips_from_ids(root, p["clip_ids"], verb="synced")
+        if clips_err:
+            return clips_err
         # Normalize string settings into live AUDIO_SYNC_* enum keys; passing raw
         # human-readable keys makes AutoSyncAudio silently reject the call.
         settings, ignored = _normalize_auto_sync_settings(dict(p.get("settings") or {}), get_resolve())

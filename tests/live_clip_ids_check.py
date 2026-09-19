@@ -1,7 +1,9 @@
 """Live check: media_pool clip actions refuse a batch with an unresolved clip id.
 
-Covers delete_clips, move_clips, relink and unlink against the Media Pool of the
-project that is open in a running Resolve.
+Covers delete_clips, move_clips, relink and unlink (v4.8.2) and
+create_timeline_from_clips, append_to_timeline, export_metadata and
+auto_sync_audio (v4.8.6) against the Media Pool of the project that is open in a
+running Resolve.
 
 STRICTLY NON-DESTRUCTIVE, and it never launches Resolve:
 
@@ -10,11 +12,17 @@ STRICTLY NON-DESTRUCTIVE, and it never launches Resolve:
   `_launch_resolve` is replaced with a function that raises.
 - **Tripwire.** The MediaPool handed to the actions forwards only
   GetRootFolder / GetCurrentFolder. Every other MediaPool method — DeleteClips,
-  MoveClips, RelinkClips, UnlinkClips and anything else — is recorded and answered
-  False without reaching Resolve. So nothing is deleted, moved, relinked or
-  unlinked whatever the code under test does, including a regressed build. The
-  clip and folder objects the actions resolve are the real ones; only their read
-  methods are called.
+  MoveClips, RelinkClips, UnlinkClips, CreateTimelineFromClips, AppendToTimeline,
+  ExportMetadata, AutoSyncAudio and anything else — is recorded and answered
+  False without reaching Resolve. So nothing is deleted, moved, relinked,
+  unlinked, created, appended, exported or synced whatever the code under test
+  does, including a regressed build. The clip and folder objects the actions
+  resolve are the real ones; only their read methods are called. The project is
+  read too: create_timeline_from_clips looks its (unique, generated) name up in
+  the timeline list, and append_to_timeline reads the current timeline's items
+  before and after for its readback. Since v4.8.7 the tripwire's False must come
+  back from append_to_timeline as APPEND_TO_TIMELINE_FAILED with that readback
+  kept on the error; it used to answer success with count 0.
 - Confirm-token gating is forced on and no token is ever passed, so delete_clips
   can at most *issue* a token (kept in memory, never used).
 - The destructive hook's project-root provider is disabled for the run, so no
@@ -24,7 +32,9 @@ STRICTLY NON-DESTRUCTIVE, and it never launches Resolve:
 - Creates nothing. SKIPs when the open project's Media Pool has no clip.
 
 It records every clip's folder and every folder's parent before and after, plus
-the probe clip's File Path, and proves all of it is unchanged.
+the probe clip's File Path, the project's timeline count and the current
+timeline's item count, proves all of it is unchanged, and that no metadata file
+was written.
 
 Run (Resolve open, Preferences > General > External scripting = Local):
   venv/bin/python tests/live_clip_ids_check.py
@@ -46,6 +56,8 @@ import src.server as s  # noqa: E402 - after the env redirects above
 from src.utils import destructive_hook  # noqa: E402
 
 MISSING_ID = f"__mcp_live_check_missing_clip_{uuid.uuid4().hex}__"
+TIMELINE_NAME = f"__mcp_live_check_timeline_{uuid.uuid4().hex}__"
+EXPORT_PATH = os.path.join(LOG_DIR, "metadata-must-not-exist.csv")
 READ_METHODS = frozenset({"GetRootFolder", "GetCurrentFolder"})
 
 
@@ -152,6 +164,24 @@ def main() -> int:
     print(f"Probe clip: {cname} ({cid}) in {clip_path}")
     print(f"Logs for this run: {LOG_DIR}")
 
+    def timeline_state():
+        snap = s._timeline_append_readback_snapshot(real_proj)
+        return real_proj.GetTimelineCount(), snap.get("item_count") if snap.get("available") else None
+
+    timelines_before, items_before = timeline_state()
+
+    # action -> (the other params it needs, the MediaPool method a whole batch reaches)
+    cases = {
+        "delete_clips": ({}, "DeleteClips"),
+        "move_clips": ({"target_path": clip_path}, "MoveClips"),
+        "relink": ({"folder_path": LOG_DIR}, "RelinkClips"),
+        "unlink": ({}, "UnlinkClips"),
+        "create_timeline_from_clips": ({"name": TIMELINE_NAME}, "CreateTimelineFromClips"),
+        "append_to_timeline": ({}, "AppendToTimeline"),
+        "export_metadata": ({"path": EXPORT_PATH}, "ExportMetadata"),
+        "auto_sync_audio": ({}, "AutoSyncAudio"),
+    }
+
     failures = []
 
     def step(label, action, params, *, expect_code=None, expect_calls=0):
@@ -177,10 +207,7 @@ def main() -> int:
         return out, calls, state
 
     # 1. Partial batches: refused before anything reaches Resolve, naming both sides.
-    for action, extra in (("delete_clips", {}),
-                          ("move_clips", {"target_path": clip_path}),
-                          ("relink", {"folder_path": LOG_DIR}),
-                          ("unlink", {})):
+    for action, (extra, _) in cases.items():
         _, _, state = step(f"{action}([probe, missing])", action,
                            {"clip_ids": [cid, MISSING_ID], **extra},
                            expect_code="CLIP_NOT_FOUND")
@@ -188,11 +215,9 @@ def main() -> int:
                       or state.get("resolved_clip_ids") != [cid]):
             failures.append(f"{action}: error.state does not name both sides: {state}")
 
-    # 2. All-missing batches: move/relink/unlink used to reach Resolve with [].
-    for action, extra in (("delete_clips", {}),
-                          ("move_clips", {"target_path": clip_path}),
-                          ("relink", {"folder_path": LOG_DIR}),
-                          ("unlink", {})):
+    # 2. All-missing batches: move/relink/unlink/append/export/auto-sync used to
+    #    reach Resolve with [].
+    for action, (extra, _) in cases.items():
         step(f"{action}([missing])", action, {"clip_ids": [MISSING_ID], **extra},
              expect_code="CLIP_NOT_FOUND")
 
@@ -202,9 +227,15 @@ def main() -> int:
     step("unlink([])", "unlink", {"clip_ids": []}, expect_code="INVALID_CLIP_IDS")
     step("move_clips(no clip_ids)", "move_clips", {"target_path": clip_path},
          expect_code="MISSING_CLIP_IDS")
+    step("create_timeline_from_clips(bare string)", "create_timeline_from_clips",
+         {"name": TIMELINE_NAME, "clip_ids": cid}, expect_code="INVALID_CLIP_IDS")
+    step("export_metadata([])", "export_metadata", {"path": EXPORT_PATH, "clip_ids": []},
+         expect_code="INVALID_CLIP_IDS")
+    step("auto_sync_audio(no clip_ids)", "auto_sync_audio", {},
+         expect_code="MISSING_CLIP_IDS")
 
     # 4. A whole batch still resolves to the real clip. delete_clips stops at the
-    #    confirm preview; the other three reach the tripwire, never Resolve.
+    #    confirm preview; the other seven reach the tripwire, never Resolve.
     out, _, _ = step("delete_clips([probe])", "delete_clips", {"clip_ids": [cid]})
     preview = out.get("preview") or {}
     if out.get("status") != "confirmation_required":
@@ -213,14 +244,30 @@ def main() -> int:
     elif preview.get("clips_lost") != 1 or preview.get("names") != [cname]:
         failures.append(f"delete preview does not describe the probe clip: {preview}")
 
-    for action, extra, method in (("move_clips", {"target_path": clip_path}, "MoveClips"),
-                                  ("relink", {"folder_path": LOG_DIR}, "RelinkClips"),
-                                  ("unlink", {}, "UnlinkClips")):
-        _, calls, _ = step(f"{action}([probe])", action, {"clip_ids": [cid], **extra},
-                           expect_calls=1)
+    # The tripwire answers False; append_to_timeline must report that as a failed
+    # append, not success with count 0.
+    whole_batch_codes = {"append_to_timeline": "APPEND_TO_TIMELINE_FAILED"}
+    for action, (extra, method) in cases.items():
+        if action == "delete_clips":
+            continue
+        out, calls, _ = step(f"{action}([probe])", action, {"clip_ids": [cid], **extra},
+                             expect_code=whole_batch_codes.get(action), expect_calls=1)
+        if action == "append_to_timeline":
+            op = out.get("verified_operation") or {}
+            delta = (op.get("readback") or {}).get("item_count_delta")
+            if op.get("verification_status") != "api_failed":
+                failures.append(f"append_to_timeline([probe]) lost its readback: "
+                                f"verification_status={op.get('verification_status')!r}")
+            if _err_of(out).get("retryable") is not (delta == 0):
+                failures.append(f"append_to_timeline([probe]) retryable="
+                                f"{_err_of(out).get('retryable')!r} with item_count_delta={delta!r}")
         if len(calls) == 1:
             name, args = calls[0]
-            handed = [c.GetUniqueId() for c in (args[0] if args else [])]
+            # CreateTimelineFromClips(name, clips) and ExportMetadata(path, clips)
+            # take the clip list second; every other method takes it first.
+            at = 1 if method in ("CreateTimelineFromClips", "ExportMetadata") else 0
+            clip_arg = args[at] if len(args) > at else []
+            handed = [c.GetUniqueId() for c in (clip_arg or [])]
             if name != method or handed != [cid]:
                 failures.append(f"{action}([probe]) handed Resolve {name}({handed}), "
                                 f"expected {method}([{cid}])")
@@ -239,6 +286,13 @@ def main() -> int:
         failures.append("the folder tree changed (must not)")
     if file_path_after != file_path_before:
         failures.append(f"probe clip File Path changed {file_path_before!r} -> {file_path_after!r}")
+    timelines_after, items_after = timeline_state()
+    if timelines_after != timelines_before:
+        failures.append(f"timeline count changed {timelines_before} -> {timelines_after} (must not)")
+    if items_after != items_before:
+        failures.append(f"current timeline item count changed {items_before} -> {items_after} (must not)")
+    if os.path.exists(EXPORT_PATH):
+        failures.append(f"a metadata file was written to {EXPORT_PATH} (must not)")
 
     print(f"Intercepted, never sent to Resolve: {[c[0] for c in tripwire.intercepted]}")
     if failures:
@@ -246,10 +300,12 @@ def main() -> int:
         for f in failures:
             print(f"  - {f}")
         return 1
-    print(f"\nPASS: partial and all-missing batches refused for all four actions with no "
-          f"MediaPool mutation attempted; a whole batch resolves to the real clip; "
-          f"{len(after_folders)} folders / {len(after_clips)} clips and the probe clip's "
-          f"folder and File Path unchanged.")
+    print(f"\nPASS: partial and all-missing batches refused for all {len(cases)} actions with "
+          f"no MediaPool call attempted; a whole batch resolves to the real clip, and "
+          f"append_to_timeline reports the tripwire's False as APPEND_TO_TIMELINE_FAILED; "
+          f"{len(after_folders)} folders / {len(after_clips)} clips, the probe clip's "
+          f"folder and File Path, the timeline count ({timelines_after}) and the current "
+          f"timeline's items unchanged; no metadata file written.")
     return 0
 
 
