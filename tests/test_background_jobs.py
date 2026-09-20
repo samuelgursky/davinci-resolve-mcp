@@ -115,6 +115,21 @@ class RunMaybeBackgroundTest(unittest.TestCase):
         self.assertIn("job_id", out)
         self.assertEqual(out["status"], "running")
 
+    def test_string_false_background_runs_synchronously(self):
+        """background="false" must run synchronously, not start a background job."""
+        for key in ("background", "async_job"):
+            for spelling in ("false", "False", "FALSE", "no", "0", "off"):
+                with self.subTest(key=key, spelling=spelling):
+                    called = []
+                    out = s._run_maybe_background(
+                        "test.coerce", {key: spelling},
+                        lambda: (called.append(True), {"success": True})[1],
+                    )
+                    self.assertNotIn("job_id", out,
+                        f'{key}="{spelling}" must not start a background job')
+                    self.assertEqual(called, [True])
+                    called.clear()
+
 
 class ResolveControlPollingTest(unittest.TestCase):
     def test_job_status_action_returns_status_dict(self):
