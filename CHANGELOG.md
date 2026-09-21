@@ -2,6 +2,20 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.8.15 — `background="false"` runs synchronously
+
+### Fixed
+
+- **`_run_maybe_background` decided sync-versus-background with bare truthiness on
+  `background` and `async_job`.** ([#265](https://github.com/samuelgursky/davinci-resolve-mcp/pull/265), @Dev-next-gen)
+  A caller sending `background="false"` (or `"no"`, `"0"`, `"off"`) to any action that
+  offers a background job got a background job anyway, with a `job_id` instead of the
+  result they asked for synchronously. Both parameters now go through `_coerce_bool`,
+  like every other boolean read fixed this month; the two media-analysis readers of the
+  same flag already went through their own coercer. Real booleans and the true
+  spellings are unchanged. Guard test: six false spellings on both parameter names,
+  twelve subtests failing on the previous code.
+
 ## What's New in v4.8.14 — both dependency trees read zero advisories again
 
 ### Changed
