@@ -1790,7 +1790,7 @@ def _run_maybe_background(label: str, params: Dict[str, Any], fn):
     job and return its id at once; otherwise run fn inside long_resolve_op and
     return its result, preserving the synchronous contract.
     """
-    if params.get("background") or params.get("async_job"):
+    if _coerce_bool(params.get("background")) or _coerce_bool(params.get("async_job")):
         job_id = background_jobs.start_job(label, fn)
         return {
             "success": True,
