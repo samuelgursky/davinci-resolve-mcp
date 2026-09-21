@@ -2,6 +2,34 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.8.14 — both dependency trees read zero advisories again
+
+### Changed
+
+- **`npm audit` read eight advisories across the two manifests; all eight clear
+  inside the ranges already declared.** Root (6: 3 high, 3 moderate):
+  `@hono/node-server` 1.19.14 -> 2.1.1, `hono` 4.12.26 -> 4.13.8, `adm-zip`
+  0.6.0 -> 0.6.1, `fast-uri` 3.1.2 -> 3.1.8, `ip-address` 10.2.0 -> 10.7.2,
+  `qs` 6.15.2 -> 6.16.0. `resolve-advanced` (2: 1 high, 1 moderate): `adm-zip`
+  and `qs` to the same versions, applied with `--package-lock-only` because
+  that package has no `node_modules` on this machine. Only the lockfiles move;
+  neither `package.json` needed a new range.
+- **The advisories v2.212.4 had to park are among them.** That entry recorded
+  five transitive ones — hono, @hono/node-server, ajv -> fast-uri,
+  express-rate-limit -> ip-address, express -> qs — as clearing "only when the
+  SDK bumps its own dependencies". The SDK has since done so, and the two
+  adm-zip advisories, which are a direct dependency, clear with 0.6.1.
+
+### Validation
+
+- Full offline Python suite under both runners, macOS, Python 3.10:
+  `python -m unittest discover -s tests -t .` and `python -m pytest tests -q`.
+- `npm ci` from the root lockfile, `npm run smoke` (reports 4.8.14) and
+  `npm run pack:check`; `npm audit` reports zero on both manifests afterwards.
+- No runtime code changed, so no live Resolve check was needed. The
+  `resolve-advanced` Node suite was not run: its dependencies are not installed
+  here, and its lockfile change is the same two packages as the root's.
+
 ## What's New in v4.8.13 — `include_linked="false"` no longer relinks
 
 ### Fixed
