@@ -2,6 +2,19 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.8.16 — `organize_clips` honours `create_missing="false"`
+
+### Fixed
+
+- **`organize_clips` decided whether to create missing target folders with bare
+  truthiness on `create_missing`.** ([#266](https://github.com/samuelgursky/davinci-resolve-mcp/pull/266), @Dev-next-gen)
+  A caller sending `create_missing="false"` (or `"no"`, `"0"`, `"off"`) to move clips
+  into a folder that did not exist got the folder path created anyway instead of a
+  "Target folder not found" error. The flag now goes through `_coerce_bool`, like the
+  other boolean reads fixed this month. Real booleans and an omitted key are
+  unchanged. Guard test: six false spellings, all failing on the previous code, plus
+  `True`-creates and omitted-does-not-create checks.
+
 ## What's New in v4.8.15 — `background="false"` runs synchronously
 
 ### Fixed
