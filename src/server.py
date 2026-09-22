@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 377-tool granular server instead
 """
 
-VERSION = "4.8.16"
+VERSION = "4.8.17"
 
 import base64
 import os
@@ -5351,7 +5351,7 @@ def _timeline_ripple_insert_impl(proj, tl, p: Dict[str, Any], *, resolve=None) -
         if locked_tracks:
             reasons.append(f"locked track(s) hold items that must shift: {', '.join(locked_tracks)}")
         plan["infeasible_reasons"] = reasons
-    if bool(p.get("dry_run", True)):
+    if _coerce_bool(p.get("dry_run"), True):
         return {"success": feasible, "dry_run": True, "plan": plan}
     if not feasible:
         return {
@@ -6507,7 +6507,7 @@ def _timeline_bulk_set_item_properties(tl, p: Dict[str, Any]) -> Dict[str, Any]:
     ops = p.get("ops")
     if not isinstance(ops, list) or not ops:
         return _err("bulk_set_item_properties requires params.ops: non-empty list of objects")
-    dry_run = bool(p.get("dry_run", False))
+    dry_run = _coerce_bool(p.get("dry_run"), False)
     readback = bool(p.get("readback", False))
     results = []
     for index, op in enumerate(ops):
@@ -6601,7 +6601,7 @@ def _timeline_apply_look_to_items(tl, p: Dict[str, Any]) -> Dict[str, Any]:
         return _err("apply_look_to_items requires target_ids: non-empty list of video timeline item IDs")
     targets, missing = _timeline_items_by_ids_report(tl, target_ids, track_types=("video",))
     target_summaries = [_timeline_item_summary(item) for item in targets]
-    dry_run = bool(p.get("dry_run", False))
+    dry_run = _coerce_bool(p.get("dry_run"), False)
     out: Dict[str, Any] = {
         "targets": target_summaries,
         "missing": missing,
@@ -6860,7 +6860,7 @@ def _timeline_create_variant_from_ranges(proj, source_tl, p: Dict[str, Any]) -> 
         if clip_err:
             return clip_err
         append_infos.append(clip_info)
-    if p.get("dry_run", False):
+    if _coerce_bool(p.get("dry_run"), False):
         return {
             "success": True,
             "dry_run": True,
@@ -7350,7 +7350,7 @@ def _export_timeline_checked(tl, p: Dict[str, Any]):
                 "EXPORT_FCPXML_1_8/1_9/1_10, EXPORT_OTIO (subtypes EXPORT_NONE, "
                 "EXPORT_AAF_NEW, EXPORT_AAF_EXISTING, EXPORT_CDL, EXPORT_SDL, EXPORT_MISSING_CLIPS)."
             )
-    if p.get("dry_run"):
+    if _coerce_bool(p.get("dry_run")):
         return _ok(path=path, would_export=True, spec={k: v for k, v in spec.items() if k != "export_type"})
 
     def _work():
@@ -7769,7 +7769,7 @@ def _import_timeline_checked(proj, mp, p: Dict[str, Any]):
         if sequence_name_rewritten:
             import_path = rewritten_path
 
-    if p.get("dry_run"):
+    if _coerce_bool(p.get("dry_run")):
         out = _ok(path=path, import_path=import_path, options=options, would_import=True)
         if sanitize_report is not None:
             out["sanitize"] = sanitize_report
@@ -8167,7 +8167,7 @@ def _import_from_drp(proj, mp, p: Dict[str, Any]):
             entry.update(success=False, error=f"extract failed: {e}")
             results.append(entry)
             continue
-        if p.get("dry_run"):
+        if _coerce_bool(p.get("dry_run")):
             entry.update(success=True, would_import=True, drt_path=drt_path)
             results.append(entry)
             continue
@@ -8190,15 +8190,15 @@ def _import_from_drp(proj, mp, p: Dict[str, Any]):
         imported=imported_count,
         available=available,
         results=results,
-        dry_run=bool(p.get("dry_run")),
+        dry_run=_coerce_bool(p.get("dry_run")),
     )
-    if not p.get("dry_run") and selected and imported_count == 0:
+    if not _coerce_bool(p.get("dry_run")) and selected and imported_count == 0:
         out["success"] = False
         out["error"] = (
             f"None of the {len(selected)} selected timeline(s) imported — "
             "see results[].error for each cause."
         )
-    elif not p.get("dry_run") and imported_count < len(selected):
+    elif not _coerce_bool(p.get("dry_run")) and imported_count < len(selected):
         out["partial"] = True
         out["warning"] = (
             f"{imported_count} of {len(selected)} selected timeline(s) "
@@ -8902,7 +8902,7 @@ def _safe_set_audio_properties(tl, p: Dict[str, Any]):
             original[key] = item.GetProperty(key)
         except Exception as exc:
             original[key] = {"error": str(exc)}
-    if p.get("dry_run"):
+    if _coerce_bool(p.get("dry_run")):
         return _ok(would_set=properties, original=original)
     results = {}
     for key, value in properties.items():
@@ -9071,7 +9071,7 @@ def _safe_auto_sync_audio(mp, p: Dict[str, Any]):
     # here makes _normalize_auto_sync_settings fall back to string enum keys,
     # which AutoSyncAudio silently rejects (returns False).
     settings, ignored_settings = _normalize_auto_sync_settings(dict(p.get("settings") or {}), get_resolve())
-    if p.get("dry_run", True):
+    if _coerce_bool(p.get("dry_run"), True):
         return _ok(would_auto_sync=True, clips=_clip_summaries(clips), missing=missing, settings=settings, ignored_settings=ignored_settings)
     # Read-back verification: AutoSyncAudio's boolean return is unreliable, so
     # capture each clip's "Synced Audio" linkage before and after and report the
@@ -9321,7 +9321,7 @@ def _safe_create_subtitles(tl, p: Dict[str, Any]):
     the timeline's subtitle track count before/after and report the real delta.
     """
     settings, ignored = _normalize_auto_caption_settings(p.get("settings"), get_resolve())
-    if p.get("dry_run", False):
+    if _coerce_bool(p.get("dry_run"), False):
         return _ok(would_create_subtitles=True, settings=settings, ignored_settings=ignored)
 
     def _subtitle_track_count():
@@ -9603,7 +9603,7 @@ def _setup_multicam_timeline(proj, mp, p: Dict[str, Any]):
     plan, plan_err = build_multicam_setup_plan(root, p, _find_clip)
     if plan_err:
         return plan_err
-    if p.get("dry_run", False):
+    if _coerce_bool(p.get("dry_run"), False):
         return {
             **plan,
             "dry_run": True,
@@ -13504,7 +13504,7 @@ def _safe_import_media(mp, p: Dict[str, Any]):
             errors.append(path_err)
     if errors:
         return _err("; ".join(errors))
-    if p.get("dry_run"):
+    if _coerce_bool(p.get("dry_run")):
         return _ok(would_import=paths, target_folder=p.get("target_folder"))
     previous, folder_err = _set_current_folder_temporarily(mp, p.get("target_folder"))
     if folder_err:
@@ -13534,7 +13534,7 @@ def _safe_import_sequence(mp, p: Dict[str, Any]):
         suffix = "" if len(missing) <= 5 else f" (+{len(missing) - 5} more)"
         return _err(f"Missing sequence frames: {sample}{suffix}")
     info = {"FilePath": pattern, "StartIndex": start, "EndIndex": end}
-    if p.get("dry_run"):
+    if _coerce_bool(p.get("dry_run")):
         return _ok(would_import=[info], target_folder=p.get("target_folder"))
     previous, folder_err = _set_current_folder_temporarily(mp, p.get("target_folder"))
     if folder_err:
@@ -13550,7 +13550,7 @@ def _safe_import_folder(mp, p: Dict[str, Any]):
     path_err = _path_error(path, must_be_dir=True)
     if path_err:
         return _err(path_err)
-    if p.get("dry_run"):
+    if _coerce_bool(p.get("dry_run")):
         return _ok(would_import_folder=path, source_clips_path=p.get("source_clips_path", ""))
     return {"success": bool(mp.ImportFolderFromFile(path, p.get("source_clips_path", "")))}
 
@@ -13570,7 +13570,7 @@ def _organize_clips(mp, root, p: Dict[str, Any]):
     if err:
         return err
     clips, missing = resolved
-    if p.get("dry_run"):
+    if _coerce_bool(p.get("dry_run")):
         return _ok(target_path=target_path, clips=_clip_summaries(clips), missing=missing)
     return {"success": bool(mp.MoveClips(clips, target)), "moved": len(clips), "missing": missing}
 
@@ -13595,7 +13595,7 @@ def _copy_metadata(root, p: Dict[str, Any]):
         if not target:
             results.append({"clip_id": target_id, "success": False, "error": "Clip not found"})
             continue
-        if p.get("dry_run"):
+        if _coerce_bool(p.get("dry_run")):
             results.append({"clip_id": target_id, "success": True, "metadata_keys": sorted(metadata.keys()), "third_party_keys": sorted(third_party.keys())})
             continue
         ok = bool(target.SetMetadata(metadata)) if metadata else True
@@ -13620,7 +13620,7 @@ def _normalize_metadata(root, mp, p: Dict[str, Any]):
     results = []
     for clip in clips:
         clip_id = _safe_media_pool_item_id(clip)
-        if p.get("dry_run"):
+        if _coerce_bool(p.get("dry_run")):
             results.append({"clip_id": clip_id, "success": True, "metadata_keys": sorted(metadata.keys()), "third_party_keys": sorted(third_party.keys())})
             continue
         ok = bool(clip.SetMetadata(metadata)) if metadata else True
@@ -13758,7 +13758,7 @@ def _safe_relink(mp, root, p: Dict[str, Any]):
     if err:
         return err
     clips, missing = resolved
-    if p.get("dry_run"):
+    if _coerce_bool(p.get("dry_run")):
         return _ok(folder_path=folder_path, clips=_clip_summaries(clips), missing=missing)
     return {"success": bool(mp.RelinkClips(clips, folder_path)), "count": len(clips), "missing": missing}
 
@@ -13768,7 +13768,7 @@ def _safe_unlink(mp, root, p: Dict[str, Any]):
     if err:
         return err
     clips, missing = resolved
-    if p.get("dry_run"):
+    if _coerce_bool(p.get("dry_run")):
         return _ok(clips=_clip_summaries(clips), missing=missing)
     return {"success": bool(mp.UnlinkClips(clips)), "count": len(clips), "missing": missing}
 
@@ -14327,7 +14327,7 @@ def _link_proxy_checked(root, p: Dict[str, Any]):
     requested = {
         "clip_id": p.get("clip_id"),
         "proxy_path": proxy_path,
-        "dry_run": bool(p.get("dry_run")),
+        "dry_run": _coerce_bool(p.get("dry_run")),
         "check_compatibility": check_compatibility,
         "require_compatible": bool(p.get("require_compatible")),
         "expected_codec": p.get("expected_codec") or p.get("codec"),
@@ -14342,7 +14342,7 @@ def _link_proxy_checked(root, p: Dict[str, Any]):
     }
     if compatibility is not None:
         preflight["compatible"] = bool(compatibility.get("compatible"))
-    if p.get("dry_run"):
+    if _coerce_bool(p.get("dry_run")):
         out = _ok(clip=_media_pool_item_summary(clip), proxy_path=proxy_path)
         if compatibility is not None:
             out["compatibility"] = compatibility
@@ -14435,7 +14435,7 @@ def _link_full_resolution_checked(root, p: Dict[str, Any]):
     path_err = _path_error(path, must_be_file=True)
     if path_err:
         return _err(path_err)
-    if p.get("dry_run"):
+    if _coerce_bool(p.get("dry_run")):
         return _ok(clip=_media_pool_item_summary(clip), path=path)
     return {"success": bool(clip.LinkFullResolutionMedia(path))}
 
@@ -14453,7 +14453,7 @@ def _set_clip_marks(root, mp, p: Dict[str, Any]):
     results = []
     for clip in clips:
         clip_id = _safe_media_pool_item_id(clip)
-        if p.get("dry_run"):
+        if _coerce_bool(p.get("dry_run")):
             results.append({"clip_id": clip_id, "success": True, "mark_in": mark_in, "mark_out": mark_out})
             continue
         results.append({"clip_id": clip_id, "success": bool(clip.SetMarkInOut(mark_in, mark_out, p.get("type", "all")))})
@@ -14640,7 +14640,7 @@ def _clear_clip_marks(root, mp, p: Dict[str, Any]):
     results = []
     for clip in clips:
         clip_id = _safe_media_pool_item_id(clip)
-        if p.get("dry_run"):
+        if _coerce_bool(p.get("dry_run")):
             results.append({"clip_id": clip_id, "success": True})
             continue
         results.append({"clip_id": clip_id, "success": bool(clip.ClearMarkInOut(p.get("type", "all")))})
@@ -14666,7 +14666,7 @@ def _copy_clip_annotations(root, p: Dict[str, Any]):
         if not target:
             results.append({"clip_id": target_id, "success": False, "error": "Clip not found"})
             continue
-        if p.get("dry_run"):
+        if _coerce_bool(p.get("dry_run")):
             results.append({"clip_id": target_id, "success": True, "markers": len(markers), "flags": len(flags), "clip_color": color})
             continue
         ok = True
@@ -18573,7 +18573,7 @@ def _probe_project_settings(project, p: Dict[str, Any]) -> Dict[str, Any]:
             out["write_restore_probe"] = _safe_set_project_settings(project, {
                 "settings": settings,
                 "restore": True,
-                "dry_run": bool(p.get("dry_run", False)),
+                "dry_run": _coerce_bool(p.get("dry_run"), False),
             })
     return out
 
@@ -18590,7 +18590,7 @@ def _safe_set_project_settings(project, p: Dict[str, Any]) -> Dict[str, Any]:
             original[key] = _ser(project.GetSetting(key))
         except Exception as exc:
             original[key] = {"error": str(exc)}
-    if p.get("dry_run"):
+    if _coerce_bool(p.get("dry_run")):
         return _ok(would_set=settings, original=original, restore=p.get("restore", True))
     results: Dict[str, Any] = {}
     for key, value in settings.items():
@@ -18632,7 +18632,7 @@ def _safe_project_create(pm, resolve_obj, p: Dict[str, Any]) -> Dict[str, Any]:
         version = resolve_obj.GetVersion() or [0]
         if version[0] < 20 or (version[0] == 20 and len(version) > 2 and (version[1], version[2]) < (2, 2)):
             return _err("ProjectManager.CreateProject media_location_path requires DaVinci Resolve 20.2.2+")
-    if p.get("dry_run"):
+    if _coerce_bool(p.get("dry_run")):
         return _ok(would_create=True, name=name, media_location_path=media_location_path)
     project = pm.CreateProject(name, media_location_path) if media_location_path else pm.CreateProject(name)
     return _ok(project=_project_object_summary(project), name=project.GetName()) if project else _err(f"Failed to create '{name}'")
@@ -18649,7 +18649,7 @@ def _safe_project_export(pm, p: Dict[str, Any]) -> Dict[str, Any]:
         return path_err
     os.makedirs(_project_path_parent(path), exist_ok=True)
     with_stills = bool(p.get("with_stills_and_luts", False))
-    if p.get("dry_run"):
+    if _coerce_bool(p.get("dry_run")):
         return _ok(would_export=True, name=name, path=path, with_stills_and_luts=with_stills)
     return {"success": bool(pm.ExportProject(name, path, with_stills))}
 
@@ -18665,7 +18665,7 @@ def _safe_project_import(pm, p: Dict[str, Any]) -> Dict[str, Any]:
     invalid = _require_disposable_project_name(name, allow_non_mcp_name=p.get("allow_non_mcp_name", False))
     if invalid:
         return invalid
-    if p.get("dry_run"):
+    if _coerce_bool(p.get("dry_run")):
         return _ok(would_import=True, path=path, name=name)
     return {"success": bool(pm.ImportProject(path, name))}
 
@@ -18692,7 +18692,7 @@ def _safe_project_archive(pm, p: Dict[str, Any]) -> Dict[str, Any]:
         if refused:
             return refused
     os.makedirs(_project_path_parent(path), exist_ok=True)
-    if p.get("dry_run"):
+    if _coerce_bool(p.get("dry_run")):
         return _ok(
             would_archive=True,
             name=name,
@@ -18716,7 +18716,7 @@ def _safe_project_restore(pm, p: Dict[str, Any]) -> Dict[str, Any]:
     invalid = _require_disposable_project_name(name, allow_non_mcp_name=p.get("allow_non_mcp_name", False))
     if invalid:
         return invalid
-    if p.get("dry_run"):
+    if _coerce_bool(p.get("dry_run")):
         return _ok(would_restore=True, path=path, name=name)
     return {"success": bool(pm.RestoreProject(path, name))}
 
@@ -18726,7 +18726,7 @@ def _safe_project_delete(pm, p: Dict[str, Any]) -> Dict[str, Any]:
     invalid = _require_disposable_project_name(name, allow_non_mcp_name=p.get("allow_non_mcp_name", False))
     if invalid:
         return invalid
-    if p.get("dry_run"):
+    if _coerce_bool(p.get("dry_run")):
         return _ok(would_delete=True, name=name)
     current = pm.GetCurrentProject()
     # Route through delete_project_safely: DeleteProject silently returns False
@@ -18780,7 +18780,7 @@ def _safe_set_current_database(pm, p: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(db_info, dict) or not db_info.get("DbType") or not db_info.get("DbName"):
         return _err("db_info must include DbType and DbName")
     current = _ser(pm.GetCurrentDatabase()) if _has_method(pm, "GetCurrentDatabase") else None
-    dry_run = p.get("dry_run", True) or not _coerce_bool(p.get("allow_switch"))
+    dry_run = _coerce_bool(p.get("dry_run"), True) or not _coerce_bool(p.get("allow_switch"))
     if dry_run:
         return _ok(
             would_switch=True,
@@ -19116,7 +19116,7 @@ def _spec_action(r, pm, action: str, p: Dict[str, Any]) -> Dict[str, Any]:
     try:
         result = _project_spec.apply_spec(
             spec, executor,
-            dry_run=bool(p.get("dry_run", False)),
+            dry_run=_coerce_bool(p.get("dry_run"), False),
             run_hooks=run_hooks,
             continue_on_error=bool(p.get("continue_on_error", False)),
             run_hook=_make_spec_hook_runner() if run_hooks else None,
@@ -20244,7 +20244,7 @@ def _safe_set_render_settings(proj, p: Dict[str, Any]):
         return err
     if not validation["valid"]:
         return {"success": False, "validation": validation}
-    if p.get("dry_run"):
+    if _coerce_bool(p.get("dry_run")):
         return _ok(validation=validation)
     before = _render_settings_snapshot(proj)
     success = bool(proj.SetRenderSettings(settings))
@@ -20278,7 +20278,7 @@ def _prepare_render_job(proj, p: Dict[str, Any]):
         return err
     if not validation["valid"]:
         return {"success": False, "validation": validation}
-    if p.get("dry_run"):
+    if _coerce_bool(p.get("dry_run")):
         return _ok(validation=validation, format=p.get("format"), codec=p.get("codec"))
     before = _render_settings_snapshot(proj)
     # Pin the base render state before layering explicit settings on top. Without
@@ -20624,7 +20624,7 @@ def _safe_quick_export(proj, p: Dict[str, Any]):
         return err
     if not validation["valid"]:
         return {"success": False, "validation": validation}
-    if p.get("dry_run") or not _coerce_bool(p.get("allow_render")):
+    if _coerce_bool(p.get("dry_run")) or not _coerce_bool(p.get("allow_render")):
         return _ok(would_render=False, preset=preset, params=params, validation=validation)
     before = set()
     if target_dir and os.path.isdir(target_dir):
@@ -22672,7 +22672,7 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
         try:
             # Dry run by default: the ladder can spend a dozen ffmpeg decodes per clip,
             # and the plan names that budget before anyone commits to it.
-            if p.get("dry_run", True):
+            if _coerce_bool(p.get("dry_run"), True):
                 return _ok(**_grade_loop_mod.plan(source, lut, **kwargs))
             return _ok(**_grade_loop_mod.run(
                 source, lut,
@@ -22724,7 +22724,7 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
                 release_s=float(p.get("release_s", _mix_plan_mod.DEFAULT_RELEASE_S)),
                 hold_s=float(p.get("hold_s", _mix_plan_mod.DEFAULT_HOLD_S)),
             )
-            if p.get("dry_run", True):
+            if _coerce_bool(p.get("dry_run"), True):
                 return _ok(**_mix_plan_mod.plan(dialogue, **kwargs))
             return _ok(**_mix_plan_mod.render(
                 dialogue,
@@ -23616,11 +23616,11 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
             plan["warnings"] = warnings
         if (
             plan.get("capability_gaps")
-            and not bool(p.get("dry_run", True))
+            and not _coerce_bool(p.get("dry_run"), True)
             and media_analysis_plan_requires_capabilities(plan)
         ):
             return _e2_wrap(_media_analysis_missing_capabilities_response(plan))
-        if not bool(p.get("dry_run", True)):
+        if not _coerce_bool(p.get("dry_run"), True):
             executed = await execute_media_analysis_plan_async(
                 plan,
                 params=p,
@@ -26112,7 +26112,7 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         applicable.sort(key=lambda c: c["span"]["start"], reverse=True)
         plan = [{"action": c["action"], "span": c["span"], "kind": c.get("kind")} for c in applicable]
 
-        if p.get("dry_run", True):
+        if _coerce_bool(p.get("dry_run"), True):
             return {
                 "dry_run": True,
                 "would_apply": len(applicable),
@@ -27502,7 +27502,7 @@ def _safe_set_cdl(item, p: Dict[str, Any]):
         return {"success": False, "validation": validation}
     normalized = _normalize_cdl(validation["cdl"])
     node_ok, preflight = _cdl_node_preflight(item, validation["cdl"]["NodeIndex"])
-    if p.get("dry_run"):
+    if _coerce_bool(p.get("dry_run")):
         return _ok(validation=validation, normalized=normalized, node_preflight=preflight)
     if not node_ok:
         return {
@@ -27548,7 +27548,7 @@ def _safe_copy_grade(item, p: Dict[str, Any]):
         return err
     targets, missing = _timeline_items_for_grade_copy(tl, target_ids)
     target_summaries = [_timeline_item_summary(target) for target in targets]
-    if p.get("dry_run"):
+    if _coerce_bool(p.get("dry_run")):
         return _ok(targets=target_summaries, missing=missing, would_copy=not missing)
     if missing:
         return {"success": False, "targets": target_summaries, "missing": missing}
@@ -27582,7 +27582,7 @@ def _safe_export_lut(item, p: Dict[str, Any]):
     export_type, type_err = _resolve_lut_export_type(p.get("type", "33ptcube"), resolve_obj)
     if type_err:
         return type_err
-    if p.get("dry_run"):
+    if _coerce_bool(p.get("dry_run")):
         return _ok(path=path, type=export_type, would_export=True)
     before_exists = os.path.exists(path)
     success = bool(item.ExportLUT(export_type, path))
@@ -27611,7 +27611,7 @@ def _safe_apply_drx(proj, item, p: Dict[str, Any]):
     if not _has_method(graph, "ApplyGradeFromDRX"):
         return _err(f"{source} graph does not expose ApplyGradeFromDRX",
                     code="APPLY_DRX_UNSUPPORTED", category="unsupported")
-    if p.get("dry_run"):
+    if _coerce_bool(p.get("dry_run")):
         return _ok(path=path, source=source, grade_mode=p.get("grade_mode", p.get("mode", 0)), would_apply=True)
     # B2 — Whole-grade replacement is catastrophic; require confirmation.
     if "confirm_token" not in p and "confirmToken" not in p:
@@ -27828,7 +27828,7 @@ def _apply_trace_plan(p: Dict[str, Any]) -> Dict[str, Any]:
     attention = [r for r in public if (r["status"] != "apply" and r["reason"] not in bulk)
                  or (r["status"] == "apply" and r["ambiguous"])]
 
-    if p.get("dry_run"):
+    if _coerce_bool(p.get("dry_run")):
         report_path = _trace_report(p, plan, "dry-run", {"summary": summary, "resolution": public})
         return _ok(dry_run=True, timeline=live_name, plan_source=plan.get("source"),
                    summary=summary, report_path=report_path,
@@ -27945,7 +27945,7 @@ def _grade_version_restore(item, p: Dict[str, Any]):
     names = snapshot["local"] if version_type == 0 else snapshot["remote"]
     if name not in names:
         return {"success": False, "snapshot": snapshot, "error": f"Version '{name}' not found"}
-    if p.get("dry_run"):
+    if _coerce_bool(p.get("dry_run")):
         return _ok(snapshot=snapshot, would_load=name, type=version_type)
     return {"success": bool(item.LoadVersionByName(name, version_type)), "snapshot": snapshot}
 
@@ -28353,7 +28353,7 @@ def _bulk_match_to_hero(proj, p: Dict[str, Any]) -> Dict[str, Any]:
             remediation="Use method='copy_grade' or call safe_set_cdl per target with hand-rolled values.",
         )
 
-    dry_run = bool(p.get("dry_run", True))
+    dry_run = _coerce_bool(p.get("dry_run"), True)
     payload: Dict[str, Any] = {
         "hero": hero_summary,
         "proposals": proposals,
@@ -30157,7 +30157,7 @@ def _safe_add_fusion_tool(comp, p: Dict[str, Any]):
     tool_type = p.get("tool_type")
     if not tool_type:
         return _err("tool_type is required")
-    if p.get("dry_run"):
+    if _coerce_bool(p.get("dry_run")):
         return _ok(tool_type=tool_type, name=p.get("name"), would_add=True)
     comp.Lock()
     try:
@@ -30191,7 +30191,7 @@ def _safe_set_fusion_inputs(comp, p: Dict[str, Any]):
     tool = comp.FindTool(tool_name)
     if not tool:
         return _err(f"Tool '{tool_name}' not found")
-    if p.get("dry_run"):
+    if _coerce_bool(p.get("dry_run")):
         return _ok(tool_name=tool_name, inputs=inputs, would_set=True)
     results = {}
     # No comp.Lock() around value writes — see _FUSION_VALUE_WRITE_NOTE.
@@ -30225,7 +30225,7 @@ def _safe_connect_fusion_tools(comp, p: Dict[str, Any]):
     source = comp.FindTool(source_name)
     if not source:
         return _err(f"Source tool '{source_name}' not found")
-    if p.get("dry_run"):
+    if _coerce_bool(p.get("dry_run")):
         return _ok(target_tool=target_name, source_tool=source_name, input_name=input_name, would_connect=True)
     comp.Lock()
     try:
@@ -31763,7 +31763,7 @@ def lut(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         if action == "install":
             if not p.get("name"):
                 return _err("install requires name")
-            if p.get("dry_run"):
+            if _coerce_bool(p.get("dry_run")):
                 return _ok(would_install=p["name"], writable_dir=lut_files.writable_dir())
             return lut_files.install_lut(
                 p["name"], source=p.get("source"), source_path=p.get("source_path"),
@@ -31771,14 +31771,14 @@ def lut(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         if action == "remove":
             if not p.get("name"):
                 return _err("remove requires name")
-            if p.get("dry_run"):
+            if _coerce_bool(p.get("dry_run")):
                 return _ok(would_remove=p["name"], writable_dir=lut_files.writable_dir())
             return lut_files.remove_lut(p["name"])
         if action == "attenuate":
             for required in ("source", "strength", "name"):
                 if p.get(required) is None:
                     return _err(f"attenuate requires {required}")
-            if p.get("dry_run"):
+            if _coerce_bool(p.get("dry_run")):
                 return _ok(would_write=p["name"], source=p["source"], strength=p["strength"])
             return lut_files.attenuate_lut(p["source"], p["strength"], p["name"])
     except lut_files.LutPathError as exc:
@@ -32324,7 +32324,7 @@ def _safe_install_extension(p: Dict[str, Any]) -> Dict[str, Any]:
     marker = {"fuse": _FUSE_MARKER, "dctl": _DCTL_MARKER, "script": _SCRIPT_MARKER}[extension_type]
     if p.get("require_marker", True) and not _source_has_marker(source, marker):
         return _err(f"source must include {marker} unless require_marker=False")
-    if p.get("dry_run"):
+    if _coerce_bool(p.get("dry_run")):
         return _ok(
             would_install=True,
             extension_type=extension_type,
@@ -32404,7 +32404,7 @@ def _safe_remove_extension(p: Dict[str, Any]) -> Dict[str, Any]:
         return _err(f"No {extension_type} extension named '{name}' at {path}")
     if p.get("require_marker", True) and not _file_has_marker(path, marker):
         return _err(f"Refusing to remove unmarked file at {path}; pass require_marker=False only if you intend this")
-    if p.get("dry_run"):
+    if _coerce_bool(p.get("dry_run")):
         return _ok(would_remove=True, extension_type=extension_type, name=name, path=path)
     try:
         os.unlink(path)

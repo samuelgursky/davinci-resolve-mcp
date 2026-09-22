@@ -2,6 +2,22 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.8.17 — `dry_run="false"` runs the real operation
+
+### Fixed
+
+- **Handlers read `dry_run` with bare truthiness.** 61 reads in `src/server.py` and
+  the `script_plugin` media-rules generator treated `dry_run="false"` (or `"no"`,
+  `"0"`, `"off"`) as true and returned a preview, even though the destructive-op hook,
+  which already coerced the flag, had gated the call as a real mutation. Every
+  handler read now goes through `_coerce_bool` with the handler's own default, so
+  actions that preview by default keep doing so when the flag is omitted or `None`.
+  Reads that already used the media-analysis and setup coercers are unchanged.
+  Follow-up to [#266](https://github.com/samuelgursky/davinci-resolve-mcp/pull/266).
+  Guard test: `organize_clips` and `safe_import_folder` act on five false spellings
+  (ten subtests failing on the previous code), plus an AST ratchet that fails on any
+  `p.get("dry_run")` in `server.py` not wrapped in a coercer.
+
 ## What's New in v4.8.16 — `organize_clips` honours `create_missing="false"`
 
 ### Fixed

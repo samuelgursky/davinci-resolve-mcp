@@ -18,6 +18,8 @@ See docs/authoring/script-plugin-authoring.md for the full DSL spec.
 
 from typing import Any, Dict, Optional
 
+from src.utils.bool_params import coerce_bool
+
 
 def header(name: str, kind: str, language: str) -> str:
     """MCP marker comment placed at the top of generated scripts."""
@@ -236,7 +238,7 @@ def media_rules(name: str, options: Optional[Dict[str, Any]] = None) -> str:
     if language not in VALID_LANGUAGES:
         raise ValueError(f"Invalid language '{language}'. "
                          f"Valid: {list(VALID_LANGUAGES)}")
-    dry_run = bool(options.get("dry_run", False))
+    dry_run = coerce_bool(options.get("dry_run"), False)
 
     if language == "lua":
         return _media_rules_lua(name, options, dry_run)
