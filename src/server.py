@@ -13559,7 +13559,7 @@ def _organize_clips(mp, root, p: Dict[str, Any]):
     target_path = p.get("target_path")
     if not target_path:
         return _err("target_path is required")
-    if p.get("create_missing"):
+    if _coerce_bool(p.get("create_missing")):
         target, target_err = _ensure_folder_path(mp, target_path)
     else:
         target = _navigate_folder(mp, target_path)
