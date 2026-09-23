@@ -900,7 +900,12 @@ function createNode(nodeId, xPos, yPos, colorParams = null, options = {}) {
   // OFX spec ({ofx:{pluginId, params, options?}}), emit the full OFX container instead
   // (params are self-describing name/value pairs on the wire — see extract-ofx-params).
   if (colorParams && colorParams.ofx && colorParams.ofx.pluginId) {
-    parts.push(buildOFXToolEntry(colorParams.ofx.pluginId, colorParams.ofx.params || {}, colorParams.ofx.options || {}));
+    const ofxOptions = { ...(colorParams.ofx.options || {}) };
+    if (options.clipVersionId && !ofxOptions.instanceKey) {
+      const ctx = ofxOptions.instanceId || 'OfxImageEffectContextFilter';
+      ofxOptions.instanceKey = `${ctx}_${options.clipVersionId}_${nodeId}`;
+    }
+    parts.push(buildOFXToolEntry(colorParams.ofx.pluginId, colorParams.ofx.params || {}, ofxOptions));
   } else {
     // Structure: F10 = {F1 = {F1=0xC0000001, F2={F2=2}}}
     const f10InnerInner = Buffer.concat([
@@ -1750,6 +1755,8 @@ async function generateMultiNodeDRX(nodes, connections, metadata = {}) {
   } = metadata;
 
   const timestamp = generateTimestamp();
+  // The clip version DbId is also the key Resolve embeds in each OFX node's instance id.
+  const clipVersionId = require('node:crypto').randomUUID();
 
   // Determine node ID scheme
   let baseNodeId, firstNodeId, lastNodeId;
@@ -1798,6 +1805,7 @@ async function generateMultiNodeDRX(nodes, connections, metadata = {}) {
         label: nodeConfig.label || `Node ${nodeIndex}`,
         enabled: nodeConfig.enabled !== false,
         nodeIndex: nodeIndex, // Pass separate index for F2 field
+        clipVersionId,
       }
     );
     containerParts.push(node);
@@ -1861,7 +1869,7 @@ async function generateMultiNodeDRX(nodes, connections, metadata = {}) {
   // Generate UUIDs
   const { randomUUID: uuidv4 } = require('node:crypto');
   const stillId = uuidv4();
-  const clipVersionId = uuidv4();
+  // clipVersionId is generated before the nodes (it keys OFX instances).
 
   const now = new Date().toISOString().replace('Z', '');
 
@@ -3981,6 +3989,13 @@ function buildOFXToolEntry(pluginId, params, options = {}) {
   // plugin un-instantiated: node applies but the effect never engages — found live
   // 2026-07-03). Callers can still override for generator/transition contexts.
   const instanceId = options.instanceId || 'OfxImageEffectContextFilter';
+  // The tool-list instance entry (0xC000005E) is NOT the bare context name in native
+  // captures: Resolve writes "<context>_<clip-version DbId>_<node id>" there (e.g.
+  // "OfxImageEffectContextFilter_06aff833-..._5", Resolve Studio 21.0 CST capture),
+  // while the container's F3 keeps the bare context. With the bare name in both
+  // slots the node applies but the plugin's stored params do not bind, so it runs on
+  // defaults. generateMultiNodeDRX supplies the keyed form via options.instanceKey.
+  const instanceKey = options.instanceKey || instanceId;
 
   // Build F5 repeated param entries. Native containers always carry resolvefxVersion
   // and serialize params in name order — mirror both.
@@ -3993,6 +4008,11 @@ function buildOFXToolEntry(pluginId, params, options = {}) {
     if (typeof value === 'string') {
       const strBuf = Buffer.from(value, 'utf-8');
       valueBuf = protoBytes(5, strBuf);
+    } else if (typeof value === 'boolean') {
+      valueBuf = protoVarint(3, value ? 1 : 0);
+    } else if (value && typeof value === 'object' && Number.isInteger(value.int)) {
+      // Integer/choice params (e.g. CST doFwdOOTF) are varint F3 on the wire, not F2 doubles.
+      valueBuf = protoVarint(3, value.int);
     } else {
       valueBuf = protoFloat64(2, value);
     }
@@ -4023,10 +4043,10 @@ function buildOFXToolEntry(pluginId, params, options = {}) {
       protoVarint(1, ID_PLUGIN),
       protoBytes(2, protoBytes(5, Buffer.from(pluginId, 'utf-8'))),
     ])),
-    // Instance ID
+    // Instance ID (keyed form — see instanceKey above)
     protoBytes(1, Buffer.concat([
       protoVarint(1, ID_INSTANCE),
-      protoBytes(2, protoBytes(5, Buffer.from(instanceId, 'utf-8'))),
+      protoBytes(2, protoBytes(5, Buffer.from(instanceKey, 'utf-8'))),
     ])),
     // Enable flag (native captures carry 0 here for enabled plugins)
     protoBytes(1, Buffer.concat([
