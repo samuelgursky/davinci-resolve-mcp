@@ -14657,9 +14657,9 @@ def _copy_clip_annotations(root, p: Dict[str, Any]):
     markers = source.GetMarkers() or {}
     flags = source.GetFlagList() or []
     color = source.GetClipColor()
-    include_markers = p.get("include_markers", True)
-    include_flags = p.get("include_flags", True)
-    include_color = p.get("include_clip_color", True)
+    include_markers = _coerce_bool(p.get("include_markers"), True)
+    include_flags = _coerce_bool(p.get("include_flags"), True)
+    include_color = _coerce_bool(p.get("include_clip_color"), True)
     results = []
     for target_id in target_ids:
         target = _find_clip(root, str(target_id))
