@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 377-tool granular server instead
 """
 
-VERSION = "4.8.17"
+VERSION = "4.8.18"
 
 import base64
 import os
@@ -2584,11 +2584,11 @@ def _copy_annotations(tl, p: Dict[str, Any], *, move: bool = False):
             copied += 1
         else:
             warnings.append({"frame": frame, "result": result})
-    if p.get("include_flags", True) and _has_method(source, "GetFlagList") and _has_method(target, "AddFlag"):
+    if _coerce_bool(p.get("include_flags"), True) and _has_method(source, "GetFlagList") and _has_method(target, "AddFlag"):
         for flag in source.GetFlagList() or []:
             if not target.AddFlag(flag):
                 warnings.append({"flag": flag, "result": "AddFlag returned false"})
-    if p.get("include_clip_color", True) and _has_method(source, "GetClipColor") and _has_method(target, "SetClipColor"):
+    if _coerce_bool(p.get("include_clip_color"), True) and _has_method(source, "GetClipColor") and _has_method(target, "SetClipColor"):
         color = source.GetClipColor()
         if color and not target.SetClipColor(color):
             warnings.append({"clip_color": color, "result": "SetClipColor returned false"})
@@ -6262,8 +6262,8 @@ def _timeline_item_conform_summary(item, track_type: str, track_index: int, item
 
 def _timeline_conform_snapshot(tl, p: Optional[Dict[str, Any]] = None):
     p = p or {}
-    include_markers = bool(p.get("include_markers", True))
-    include_clip_properties = bool(p.get("include_clip_properties", False))
+    include_markers = _coerce_bool(p.get("include_markers"), True)
+    include_clip_properties = _coerce_bool(p.get("include_clip_properties"), False)
     track_types = p.get("track_types") or ["video", "audio", "subtitle"]
     if not isinstance(track_types, list):
         return _err("track_types must be a list")
@@ -6477,7 +6477,7 @@ def _timeline_story_spine_report(tl, p: Dict[str, Any]) -> Dict[str, Any]:
     snapshot = _timeline_conform_snapshot(tl, {
         "track_types": p.get("track_types") or ["video", "audio", "subtitle"],
         "include_markers": True,
-        "include_clip_properties": bool(p.get("include_clip_properties", False)),
+        "include_clip_properties": _coerce_bool(p.get("include_clip_properties"), False),
     })
     if isinstance(snapshot, dict) and snapshot.get("error"):
         return snapshot

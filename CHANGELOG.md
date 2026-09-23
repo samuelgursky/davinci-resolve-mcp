@@ -2,6 +2,23 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.8.18 — `copy_clip_annotations` honours `include_*="false"`
+
+### Fixed
+
+- **`copy_clip_annotations` read `include_markers`, `include_flags`, and
+  `include_clip_color` with bare truthiness.** ([#268](https://github.com/samuelgursky/davinci-resolve-mcp/pull/268), @Dev-next-gen)
+  A caller sending `include_flags="false"` (or `"no"`, `"0"`, `"off"`) still had the
+  flags copied onto every target clip. All three now go through `_coerce_bool` with a
+  default of `True`. Guard test: five false spellings per parameter (ten subtests
+  failing on the previous code), plus an omitted-copies-everything check.
+- **The same reads at the twin sites.** The timeline `copy_annotations` /
+  `move_annotations` path read `include_flags` and `include_clip_color` the same way,
+  and `_timeline_conform_snapshot` wrapped `include_markers` and
+  `include_clip_properties` in `bool()`, which also turns `"false"` into `True`. Both
+  now coerce. Guard test `tests/test_include_flag_coercion.py`: fifteen subtests
+  failing on the previous code, plus omitted-flag positive checks.
+
 ## What's New in v4.8.17 — `dry_run="false"` runs the real operation
 
 ### Fixed
