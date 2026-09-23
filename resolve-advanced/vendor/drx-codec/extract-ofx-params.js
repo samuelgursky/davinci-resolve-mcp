@@ -88,7 +88,11 @@ const OFY_MARKER = 0x4F4659;
 /**
  * Decode an F5 param-entry buffer to {name, value}.
  * F1 = name (length-delimited UTF-8)
- * F2 = wrapped value (F2 = float64 OR F5 = UTF-8 string)
+ * F2 = wrapped value (F2 = float64, F3 = varint int/choice, OR F5 = UTF-8 string)
+ *
+ * Integer params (e.g. Color Space Transform doFwdOOTF / doInvOOTF) come back as
+ * {int: n} — the same shape buildOFXToolEntry accepts — so a parse → generate
+ * round-trip re-emits them as varints instead of dropping or float-encoding them.
  */
 function decodeParamEntry(entryBuf) {
   let name = '';
@@ -103,6 +107,8 @@ function decodeParamEntry(entryBuf) {
       for (const inn of inner) {
         if (inn.fieldNum === 2 && inn.wireType === 1) {
           value = inn.value; // float64
+        } else if (inn.fieldNum === 3 && inn.wireType === 0) {
+          value = { int: Number(inn.value) };
         } else if (inn.fieldNum === 5 && inn.wireType === 2) {
           value = utf8(inn.value);
         }
