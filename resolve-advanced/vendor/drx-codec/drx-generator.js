@@ -3995,6 +3995,9 @@ function buildOFXToolEntry(pluginId, params, options = {}) {
   // while the container's F3 keeps the bare context. With the bare name in both
   // slots the node applies but the plugin's stored params do not bind, so it runs on
   // defaults. generateMultiNodeDRX supplies the keyed form via options.instanceKey.
+  // Version scope: the unbound-params failure was reported on Studio 21.0.0.48
+  // (PR #267). On Studio 19.1.3.7 both forms bind: generated CSTs exported
+  // bit-identical 33-pt LUTs with the bare and the keyed id (measured 2026-09-23).
   const instanceKey = options.instanceKey || instanceId;
 
   // Build F5 repeated param entries. Native containers always carry resolvefxVersion

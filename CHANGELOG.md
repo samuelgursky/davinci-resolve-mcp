@@ -2,6 +2,29 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.8.19 — generated OFX nodes bind their params on Resolve 21.0
+
+### Fixed
+
+- **Generated OFX nodes could apply but run on the plugin's defaults.** ([#267](https://github.com/samuelgursky/davinci-resolve-mcp/pull/267), @noah1234j)
+  In a native Resolve capture the tool-list instance entry carries
+  `<context>_<clip-version DbId>_<node id>`, while the OFX container keeps the bare
+  context name. The DRX generator wrote the bare name in both slots. On Studio
+  21.0.0.48 the contributor measured that the plugin's stored params then do not
+  bind, so a Color Space Transform ignores its input/output spaces.
+  `generateMultiNodeDRX` now creates the clip-version id before the nodes and emits
+  the keyed form in the tool-list slot. An explicit `options.instanceKey` still wins.
+  Reported fix: the generated CST's 33-pt LUT is bit-identical to a hand-built CST
+  on 21.0.0.48.
+  Measured here on Studio 19.1.3.7: both forms already bind on that build, and the
+  new generator's LUTs are bit-identical to the old one's for every variant tested
+  (CC only, CST with default params, two different CST parameter sets), so nothing
+  changes on 19.1.3.
+- **Integer/choice OFX params round-trip.** `buildOFXToolEntry` encodes `{int: n}`
+  and booleans as varint F3 (e.g. CST `doFwdOOTF` / `doInvOOTF`), and
+  `extract-ofx-params` now decodes F3 to `{int: n}` instead of `null`, so parse →
+  generate keeps them. Guard test: `vendor/drx-codec/__tests__/ofx-instance-key.test.js`.
+
 ## What's New in v4.8.18 — `copy_clip_annotations` honours `include_*="false"`
 
 ### Fixed
