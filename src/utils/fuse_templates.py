@@ -10,6 +10,8 @@ Reference: Fusion Fuse SDK (June 2023), Blackmagic Design.
 
 from typing import Any, Dict, Optional
 
+from src.utils.bool_params import coerce_bool
+
 # Maps the public `type` argument to Fusion's internal ClassType enum.
 CLASS_TYPES = {
     "tool": "CT_Tool",
@@ -149,7 +151,7 @@ def per_pixel(name: str, options: Optional[Dict[str, Any]] = None) -> str:
     if n_inputs not in (1, 2):
         raise ValueError("per_pixel: inputs must be 1 or 2")
     expression = options.get("expression", "    return p1")
-    expose_amount = bool(options.get("amount", True))
+    expose_amount = coerce_bool(options.get("amount"), True)
 
     pixel_args = "x, y, p1, p2" if n_inputs == 2 else "x, y, p1"
 
@@ -1021,7 +1023,7 @@ def channel_op(name: str, options: Optional[Dict[str, Any]] = None) -> str:
     if operation not in valid_ops:
         raise ValueError(f"Invalid channel_op operation '{operation}'. "
                          f"Valid: {list(valid_ops)}")
-    rgba_only = bool(options.get("rgba_only", True))
+    rgba_only = coerce_bool(options.get("rgba_only"), True)
 
     aux_channels = ""
     aux_doc = ""

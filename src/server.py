@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 377-tool granular server instead
 """
 
-VERSION = "4.8.19"
+VERSION = "4.8.20"
 
 import base64
 import os
@@ -1276,7 +1276,7 @@ def _ai_governance_gate(op: str, p: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """
     if _ai_governance_mode() != "enforce":
         return None
-    if p.get("override_governance") or p.get("overrideGovernance"):
+    if _coerce_bool(p.get("override_governance")) or _coerce_bool(p.get("overrideGovernance")):
         return None
     check = _ai_governance_check(op)
     if not check.get("applies") or not check.get("exceeded"):
@@ -2474,7 +2474,7 @@ def _annotation_target(scope: str, p: Dict[str, Any], tl=None):
                 return None, err
         return tl, None
     if scope == "timeline_item":
-        if p.get("current"):
+        if _coerce_bool(p.get("current")):
             if tl is None:
                 _, tl, err = _get_tl()
                 if err:
@@ -2555,7 +2555,7 @@ def _probe_annotations(tl, p: Dict[str, Any]):
 
 
 def _normalize_marker_payload_action(tl, p: Dict[str, Any]):
-    marker, err = _marker_add_payload(p, tl=tl, default_to_current=bool(p.get("default_to_current", False)))
+    marker, err = _marker_add_payload(p, tl=tl, default_to_current=_coerce_bool(p.get("default_to_current"), False))
     if err:
         return err
     return {"marker": marker}
@@ -2630,13 +2630,13 @@ def _clear_annotations_by_scope(tl, p: Dict[str, Any]):
         if not _has_method(target, "DeleteMarkerByCustomData"):
             return _err(f"{scope} does not expose DeleteMarkerByCustomData")
         return {"success": bool(target.DeleteMarkerByCustomData(_first_param(p, "custom_data", "customData", default="")))}
-    color = p.get("color", "All" if p.get("all", True) else "Blue")
+    color = p.get("color", "All" if _coerce_bool(p.get("all"), True) else "Blue")
     if not _has_method(target, "DeleteMarkersByColor"):
         return _err(f"{scope} does not expose DeleteMarkersByColor")
     result = {"success": bool(target.DeleteMarkersByColor(color)), "color": color}
-    if p.get("clear_flags") and _has_method(target, "ClearFlags"):
+    if _coerce_bool(p.get("clear_flags")) and _has_method(target, "ClearFlags"):
         result["flags_cleared"] = bool(target.ClearFlags(p.get("flag_color", "All")))
-    if p.get("clear_clip_color") and _has_method(target, "ClearClipColor"):
+    if _coerce_bool(p.get("clear_clip_color")) and _has_method(target, "ClearClipColor"):
         result["clip_color_cleared"] = bool(target.ClearClipColor())
     return result
 
@@ -2647,7 +2647,7 @@ def _export_review_report(tl, p: Dict[str, Any]):
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "annotations": _probe_annotations(tl, p),
     }
-    if p.get("include_capabilities", True):
+    if _coerce_bool(p.get("include_capabilities"), True):
         report["capabilities"] = _annotation_capabilities()
     return report
 
@@ -4859,7 +4859,7 @@ def _append_and_recover_timeline_item(
 
 def _timeline_duplicate_clips_impl(proj, tl, p: Dict[str, Any], *, delete_sources: bool = False, resolve=None):
     ids = p.get("clip_ids") or p.get("ids")
-    selected = bool(p.get("selected", False))
+    selected = _coerce_bool(p.get("selected"), False)
     if ids is not None and not isinstance(ids, list):
         return _err("duplicate_clips requires clip_ids (list of timeline item unique IDs)")
     if not ids and not selected:
@@ -4872,7 +4872,7 @@ def _timeline_duplicate_clips_impl(proj, tl, p: Dict[str, Any], *, delete_source
     copy_properties, copy_err = _normalize_copy_properties(p.get("copy_properties", p.get("copyProperties")))
     if copy_err:
         return copy_err
-    if p.get("copy_keyframes", p.get("copyKeyframes", False)) and "keyframes" not in copy_properties:
+    if _coerce_bool(p.get("copy_keyframes", p.get("copyKeyframes")), False) and "keyframes" not in copy_properties:
         copy_properties.append("keyframes")
     try:
         offset = int(p.get("record_frame_offset", p.get("recordFrameOffset", 0)))
@@ -4906,7 +4906,7 @@ def _timeline_duplicate_clips_impl(proj, tl, p: Dict[str, Any], *, delete_source
             seen_ids.add(sid)
 
     include_types = _normalize_include_linked(p.get("include_linked", p.get("includeLinked")))
-    relink = bool(p.get("relink", p.get("restore_linked", p.get("restoreLinked", bool(include_types)))))
+    relink = _coerce_bool(p.get("relink", p.get("restore_linked", p.get("restoreLinked"))), bool(include_types))
     results: List[Dict[str, Any]] = []
     source_delete_items = []
 
@@ -5518,7 +5518,7 @@ def _timeline_ripple_insert_impl(proj, tl, p: Dict[str, Any], *, resolve=None) -
 
 
 def _range_frames_from_params(tl, p: Dict[str, Any]):
-    if p.get("use_mark_in_out", p.get("useMarkInOut", False)):
+    if _coerce_bool(p.get("use_mark_in_out", p.get("useMarkInOut")), False):
         mark = tl.GetMarkInOut() or {}
         mark_type = p.get("mark_type", p.get("markType", "video"))
         if mark_type not in mark:
@@ -5600,7 +5600,7 @@ def _timeline_copy_range_impl(proj, tl, p: Dict[str, Any], *, overwrite: bool = 
     copy_properties, copy_err = _normalize_copy_properties(p.get("copy_properties", p.get("copyProperties")))
     if copy_err:
         return copy_err
-    if p.get("copy_keyframes", p.get("copyKeyframes", False)) and "keyframes" not in copy_properties:
+    if _coerce_bool(p.get("copy_keyframes", p.get("copyKeyframes")), False) and "keyframes" not in copy_properties:
         copy_properties.append("keyframes")
     mp = proj.GetMediaPool()
     if not mp:
@@ -5863,7 +5863,7 @@ def _timeline_item_probe(item):
 
 def _timeline_probe_edit_kernel_item(tl, p: Dict[str, Any]):
     ids = p.get("clip_ids") or p.get("ids")
-    selected = bool(p.get("selected", False))
+    selected = _coerce_bool(p.get("selected"), False)
     items = []
     if ids:
         if not isinstance(ids, list):
@@ -6010,10 +6010,10 @@ def _timeline_set_title_text(tl, p: Dict[str, Any]) -> Dict[str, Any]:
         return _err("set_title_text requires params.text (string)")
 
     property_key = p.get("property_key") or p.get("key")
-    as_styled_xml = bool(p.get("as_styled_xml", p.get("styled", False)))
-    try_plain_first = bool(p.get("try_plain_first", True))
-    readback = bool(p.get("readback", False))
-    try_heuristic_keys = bool(p.get("try_heuristic_keys", not bool(property_key)))
+    as_styled_xml = _coerce_bool(p.get("as_styled_xml", p.get("styled")), False)
+    try_plain_first = _coerce_bool(p.get("try_plain_first"), True)
+    readback = _coerce_bool(p.get("readback"), False)
+    try_heuristic_keys = _coerce_bool(p.get("try_heuristic_keys"), not bool(property_key))
 
     if as_styled_xml:
         payload_modes = [(text, "as_given")]
@@ -6069,7 +6069,7 @@ def _timeline_set_title_text(tl, p: Dict[str, Any]) -> Dict[str, Any]:
     # route get_title_text already reads. Deliberately a bare, UNLOCKED
     # SetInput: the comp-lock render bug (api_truth / v2.98.5) eats writes
     # wrapped in Comp.Lock(), and unlocked writes are the safe ones.
-    if not bool(p.get("as_styled_xml", p.get("styled", False))):
+    if not _coerce_bool(p.get("as_styled_xml", p.get("styled")), False):
         try:
             if int(item.GetFusionCompCount() or 0) > 0:
                 comp = item.GetFusionCompByIndex(1)
@@ -6349,7 +6349,7 @@ def _detect_gaps_overlaps_from_snapshot(snapshot: Dict[str, Any], p: Optional[Di
 def _source_ranges_from_snapshot(snapshot: Dict[str, Any], p: Optional[Dict[str, Any]] = None):
     p = p or {}
     handles = int(p.get("handles", 0))
-    merge = bool(p.get("merge", True))
+    merge = _coerce_bool(p.get("merge"), True)
     ranges: Dict[str, List[List[int]]] = {}
     occurrences = []
     for track_type, type_payload in (snapshot.get("tracks") or {}).items():
@@ -6508,7 +6508,7 @@ def _timeline_bulk_set_item_properties(tl, p: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(ops, list) or not ops:
         return _err("bulk_set_item_properties requires params.ops: non-empty list of objects")
     dry_run = _coerce_bool(p.get("dry_run"), False)
-    readback = bool(p.get("readback", False))
+    readback = _coerce_bool(p.get("readback"), False)
     results = []
     for index, op in enumerate(ops):
         if not isinstance(op, dict):
@@ -6668,7 +6668,7 @@ def _timeline_apply_look_to_items(tl, p: Dict[str, Any]) -> Dict[str, Any]:
             out["copy_grades"] = False
             out["copy_grades_error"] = str(exc)
     out["success"] = (
-        all(row.get("set_cdl", True) for row in results)
+        all(_coerce_bool(row.get("set_cdl"), True) for row in results)
         and (source_item is None or bool(out.get("copy_grades")))
     )
     return out
@@ -6812,7 +6812,7 @@ def _timeline_create_variant_from_ranges(proj, source_tl, p: Dict[str, Any]) -> 
     # pack=True butts clips together at the end of each track (record_frame is
     # ignored); Resolve packs by actual placed duration, so the result is gap-free
     # even when source and timeline frame rates differ.
-    pack = bool(p.get("pack", False))
+    pack = _coerce_bool(p.get("pack"), False)
     built = []
     cursor_by_track: Dict[Tuple[int, int], int] = {}
     max_tracks = {"video": 1, "audio": 1}
@@ -7321,7 +7321,7 @@ def _export_timeline_checked(tl, p: Dict[str, Any]):
     path = p.get("path")
     if not path:
         return _err("path is required")
-    if p.get("require_temp_path", True) and not _render_temp_path_ok(path):
+    if _coerce_bool(p.get("require_temp_path"), True) and not _render_temp_path_ok(path):
         return _err("path must be under the system temp directory unless require_temp_path=False")
     folder = os.path.dirname(os.path.abspath(path))
     if folder:
@@ -7702,7 +7702,7 @@ def _import_timeline_checked(proj, mp, p: Dict[str, Any]):
             "the media pool afterward (see `relink`)."
         )
     sanitize = sanitize_requested and not is_binary and not is_json
-    if not sanitize and p.get("require_temp_path", True) and not _render_temp_path_ok(path):
+    if not sanitize and _coerce_bool(p.get("require_temp_path"), True) and not _render_temp_path_ok(path):
         return _err(
             "path must be under the system temp directory unless require_temp_path=False",
             remediation="Pass require_temp_path=False to import from this location, or "
@@ -7731,7 +7731,7 @@ def _import_timeline_checked(proj, mp, p: Dict[str, Any]):
             san_kwargs["search_roots"] = list(search_roots)
             if p.get("relink_min_confidence") is not None:
                 san_kwargs["min_confidence"] = float(p["relink_min_confidence"])
-            if p.get("verify_visually") or p.get("reference_movie"):
+            if _coerce_bool(p.get("verify_visually")) or p.get("reference_movie"):
                 san_kwargs["verify_visually"] = True
             if p.get("reference_movie"):
                 san_kwargs["reference_movie"] = p["reference_movie"]
@@ -8376,14 +8376,14 @@ def _compare_timelines(proj, tl, p: Dict[str, Any]):
 
 def _probe_interchange_roundtrip(proj, mp, tl, p: Dict[str, Any]):
     output_dir = p.get("output_dir") or tempfile.mkdtemp(prefix="mcp_conform_roundtrip_")
-    if p.get("require_temp_path", True) and not _render_temp_path_ok(output_dir):
+    if _coerce_bool(p.get("require_temp_path"), True) and not _render_temp_path_ok(output_dir):
         return _err("output_dir must be under the system temp directory unless require_temp_path=False")
     os.makedirs(output_dir, exist_ok=True)
     spec = _timeline_export_spec(p, resolve)
     base_name = p.get("name") or f"roundtrip_{str(spec['requested']).lower()}"
     path = p.get("path") or os.path.join(output_dir, base_name + spec["extension"])
     # background is a top-level option; a sub-step export must run synchronously.
-    export_result = _export_timeline_checked(tl, {**p, "path": path, "require_temp_path": p.get("require_temp_path", True), "background": False, "async_job": False})
+    export_result = _export_timeline_checked(tl, {**p, "path": path, "require_temp_path": _coerce_bool(p.get("require_temp_path"), True), "background": False, "async_job": False})
     if export_result.get("error") or not export_result.get("success"):
         return {"success": False, "stage": "export", "export": export_result}
     import_path = export_result.get("primary_file") or export_result.get("path") or path
@@ -8391,14 +8391,14 @@ def _probe_interchange_roundtrip(proj, mp, tl, p: Dict[str, Any]):
     requested_key = str(spec["requested"]).lower()
     if "drt" not in requested_key:
         import_options.setdefault("timelineName", p.get("imported_timeline_name", f"{tl.GetName()} {spec['requested']} Roundtrip"))
-        import_options.setdefault("importSourceClips", bool(p.get("import_source_clips", False)))
+        import_options.setdefault("importSourceClips", _coerce_bool(p.get("import_source_clips"), False))
     import_result = _import_timeline_checked(
         proj,
         mp,
         {
             "path": import_path,
             "options": import_options,
-            "require_temp_path": p.get("require_temp_path", True),
+            "require_temp_path": _coerce_bool(p.get("require_temp_path"), True),
         },
     )
     if import_result.get("error") or not import_result.get("success"):
@@ -8410,7 +8410,7 @@ def _probe_interchange_roundtrip(proj, mp, tl, p: Dict[str, Any]):
     if imported_tl:
         comparison = _compare_timeline_snapshots(_timeline_conform_snapshot(tl, p), _timeline_conform_snapshot(imported_tl, p))
     cleanup_result = None
-    if p.get("cleanup_imported", True) and imported_tl:
+    if _coerce_bool(p.get("cleanup_imported"), True) and imported_tl:
         cleanup_result = {"success": bool(mp.DeleteTimelines([imported_tl]))}
     return {
         "success": True,
@@ -8605,13 +8605,13 @@ def _detect_missing_media_from_snapshot(snapshot: Dict[str, Any]):
 def _detect_missing_media(tl, p: Dict[str, Any]):
     snapshot = _timeline_conform_snapshot(tl, {**p, "include_clip_properties": True})
     report = _detect_missing_media_from_snapshot(snapshot)
-    if p.get("sanitize_paths") or p.get("sanitized"):
+    if _coerce_bool(p.get("sanitize_paths")) or _coerce_bool(p.get("sanitized")):
         report = dict(report)
         report["missing"] = [
             {
                 **row,
                 "file_path_sanitized": _sanitize_media_path(row.get("file_path")),
-                "file_path": None if p.get("omit_raw_paths", True) else row.get("file_path"),
+                "file_path": None if _coerce_bool(p.get("omit_raw_paths"), True) else row.get("file_path"),
             }
             for row in report.get("missing", [])
         ]
@@ -8630,7 +8630,7 @@ def _bounded_basename_matches(
     max_files = max(1, int(p.get("max_files_scanned", p.get("maxFilesScanned", 50000)) or 50000))
     max_depth_raw = p.get("max_depth", p.get("maxDepth"))
     max_depth = int(max_depth_raw) if max_depth_raw is not None else None
-    all_matches = bool(p.get("all_matches", False))
+    all_matches = _coerce_bool(p.get("all_matches"), False)
     matches: List[str] = []
     files_scanned = 0
     dirs_scanned = 0
@@ -8680,7 +8680,7 @@ def _build_relink_plan(tl, p: Dict[str, Any]):
         return _err(f"search_roots must be existing directories: {invalid}")
     missing_report = _detect_missing_media(tl, p)
     diagnosis = missing_report.get("diagnosis") or _missing_media_diagnosis(missing_report.get("missing", []))
-    if p.get("skip_search_when_volume_missing", True) and any(
+    if _coerce_bool(p.get("skip_search_when_volume_missing"), True) and any(
         not row.get("mounted") for row in diagnosis.get("missing_volumes", [])
     ):
         return {
@@ -8713,7 +8713,7 @@ def _build_relink_plan(tl, p: Dict[str, Any]):
                 **row,
                 "wanted_basename": wanted,
                 "timeline_occurrence_count": len(rows),
-                "candidate_paths": [] if p.get("sanitize_paths") or p.get("sanitized") else matches,
+                "candidate_paths": [] if _coerce_bool(p.get("sanitize_paths")) or _coerce_bool(p.get("sanitized")) else matches,
                 "candidate_paths_sanitized": sanitized_matches,
                 "candidate_count": len(matches),
                 "scan": scan,
@@ -8722,7 +8722,7 @@ def _build_relink_plan(tl, p: Dict[str, Any]):
     return {
         "success": True,
         "dry_run": True,
-        "search_roots": [] if p.get("sanitize_paths") or p.get("sanitized") else search_roots,
+        "search_roots": [] if _coerce_bool(p.get("sanitize_paths")) or _coerce_bool(p.get("sanitized")) else search_roots,
         "search_roots_sanitized": [_sanitize_media_path(root, keep_filename=False) for root in search_roots],
         "candidate_count": sum(1 for row in candidates if row["candidate_count"]),
         "missing_count": missing_report.get("missing_count", 0),
@@ -8916,7 +8916,7 @@ def _safe_set_audio_properties(tl, p: Dict[str, Any]):
             row["readback"] = item.GetProperty(key)
         except Exception as exc:
             row["readback_error"] = str(exc)
-        if p.get("restore", True) and not isinstance(original.get(key), dict):
+        if _coerce_bool(p.get("restore"), True) and not isinstance(original.get(key), dict):
             try:
                 row["restore"] = bool(item.SetProperty(key, original[key]))
             except Exception as exc:
@@ -9361,7 +9361,7 @@ def _transcription_capabilities(mp, p: Dict[str, Any]):
             return _err("clip_ids must be a list")
         clips = [_find_clip(root, str(clip_id)) for clip_id in ids]
         clips = [clip for clip in clips if clip]
-    elif p.get("selected"):
+    elif _coerce_bool(p.get("selected")):
         clips = mp.GetSelectedClips() or []
     current_folder = mp.GetCurrentFolder()
     return {
@@ -10300,7 +10300,7 @@ def _media_analysis_records_from_target(mp, p: Dict[str, Any], project=None) -> 
 
     elif target_type == "clip":
         clip_id = target.get("clip_id") or p.get("clip_id")
-        selected = bool(target.get("selected") or p.get("selected"))
+        selected = bool(_coerce_bool(target.get("selected")) or _coerce_bool(p.get("selected")))
         clips = []
         if selected:
             try:
@@ -10362,7 +10362,7 @@ def _media_analysis_records_from_target(mp, p: Dict[str, Any], project=None) -> 
         target.update({"type": "clips", "clip_ids": clip_ids, "skipped": skipped})
     elif target_type == "bin":
         path = target.get("path") or p.get("bin_path") or p.get("path") or "Master"
-        recursive = bool(target.get("recursive", p.get("recursive", True)))
+        recursive = _coerce_bool(target.get("recursive", p.get("recursive")), True)
         folder = _navigate_folder(mp, path)
         if not folder:
             return None, target, warnings, _err(f"Folder not found: {path}")
@@ -10370,14 +10370,14 @@ def _media_analysis_records_from_target(mp, p: Dict[str, Any], project=None) -> 
         warnings.extend(folder_warnings)
         target.update({"type": "bin", "path": path, "recursive": recursive})
     elif target_type == "project":
-        recursive = bool(target.get("recursive", True))
+        recursive = _coerce_bool(target.get("recursive"), True)
         records, folder_warnings = _media_analysis_folder_records(mp.GetRootFolder(), "Master", recursive=recursive)
         warnings.extend(folder_warnings)
         target.update({"type": "project", "recursive": recursive})
     else:
         return None, target, warnings, _err("target.type must be one of file, clip, clips, bin, project, sequence, timeline")
 
-    records, duplicate_count = _media_analysis_dedupe_records(records, bool(p.get("include_duplicates", target.get("include_duplicates", False))))
+    records, duplicate_count = _media_analysis_dedupe_records(records, _coerce_bool(p.get("include_duplicates", target.get("include_duplicates")), False))
     if duplicate_count:
         warnings.append(f"Deduped {duplicate_count} repeated source media reference(s)")
     if not records:
@@ -12489,7 +12489,7 @@ def _media_analysis_metadata_writeback_enabled(p: Dict[str, Any]) -> bool:
         "writeToResolve",
     )
     if raw is None:
-        return bool(_media_analysis_effective_preferences().get("metadata_writeback_default", True))
+        return _coerce_bool(_media_analysis_effective_preferences().get("metadata_writeback_default"), True)
     return _media_analysis_bool(raw, True)
 
 
@@ -12752,7 +12752,7 @@ def _media_analysis_apply_setup_defaults(action: str, p: Dict[str, Any]) -> Dict
             "write_to_resolve",
             "writeToResolve",
         ):
-            out["publish_metadata"] = bool(prefs.get("metadata_writeback_default", True))
+            out["publish_metadata"] = _coerce_bool(prefs.get("metadata_writeback_default"), True)
             applied["metadata_writeback_default"] = out["publish_metadata"]
 
         persistence = prefs.get("analysis_persistence")
@@ -13325,7 +13325,7 @@ def _media_pool_probe(mp, p: Dict[str, Any]):
 def _media_pool_probe_ingest_items(mp, p: Dict[str, Any]):
     root = mp.GetRootFolder()
     ids = p.get("clip_ids") or p.get("ids")
-    selected = bool(p.get("selected", False))
+    selected = _coerce_bool(p.get("selected"), False)
     clips = []
     warnings = []
     if ids:
@@ -13376,7 +13376,7 @@ def _string_list_param(p: Dict[str, Any], key: str):
 
 def _clips_from_params(root, mp, p: Dict[str, Any], *, key: str = "clip_ids"):
     ids = p.get(key) or p.get("ids")
-    selected = bool(p.get("selected", False))
+    selected = _coerce_bool(p.get("selected"), False)
     clips = []
     missing = []
     if ids:
@@ -13587,7 +13587,7 @@ def _copy_metadata(root, p: Dict[str, Any]):
         keys = set(p["keys"])
         metadata = {key: value for key, value in metadata.items() if key in keys}
     third_party = {}
-    if p.get("include_third_party", True):
+    if _coerce_bool(p.get("include_third_party"), True):
         third_party = source.GetThirdPartyMetadata("") or {}
     results = []
     for target_id in target_ids:
@@ -14310,7 +14310,7 @@ def _link_proxy_checked(root, p: Dict[str, Any]):
         return missing
     check_compatibility = bool(
         p.get("check_compatibility")
-        or p.get("require_compatible")
+        or _coerce_bool(p.get("require_compatible"))
         or p.get("expected_codec")
         or p.get("expected_profile")
         or p.get("codec")
@@ -14329,7 +14329,7 @@ def _link_proxy_checked(root, p: Dict[str, Any]):
         "proxy_path": proxy_path,
         "dry_run": _coerce_bool(p.get("dry_run")),
         "check_compatibility": check_compatibility,
-        "require_compatible": bool(p.get("require_compatible")),
+        "require_compatible": _coerce_bool(p.get("require_compatible")),
         "expected_codec": p.get("expected_codec") or p.get("codec"),
         "expected_profile": p.get("expected_profile") or p.get("profile"),
     }
@@ -14363,7 +14363,7 @@ def _link_proxy_checked(root, p: Dict[str, Any]):
             ),
         )
         return out
-    if p.get("require_compatible") and compatibility is not None and not compatibility.get("compatible"):
+    if _coerce_bool(p.get("require_compatible")) and compatibility is not None and not compatibility.get("compatible"):
         out = _err(
             "Proxy media is not compatible with the source clip; refusing LinkProxyMedia",
             code="PROXY_INCOMPATIBLE",
@@ -14697,7 +14697,7 @@ def _media_pool_boundary_report(mp, p: Dict[str, Any]):
         "capabilities": _media_pool_ingest_capabilities(),
         "media_pool": _media_pool_probe(mp, {"depth": p.get("depth", 1)}),
     }
-    if p.get("clip_ids") or p.get("selected"):
+    if p.get("clip_ids") or _coerce_bool(p.get("selected")):
         report["items"] = _media_pool_probe_ingest_items(mp, p)
     return report
 
@@ -18563,7 +18563,7 @@ def _probe_project_settings(project, p: Dict[str, Any]) -> Dict[str, Any]:
         except Exception as exc:
             row["error"] = str(exc)
         out["candidate_settings"][key] = row
-    if p.get("try_write"):
+    if _coerce_bool(p.get("try_write")):
         settings = {
             key: row["value"]
             for key, row in out["candidate_settings"].items()
@@ -18591,7 +18591,7 @@ def _safe_set_project_settings(project, p: Dict[str, Any]) -> Dict[str, Any]:
         except Exception as exc:
             original[key] = {"error": str(exc)}
     if _coerce_bool(p.get("dry_run")):
-        return _ok(would_set=settings, original=original, restore=p.get("restore", True))
+        return _ok(would_set=settings, original=original, restore=_coerce_bool(p.get("restore"), True))
     results: Dict[str, Any] = {}
     for key, value in settings.items():
         row: Dict[str, Any] = {"requested": value, "original": original.get(key)}
@@ -18604,7 +18604,7 @@ def _safe_set_project_settings(project, p: Dict[str, Any]) -> Dict[str, Any]:
             row["readback"] = _ser(project.GetSetting(key))
         except Exception as exc:
             row["readback_error"] = str(exc)
-        if p.get("restore", True) and not isinstance(original.get(key), dict):
+        if _coerce_bool(p.get("restore"), True) and not isinstance(original.get(key), dict):
             try:
                 row["restore"] = bool(project.SetSetting(key, original[key]))
                 row["restored_value"] = _ser(project.GetSetting(key))
@@ -18617,7 +18617,7 @@ def _safe_set_project_settings(project, p: Dict[str, Any]) -> Dict[str, Any]:
 
 def _safe_project_create(pm, resolve_obj, p: Dict[str, Any]) -> Dict[str, Any]:
     name = p.get("name")
-    invalid = _require_disposable_project_name(name, allow_non_mcp_name=p.get("allow_non_mcp_name", False))
+    invalid = _require_disposable_project_name(name, allow_non_mcp_name=_coerce_bool(p.get("allow_non_mcp_name"), False))
     if invalid:
         return invalid
     media_location_path = p.get("media_location_path") or p.get("mediaLocationPath")
@@ -18625,7 +18625,7 @@ def _safe_project_create(pm, resolve_obj, p: Dict[str, Any]) -> Dict[str, Any]:
         path_err = _project_path_guard(
             media_location_path,
             field="media_location_path",
-            require_temp_path=p.get("require_temp_media_location", True),
+            require_temp_path=_coerce_bool(p.get("require_temp_media_location"), True),
         )
         if path_err:
             return path_err
@@ -18640,15 +18640,15 @@ def _safe_project_create(pm, resolve_obj, p: Dict[str, Any]) -> Dict[str, Any]:
 
 def _safe_project_export(pm, p: Dict[str, Any]) -> Dict[str, Any]:
     name = p.get("name")
-    invalid = _require_disposable_project_name(name, allow_non_mcp_name=p.get("allow_non_mcp_name", False))
+    invalid = _require_disposable_project_name(name, allow_non_mcp_name=_coerce_bool(p.get("allow_non_mcp_name"), False))
     if invalid:
         return invalid
     path = p.get("path")
-    path_err = _project_path_guard(path, require_temp_path=p.get("require_temp_path", True))
+    path_err = _project_path_guard(path, require_temp_path=_coerce_bool(p.get("require_temp_path"), True))
     if path_err:
         return path_err
     os.makedirs(_project_path_parent(path), exist_ok=True)
-    with_stills = bool(p.get("with_stills_and_luts", False))
+    with_stills = _coerce_bool(p.get("with_stills_and_luts"), False)
     if _coerce_bool(p.get("dry_run")):
         return _ok(would_export=True, name=name, path=path, with_stills_and_luts=with_stills)
     return {"success": bool(pm.ExportProject(name, path, with_stills))}
@@ -18656,13 +18656,13 @@ def _safe_project_export(pm, p: Dict[str, Any]) -> Dict[str, Any]:
 
 def _safe_project_import(pm, p: Dict[str, Any]) -> Dict[str, Any]:
     path = p.get("path")
-    path_err = _project_path_guard(path, require_temp_path=p.get("require_temp_path", True))
+    path_err = _project_path_guard(path, require_temp_path=_coerce_bool(p.get("require_temp_path"), True))
     if path_err:
         return path_err
     if not os.path.exists(path):
         return _err(f"path does not exist: {path}")
     name = p.get("name")
-    invalid = _require_disposable_project_name(name, allow_non_mcp_name=p.get("allow_non_mcp_name", False))
+    invalid = _require_disposable_project_name(name, allow_non_mcp_name=_coerce_bool(p.get("allow_non_mcp_name"), False))
     if invalid:
         return invalid
     if _coerce_bool(p.get("dry_run")):
@@ -18672,11 +18672,11 @@ def _safe_project_import(pm, p: Dict[str, Any]) -> Dict[str, Any]:
 
 def _safe_project_archive(pm, p: Dict[str, Any]) -> Dict[str, Any]:
     name = p.get("name")
-    invalid = _require_disposable_project_name(name, allow_non_mcp_name=p.get("allow_non_mcp_name", False))
+    invalid = _require_disposable_project_name(name, allow_non_mcp_name=_coerce_bool(p.get("allow_non_mcp_name"), False))
     if invalid:
         return invalid
     path = p.get("path")
-    path_err = _project_path_guard(path, require_temp_path=p.get("require_temp_path", True))
+    path_err = _project_path_guard(path, require_temp_path=_coerce_bool(p.get("require_temp_path"), True))
     if path_err:
         return path_err
     flags, flag_err = archive_guard.read_flags(p)
@@ -18707,13 +18707,13 @@ def _safe_project_archive(pm, p: Dict[str, Any]) -> Dict[str, Any]:
 
 def _safe_project_restore(pm, p: Dict[str, Any]) -> Dict[str, Any]:
     path = p.get("path")
-    path_err = _project_path_guard(path, require_temp_path=p.get("require_temp_path", True))
+    path_err = _project_path_guard(path, require_temp_path=_coerce_bool(p.get("require_temp_path"), True))
     if path_err:
         return path_err
     if not os.path.exists(path):
         return _err(f"path does not exist: {path}")
     name = p.get("name")
-    invalid = _require_disposable_project_name(name, allow_non_mcp_name=p.get("allow_non_mcp_name", False))
+    invalid = _require_disposable_project_name(name, allow_non_mcp_name=_coerce_bool(p.get("allow_non_mcp_name"), False))
     if invalid:
         return invalid
     if _coerce_bool(p.get("dry_run")):
@@ -18723,7 +18723,7 @@ def _safe_project_restore(pm, p: Dict[str, Any]) -> Dict[str, Any]:
 
 def _safe_project_delete(pm, p: Dict[str, Any]) -> Dict[str, Any]:
     name = p.get("name")
-    invalid = _require_disposable_project_name(name, allow_non_mcp_name=p.get("allow_non_mcp_name", False))
+    invalid = _require_disposable_project_name(name, allow_non_mcp_name=_coerce_bool(p.get("allow_non_mcp_name"), False))
     if invalid:
         return invalid
     if _coerce_bool(p.get("dry_run")):
@@ -18736,7 +18736,7 @@ def _safe_project_delete(pm, p: Dict[str, Any]) -> Dict[str, Any]:
     if current_name == name:
         if not _coerce_bool(p.get("close_current")):
             return _err("Refusing to delete the currently open project; pass close_current=True")
-        saved = bool(pm.SaveProject()) if p.get("save_current", True) else None
+        saved = bool(pm.SaveProject()) if _coerce_bool(p.get("save_current"), True) else None
         closed = bool(pm.CloseProject(current))
         if not closed:
             return _err(f"Failed to close current project '{name}' before delete")
@@ -19112,13 +19112,13 @@ def _spec_action(r, pm, action: str, p: Dict[str, Any]) -> Dict[str, Any]:
         return _ok(project=spec.project,
                    **_project_spec.apply_spec(spec, executor, dry_run=True))
     # apply_spec
-    run_hooks = bool(p.get("run_hooks", False))
+    run_hooks = _coerce_bool(p.get("run_hooks"), False)
     try:
         result = _project_spec.apply_spec(
             spec, executor,
             dry_run=_coerce_bool(p.get("dry_run"), False),
             run_hooks=run_hooks,
-            continue_on_error=bool(p.get("continue_on_error", False)),
+            continue_on_error=_coerce_bool(p.get("continue_on_error"), False),
             run_hook=_make_spec_hook_runner() if run_hooks else None,
         )
     except _project_spec.SpecError as exc:
@@ -19473,7 +19473,7 @@ def project_manager(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         except Exception:
             rendering = False
         if rendering:
-            if not p.get("stop_render"):
+            if not _coerce_bool(p.get("stop_render")):
                 return _err(
                     "A render is in progress on this project. Closing now would "
                     "orphan the render and wedge Resolve's render pipeline — the "
@@ -19519,7 +19519,7 @@ def project_manager(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         })
         if err:
             return _err(err)
-        return {"success": bool(pm.ExportProject(p["name"], p["path"], p.get("with_stills_and_luts", True)))}
+        return {"success": bool(pm.ExportProject(p["name"], p["path"], _coerce_bool(p.get("with_stills_and_luts"), True)))}
     elif action == "archive":
         err, _clean = _validate_params(p, {
             "name": {"type": str, "required": True, "non_empty": True},
@@ -19787,7 +19787,7 @@ def project_settings(action: str, params: Optional[Dict[str, Any]] = None) -> Di
     elif action == "project_summary":
         return _project_summary(
             proj,
-            include_clips=bool(p.get("include_clips")),
+            include_clips=_coerce_bool(p.get("include_clips")),
             clip_limit=int(p.get("clip_limit", 50)),
         )
     elif action == "load_burnin_preset":
@@ -20214,7 +20214,7 @@ def _validate_render_settings_payload(settings: Dict[str, Any], *, require_temp_
 def _validate_render_settings_action(p: Dict[str, Any]):
     validation, err = _validate_render_settings_payload(
         p.get("settings"),
-        require_temp_target=bool(p.get("require_temp_target", False)),
+        require_temp_target=_coerce_bool(p.get("require_temp_target"), False),
     )
     if err:
         return err
@@ -20238,7 +20238,7 @@ def _safe_set_render_settings(proj, p: Dict[str, Any]):
     settings = p.get("settings")
     validation, err = _validate_render_settings_payload(
         settings,
-        require_temp_target=bool(p.get("require_temp_target", False)),
+        require_temp_target=_coerce_bool(p.get("require_temp_target"), False),
     )
     if err:
         return err
@@ -20256,7 +20256,7 @@ def _safe_set_render_settings(proj, p: Dict[str, Any]):
         "after": after_settings,
         "diff": _settings_diff(settings, after_settings),
     }
-    if p.get("restore") and isinstance(before.get("settings"), dict):
+    if _coerce_bool(p.get("restore")) and isinstance(before.get("settings"), dict):
         result["restore_success"] = bool(proj.SetRenderSettings(before["settings"]))
     return result
 
@@ -20267,13 +20267,13 @@ def _prepare_render_job(proj, p: Dict[str, Any]):
         return _err("target_dir or settings.TargetDir is required")
     if not os.path.isdir(target_dir):
         return _err(f"target_dir does not exist: {target_dir}")
-    if p.get("require_temp_target", True) and not _render_temp_path_ok(target_dir):
+    if _coerce_bool(p.get("require_temp_target"), True) and not _render_temp_path_ok(target_dir):
         return _err("target_dir must be under the system temp directory unless require_temp_target=False")
     settings = dict(p.get("settings") or {})
     settings.setdefault("TargetDir", target_dir)
     if p.get("custom_name"):
         settings["CustomName"] = p["custom_name"]
-    validation, err = _validate_render_settings_payload(settings, require_temp_target=p.get("require_temp_target", True))
+    validation, err = _validate_render_settings_payload(settings, require_temp_target=_coerce_bool(p.get("require_temp_target"), True))
     if err:
         return err
     if not validation["valid"]:
@@ -20516,7 +20516,7 @@ def _list_delivery_targets(proj, p: Dict[str, Any]):
     extras = _delivery_target_extras()
     listing = _delivery_targets.list_targets(extras, tier=tier)
 
-    if p.get("check_availability"):
+    if _coerce_bool(p.get("check_availability")):
         # Resolve every target against the live matrix so the caller sees what
         # this machine/license can actually render, not just what ships.
         formats = _render_formats(proj)
@@ -20543,7 +20543,7 @@ def _list_delivery_targets(proj, p: Dict[str, Any]):
         targets=listing,
         schema_version=_delivery_targets.SCHEMA_VERSION,
         tiers=list(_delivery_targets.TIERS),
-        availability_checked=bool(p.get("check_availability")),
+        availability_checked=_coerce_bool(p.get("check_availability")),
     )
 
 
@@ -20618,7 +20618,7 @@ def _safe_quick_export(proj, p: Dict[str, Any]):
     params["EnableUpload"] = False
     validation, err = _validate_render_settings_payload(
         {key: value for key, value in params.items() if key in _RENDER_SETTING_KEYS},
-        require_temp_target=bool(p.get("require_temp_target", True)),
+        require_temp_target=_coerce_bool(p.get("require_temp_target"), True),
     )
     if err:
         return err
@@ -20667,9 +20667,9 @@ def _export_render_boundary_report(proj, p: Dict[str, Any]):
         "capabilities": _render_capabilities(proj),
         "settings": _render_settings_snapshot(proj),
     }
-    if p.get("include_matrix", True):
+    if _coerce_bool(p.get("include_matrix"), True):
         report["matrix"] = _probe_render_matrix(proj, {"max_pairs": p.get("max_pairs")})
-    if p.get("include_quick_export", True):
+    if _coerce_bool(p.get("include_quick_export"), True):
         report["quick_export"] = _quick_export_capabilities(proj)
     return report
 
@@ -20945,7 +20945,7 @@ def render(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
         return result
     elif action == "start":
         job_ids = p.get("job_ids")
-        interactive = p.get("interactive", False)
+        interactive = _coerce_bool(p.get("interactive"), False)
         if job_ids:
             return {"success": bool(proj.StartRendering(job_ids, interactive))}
         return {"success": bool(proj.StartRendering(interactive))}
@@ -21946,7 +21946,7 @@ def media_pool_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         # when the clip loads in source viewer. Caller passes seconds; we convert
         # to frames using the clip's fps from properties.
         mark_set: Optional[Dict[str, Any]] = None
-        if p.get("clear_marks") or p.get("clearMarks"):
+        if _coerce_bool(p.get("clear_marks")) or _coerce_bool(p.get("clearMarks")):
             try:
                 clip.ClearMarkInOut(p.get("mark_type") or "all")
                 mark_set = {"cleared": True}
@@ -22007,7 +22007,7 @@ def media_pool_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
 
         # Bring Resolve to the foreground so the editor doesn't have to
         # alt-tab. Default on; pass focus_app=false to suppress.
-        focus_app = p.get("focus_app", p.get("focusApp", True))
+        focus_app = _coerce_bool(p.get("focus_app", p.get("focusApp")), True)
         focus_result: Optional[Dict[str, Any]] = None
         if focus_app:
             focus_result = _activate_resolve_window()
@@ -22017,7 +22017,7 @@ def media_pool_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         # call, so we send the keyboard equivalent of "Go to In" once the
         # app is in the foreground. Default on when a mark was set.
         jump_result: Optional[Dict[str, Any]] = None
-        wants_jump = p.get("jump_to_mark_in", p.get("jumpToMarkIn", True))
+        wants_jump = _coerce_bool(p.get("jump_to_mark_in", p.get("jumpToMarkIn")), True)
         applied_mark = bool(mark_set and mark_set.get("applied"))
         if wants_jump and applied_mark and focus_result and focus_result.get("activated"):
             jump_result = _send_resolve_keystroke_go_to_mark_in()
@@ -22167,12 +22167,12 @@ def media_pool_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         # Segment timecodes are SOURCE timecodes, not timeline positions.
         if _has_method(clip, "GetTranscription"):
             try:
-                full = clip.GetTranscription(bool(p.get("use_nested_clip_transcription", False)))
+                full = clip.GetTranscription(_coerce_bool(p.get("use_nested_clip_transcription"), False))
             except Exception:
                 full = None
             segs = full.get("segments") if isinstance(full, dict) else None
             if segs:
-                if not p.get("include_words"):
+                if not _coerce_bool(p.get("include_words")):
                     # `words` is several times the bulk of the segment text and
                     # most callers want segment-level timing. Opt in for it.
                     segs = [{k: v for k, v in seg.items() if k != "words"}
@@ -22799,7 +22799,7 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
             if vctx is None:
                 return _err("No project context — open a Resolve project first")
             _r, _proj, project_root, _name = vctx
-            session_only = bool(p.get("session_only", False))
+            session_only = _coerce_bool(p.get("session_only"), False)
             session_id = _AI_LEDGER_SESSION_ID if session_only else None
             limit = _safe_int(p.get("limit"), 50, minimum=1, maximum=1000)
             return {
@@ -22913,7 +22913,7 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
             project_id=project_id,
             analysis_root=p.get("analysis_root"),
             source_paths=p.get("source_paths") or p.get("sourcePaths") or [],
-            create=bool(p.get("create", False)),
+            create=_coerce_bool(p.get("create"), False),
         )
 
     if action in {
@@ -22978,7 +22978,7 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
             project_id=project_id,
             analysis_root=p.get("analysis_root"),
             source_paths=[],
-            create=bool(p.get("create", False)),
+            create=_coerce_bool(p.get("create"), False),
         )
         if not root.get("success"):
             return root
@@ -23091,7 +23091,7 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
                 end_seconds=end,
                 match_word=p.get("match_word") or p.get("matchWord") or p.get("word"),
                 context_seconds=_opt_number(p.get("context_seconds", p.get("contextSeconds"))) or 2.0,
-                include_curve_values=bool(p.get("include_curve_values", p.get("includeCurveValues", False))),
+                include_curve_values=_coerce_bool(p.get("include_curve_values", p.get("includeCurveValues")), False),
                 limit=int(_opt_number(p.get("limit")) or 20),
             )
         if action == "timeline_strata":
@@ -23116,7 +23116,7 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
                 record_start_frame=int(start_frame) if start_frame is not None else None,
                 record_end_frame=int(end_frame) if end_frame is not None else None,
                 fps=fps,
-                include_curve_values=bool(p.get("include_curve_values", p.get("includeCurveValues", False))),
+                include_curve_values=_coerce_bool(p.get("include_curve_values", p.get("includeCurveValues")), False),
             )
         if action == "plan_story_beats":
             from src.utils import strata_story
@@ -23319,7 +23319,7 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
             if not job_id:
                 return _err("resume_batch_job requires job_id")
             return resume_media_analysis_batch_job(project_root, str(job_id))
-        return cleanup_media_analysis_artifacts(project_root, frames_only=bool(p.get("frames_only", True)))
+        return cleanup_media_analysis_artifacts(project_root, frames_only=_coerce_bool(p.get("frames_only"), True))
 
     if action == "review_timeline_markers":
         tl = proj.GetCurrentTimeline()
@@ -23514,11 +23514,11 @@ async def media_analysis(action: str, params: Optional[Dict[str, Any]] = None, c
         if action == "analyze_file":
             target.update({"type": "file", "path": p.get("path") or p.get("file_path") or p.get("filePath") or target.get("path")})
         elif action == "analyze_clip":
-            target.update({"type": "clip", "clip_id": p.get("clip_id") or target.get("clip_id"), "selected": p.get("selected", target.get("selected", False))})
+            target.update({"type": "clip", "clip_id": p.get("clip_id") or target.get("clip_id"), "selected": _coerce_bool(p.get("selected", target.get("selected")), False)})
         elif action == "analyze_bin":
-            target.update({"type": "bin", "path": p.get("bin_path") or p.get("path") or target.get("path") or "Master", "recursive": p.get("recursive", target.get("recursive", True))})
+            target.update({"type": "bin", "path": p.get("bin_path") or p.get("path") or target.get("path") or "Master", "recursive": _coerce_bool(p.get("recursive", target.get("recursive")), True)})
         elif action == "analyze_project":
-            target.update({"type": "project", "recursive": p.get("recursive", target.get("recursive", True))})
+            target.update({"type": "project", "recursive": _coerce_bool(p.get("recursive", target.get("recursive")), True)})
         elif action in {"analyze_timeline", "analyze_sequence"}:
             target.update({
                 "type": "sequence",
@@ -24047,7 +24047,7 @@ def _attach_audit_report(result: Dict[str, Any], params: Dict[str, Any]) -> Dict
     if not isinstance(result, dict) or not result.get("success"):
         return result
     result["report_available"] = "pass include_report=true for a Markdown report"
-    flag = params.get("include_report", params.get("includeReport", False))
+    flag = _coerce_bool(params.get("include_report", params.get("includeReport")), False)
     if str(flag).strip().lower() in {"true", "1", "yes", "on"}:
         try:
             result["report_markdown"] = _edit_report_mod.render_any(result)
@@ -24401,7 +24401,7 @@ def edit_engine(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
             target_ratio=p.get("target_ratio") or p.get("targetRatio"),
             min_pause_seconds=float(p.get("min_pause_seconds") or p.get("minPauseSeconds") or _edit_engine_mod.DEFAULT_MIN_PAUSE_SECONDS),
             handle_seconds=float(p.get("handle_seconds") or p.get("handleSeconds") or _edit_engine_mod.DEFAULT_HANDLE_SECONDS),
-            include_audio=str(p.get("include_audio", p.get("includeAudio", True))).strip().lower() not in {"false", "0", "no", "none", "off"},
+            include_audio=str(_coerce_bool(p.get("include_audio", p.get("includeAudio")), True)).strip().lower() not in {"false", "0", "no", "none", "off"},
         )
 
     if action == "generate_captions":
@@ -24430,7 +24430,7 @@ def edit_engine(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
             _result = _captions_mod.generate(
                 _words,
                 fmt=str(p.get("format") or p.get("fmt") or "srt").lower(),
-                with_chapters=str(p.get("with_chapters", p.get("withChapters", False))).strip().lower() in {"true", "1", "yes", "on"},
+                with_chapters=str(_coerce_bool(p.get("with_chapters", p.get("withChapters")), False)).strip().lower() in {"true", "1", "yes", "on"},
                 **_opts,
             )
         except _captions_mod.CaptionError as exc:
@@ -24445,9 +24445,9 @@ def edit_engine(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
         return _edit_engine_mod.plan_transcript_tighten(
             project_root,
             clip_ref=p.get("clip_ref") or p.get("clipRef") or p.get("clip_id"),
-            remove_fillers=str(p.get("remove_fillers", p.get("removeFillers", True))).strip().lower() not in {"false", "0", "no", "off"},
-            remove_false_starts=str(p.get("remove_false_starts", p.get("removeFalseStarts", True))).strip().lower() not in {"false", "0", "no", "off"},
-            collapse_pauses=str(p.get("collapse_pauses", p.get("collapsePauses", True))).strip().lower() not in {"false", "0", "no", "off"},
+            remove_fillers=str(_coerce_bool(p.get("remove_fillers", p.get("removeFillers")), True)).strip().lower() not in {"false", "0", "no", "off"},
+            remove_false_starts=str(_coerce_bool(p.get("remove_false_starts", p.get("removeFalseStarts")), True)).strip().lower() not in {"false", "0", "no", "off"},
+            collapse_pauses=str(_coerce_bool(p.get("collapse_pauses", p.get("collapsePauses")), True)).strip().lower() not in {"false", "0", "no", "off"},
             max_pause=float(p.get("max_pause", p.get("maxPause", _transcript_edit_defaults.DEFAULT_MAX_PAUSE_S))),
             handle=float(p.get("handle", _transcript_edit_defaults.DEFAULT_HANDLE_S)),
             min_cut=float(p.get("min_cut", p.get("minCut", _transcript_edit_defaults.DEFAULT_MIN_CUT_S))),
@@ -24509,7 +24509,7 @@ def edit_engine(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
             min_strip_frames=float(p.get("min_strip_frames") if p.get("min_strip_frames") is not None else p.get("minStripFrames") if p.get("minStripFrames") is not None else _edit_engine_mod.DEFAULT_SILENCE_MIN_STRIP_FRAMES),
             pre_head_frames=float(p.get("pre_head_frames") if p.get("pre_head_frames") is not None else p.get("preHeadFrames") if p.get("preHeadFrames") is not None else _edit_engine_mod.DEFAULT_SILENCE_PRE_HEAD_FRAMES),
             post_tail_frames=float(p.get("post_tail_frames") if p.get("post_tail_frames") is not None else p.get("postTailFrames") if p.get("postTailFrames") is not None else _edit_engine_mod.DEFAULT_SILENCE_POST_TAIL_FRAMES),
-            include_audio=str(p.get("include_audio", p.get("includeAudio", True))).strip().lower() not in {"false", "0", "no", "none", "off"},
+            include_audio=str(_coerce_bool(p.get("include_audio", p.get("includeAudio")), True)).strip().lower() not in {"false", "0", "no", "none", "off"},
         )
 
     if action == "rule_of_six_audit":
@@ -24744,7 +24744,7 @@ def edit_engine(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
                         code="MISSING_CANDIDATES", category="invalid_input")
         return _edit_engine_mod.plan_broll(
             beats=beats, candidates=candidates,
-            allow_reuse=str(p.get("allow_reuse", p.get("allowReuse", False))).strip().lower() in {"true", "1", "yes", "on"},
+            allow_reuse=str(_coerce_bool(p.get("allow_reuse", p.get("allowReuse")), False)).strip().lower() in {"true", "1", "yes", "on"},
         )
 
     if action == "plan_turnover":
@@ -26085,7 +26085,7 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         mpi = tl.GetMediaPoolItem()
         return {"name": mpi.GetName(), "id": mpi.GetUniqueId()} if mpi else {"name": None, "id": None}
     elif action == "get_transcript":
-        return _timeline_transcript(tl, with_timecodes=bool(p.get("with_timecodes")))
+        return _timeline_transcript(tl, with_timecodes=_coerce_bool(p.get("with_timecodes")))
     elif action == "propose_cuts":
         # Dry-run only: detect mechanical cuts (fillers, long pauses, repeats)
         # from the timeline's subtitle transcript. Proposes; never edits.
@@ -27379,7 +27379,7 @@ def _grade_item_snapshot(item, proj=None, p: Optional[Dict[str, Any]] = None):
                 out["errors"].append({"method": method_name, "error": str(exc)})
     try:
         graph = item.GetNodeGraph(p["layer_index"]) if "layer_index" in p else item.GetNodeGraph()
-        out["node_graph"] = _graph_snapshot(graph, include_nodes=p.get("include_nodes", True), max_nodes=p.get("max_nodes", 3))
+        out["node_graph"] = _graph_snapshot(graph, include_nodes=_coerce_bool(p.get("include_nodes"), True), max_nodes=p.get("max_nodes", 3))
     except Exception as exc:
         out["node_graph"] = {"available": False, "error": str(exc)}
     try:
@@ -27432,7 +27432,7 @@ def _probe_color_node_graph(proj, item, p: Dict[str, Any]):
         return err
     snapshot = _graph_snapshot(
         graph,
-        include_nodes=p.get("include_nodes", True),
+        include_nodes=_coerce_bool(p.get("include_nodes"), True),
         max_nodes=p.get("max_nodes", 3),
     )
     snapshot["source"] = source
@@ -27573,7 +27573,7 @@ def _safe_export_lut(item, p: Dict[str, Any]):
     path = p.get("path")
     if not path:
         return _err("path is required")
-    if p.get("require_temp_path", True) and not _grade_temp_path_ok(path):
+    if _coerce_bool(p.get("require_temp_path"), True) and not _grade_temp_path_ok(path):
         return _err("path must be under the system temp directory unless require_temp_path=False")
     folder = os.path.dirname(os.path.abspath(path))
     if folder:
@@ -27602,7 +27602,7 @@ def _safe_apply_drx(proj, item, p: Dict[str, Any]):
         return _err("path is required", code="MISSING_PATH", category="invalid_input")
     if not os.path.isfile(path):
         return _err(f"DRX file not found: {path}", code="DRX_NOT_FOUND", category="invalid_input")
-    if p.get("require_temp_path", True) and not _grade_temp_path_ok(path):
+    if _coerce_bool(p.get("require_temp_path"), True) and not _grade_temp_path_ok(path):
         return _err("DRX path must be under the system temp directory unless require_temp_path=False",
                     code="DRX_PATH_NOT_TEMP", category="invalid_input")
     graph, source, err = _color_graph_from_params(proj, item, p)
@@ -27701,7 +27701,7 @@ def _resolve_trace_plan(tl, plan: Dict[str, Any], p: Dict[str, Any]) -> List[Dic
     """Map each plan match onto a live clip. status: apply | skip (+reason)."""
     min_conf = float(p.get("min_confidence", 0.8))
     tol = int(p.get("start_tolerance", 0))
-    require_temp = p.get("require_temp_path", True)
+    require_temp = _coerce_bool(p.get("require_temp_path"), True)
     live = _live_video_items(tl)
     rows: List[Dict[str, Any]] = []
     for m in plan["matches"]:
@@ -27796,7 +27796,7 @@ def _apply_trace_plan(p: Dict[str, Any]) -> Dict[str, Any]:
         return err
     live_name = tl.GetName()
     plan_tl = (plan.get("target") or {}).get("timeline")
-    if plan_tl and plan_tl != live_name and not p.get("allow_timeline_mismatch"):
+    if plan_tl and plan_tl != live_name and not _coerce_bool(p.get("allow_timeline_mismatch")):
         return _err(
             f"plan targets timeline {plan_tl!r} but the current timeline is {live_name!r}",
             code="TIMELINE_MISMATCH", category="invalid_input",
@@ -27821,7 +27821,7 @@ def _apply_trace_plan(p: Dict[str, Any]) -> Dict[str, Any]:
     grade_mode = p.get("grade_mode", 0)
     version_name = p.get("version_name")
     max_rows = p.get("max_rows", _TRACE_MAX_ROWS_DEFAULT)
-    max_rows = len(public) if p.get("verbose") else max(0, int(max_rows))
+    max_rows = len(public) if _coerce_bool(p.get("verbose")) else max(0, int(max_rows))
     # Entries that deserve a human look: skipped for a reason other than the
     # two bulk ones, or applied on a tie / a partial source-range overlap.
     bulk = {"unmatched", "no-source-grade"}
@@ -28000,7 +28000,7 @@ def _grade_boundary_report(proj, item, p: Dict[str, Any]):
         "color_groups": _color_group_capabilities(proj),
         "gallery": _gallery_capabilities(proj),
     }
-    if p.get("include_timeline_graph", True):
+    if _coerce_bool(p.get("include_timeline_graph"), True):
         report["timeline_graph"] = _probe_color_node_graph(proj, item, {"source": "timeline", "include_nodes": False})
     return report
 
@@ -28487,7 +28487,7 @@ def _propose_grade(proj, p: Dict[str, Any]) -> Dict[str, Any]:
         "frame_paths": list(p.get("frame_paths") or []),
         "validation": {"valid": True, "notes": []},
     }
-    if not p.get("execute"):
+    if not _coerce_bool(p.get("execute")):
         payload["executed"] = False
         return payload
 
@@ -28730,7 +28730,7 @@ def _grade_evidence_base(proj, item, p: Dict[str, Any]) -> Dict[str, Any]:
     # Optional coverage (best-effort; coverage_report needs a media pool item)
     coverage_summary = None
     coverage_warnings_count = 0
-    if p.get("include_coverage", True):
+    if _coerce_bool(p.get("include_coverage"), True):
         mp_item = _timeline_item_media_pool_item(item)
         if mp_item is not None:
             try:
@@ -29298,8 +29298,8 @@ def gallery_stills(action: str, params: Optional[Dict[str, Any]] = None) -> Dict
             return _err("folder_path is required")
         prefix = p.get("prefix", "still")
         fmt = p.get("format", "dpx")
-        delete_after = p.get("delete_after", True)
-        cleanup = p.get("cleanup", True)
+        delete_after = _coerce_bool(p.get("delete_after"), True)
+        cleanup = _coerce_bool(p.get("cleanup"), True)
         # Redirect sandbox/temp paths that Resolve can't access
         folder_path = _resolve_safe_dir(folder_path)
         folder_pre_existed = os.path.isdir(folder_path)
@@ -29697,7 +29697,7 @@ def _fusion_group_settings_export(comp, p: Dict[str, Any]) -> Dict[str, Any]:
             "path": path,
             "group_name": group_name,
             "parse_warning": f"saved, but summary parse failed: {exc}",
-            **_fusion_group_advisory(p.get("include_advisory", False)),
+            **_fusion_group_advisory(_coerce_bool(p.get("include_advisory"), False)),
         }
     return {
         "success": True,
@@ -29705,7 +29705,7 @@ def _fusion_group_settings_export(comp, p: Dict[str, Any]) -> Dict[str, Any]:
         "group_name": group_name,
         "published_inputs": parsed["published_inputs"],
         "input_count": parsed["input_count"],
-        **_fusion_group_advisory(p.get("include_advisory", False)),
+        **_fusion_group_advisory(_coerce_bool(p.get("include_advisory"), False)),
     }
 
 
@@ -29740,7 +29740,7 @@ def _fusion_group_settings_splice_inputs(p: Dict[str, Any]) -> Dict[str, Any]:
         "success": True,
         "dest_path": summary["dest_path"],
         "summary": summary,
-        **_fusion_group_advisory(p.get("include_advisory", False)),
+        **_fusion_group_advisory(_coerce_bool(p.get("include_advisory"), False)),
     }
 
 
@@ -29848,7 +29848,7 @@ def _fusion_group_settings_load(comp, p: Dict[str, Any]) -> Dict[str, Any]:
             "Group preserved. If Edit Controls don't refresh, select the group in "
             "Fusion and use UI Load Settings to remap InstanceInput order."
         ),
-        **_fusion_group_advisory(p.get("include_advisory", False)),
+        **_fusion_group_advisory(_coerce_bool(p.get("include_advisory"), False)),
     }
 
 
@@ -29965,7 +29965,7 @@ def _fusion_probe_group_published_inputs(comp, p: Dict[str, Any]) -> Dict[str, A
         "live_inputs": live_inputs,
         "live_input_count": len(live_inputs),
         "file_summary": file_summary,
-        **_fusion_group_advisory(p.get("include_advisory", False)),
+        **_fusion_group_advisory(_coerce_bool(p.get("include_advisory"), False)),
     }
 
 
@@ -30116,7 +30116,7 @@ def _fusion_comp_snapshot(comp, p: Dict[str, Any]):
         max_tools = int(max_tools)
     except (TypeError, ValueError):
         max_tools = 20
-    include_io = bool(p.get("include_io", False))
+    include_io = _coerce_bool(p.get("include_io"), False)
     for idx in list(tool_list)[:max_tools]:
         tools.append(_fusion_tool_summary(tool_list[idx], include_io=include_io))
     return {
@@ -30166,7 +30166,7 @@ def _safe_add_fusion_tool(comp, p: Dict[str, Any]):
             return _err(f"Failed to add tool '{tool_type}'. Check the tool ID is valid.")
         if p.get("name"):
             tool.SetAttrs({"TOOLS_Name": p["name"]})
-        return _ok(tool=_fusion_tool_summary(tool, include_io=p.get("include_io", True)))
+        return _ok(tool=_fusion_tool_summary(tool, include_io=_coerce_bool(p.get("include_io"), True)))
     finally:
         comp.Unlock()
 
@@ -30178,7 +30178,7 @@ def _probe_fusion_tool(comp, p: Dict[str, Any]):
     tool = comp.FindTool(name)
     if not tool:
         return {"found": False, "tool_name": name}
-    return {"found": True, "tool": _fusion_tool_summary(tool, include_io=p.get("include_io", True))}
+    return {"found": True, "tool": _fusion_tool_summary(tool, include_io=_coerce_bool(p.get("include_io"), True))}
 
 
 def _safe_set_fusion_inputs(comp, p: Dict[str, Any]):
@@ -30202,7 +30202,7 @@ def _safe_set_fusion_inputs(comp, p: Dict[str, Any]):
             else:
                 tool.SetInput(input_name, value)
             row = {"success": True}
-            if p.get("readback", True):
+            if _coerce_bool(p.get("readback"), True):
                 try:
                     row["value"] = _ser(tool.GetInput(input_name, p["time"])) if "time" in p else _ser(tool.GetInput(input_name))
                 except Exception as exc:
@@ -30238,7 +30238,7 @@ def _safe_connect_fusion_tools(comp, p: Dict[str, Any]):
 def _fusion_boundary_report(comp, p: Dict[str, Any]):
     return {
         "capabilities": _fusion_graph_capabilities(comp),
-        "composition": _fusion_comp_snapshot(comp, {**p, "include_io": p.get("include_io", True)}),
+        "composition": _fusion_comp_snapshot(comp, {**p, "include_io": _coerce_bool(p.get("include_io"), True)}),
     }
 
 
@@ -30372,7 +30372,7 @@ def _fusion_add_mask(comp, p: Dict[str, Any]) -> Dict[str, Any]:
 
     x = p.get("x", -1)
     y = p.get("y", -1)
-    readback = bool(p.get("readback", True))
+    readback = _coerce_bool(p.get("readback"), True)
 
     # The lock covers only the STRUCTURAL half (AddTool + rename). The input
     # writes below must run outside it — see _FUSION_VALUE_WRITE_NOTE: a value
@@ -30524,7 +30524,7 @@ def _fusion_set_text_plus(comp, p: Dict[str, Any]) -> Dict[str, Any]:
     if err:
         return err
     input_id = p.get("input_name", "StyledText")
-    readback = bool(p.get("readback", True))
+    readback = _coerce_bool(p.get("readback"), True)
     # No comp.Lock() around a value write — see _FUSION_VALUE_WRITE_NOTE.
     try:
         tool.SetInput(input_id, text)
@@ -31243,7 +31243,7 @@ def fusion_comp(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
         return _ok()
 
     elif action == "end_undo":
-        comp.EndUndo(p.get("keep", True))
+        comp.EndUndo(_coerce_bool(p.get("keep"), True))
         return _ok()
 
     # --- Node Layout (FlowView) ---
@@ -31495,7 +31495,7 @@ def fuse_plugin(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
         d = _fuses_dir()
         if not os.path.isdir(d):
             return {"fuses": []}
-        show_all = bool(p.get("all", False))
+        show_all = _coerce_bool(p.get("all"), False)
         out = []
         for fn in sorted(os.listdir(d)):
             if not fn.endswith(".fuse"):
@@ -31874,7 +31874,7 @@ def dctl(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]
         root = root if sd is None else os.path.join(root, sd)
         if not os.path.isdir(root):
             return {"files": []}
-        show_all = bool(p.get("all", False))
+        show_all = _coerce_bool(p.get("all"), False)
         out = []
         for fn in sorted(os.listdir(root)):
             if not fn.lower().endswith(_DCTL_VALID_EXT):
@@ -32295,7 +32295,7 @@ def _safe_install_extension(p: Dict[str, Any]) -> Dict[str, Any]:
     if err:
         return err
     name = p.get("name") or _extension_template_name(extension_type, p.get("kind", "lifecycle"))
-    invalid = _extension_safe_name(name, allow_non_mcp_name=p.get("allow_non_mcp_name", False))
+    invalid = _extension_safe_name(name, allow_non_mcp_name=_coerce_bool(p.get("allow_non_mcp_name"), False))
     if invalid:
         return invalid
     source = p.get("source")
@@ -32322,7 +32322,7 @@ def _safe_install_extension(p: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(source, str) or not source.strip():
         return _err("source must be a non-empty string")
     marker = {"fuse": _FUSE_MARKER, "dctl": _DCTL_MARKER, "script": _SCRIPT_MARKER}[extension_type]
-    if p.get("require_marker", True) and not _source_has_marker(source, marker):
+    if _coerce_bool(p.get("require_marker"), True) and not _source_has_marker(source, marker):
         return _err(f"source must include {marker} unless require_marker=False")
     if _coerce_bool(p.get("dry_run")):
         return _ok(
@@ -32335,7 +32335,7 @@ def _safe_install_extension(p: Dict[str, Any]) -> Dict[str, Any]:
             }),
         )
     if extension_type == "fuse":
-        return fuse_plugin("install", {"name": name, "source": source, "overwrite": p.get("overwrite", False)})
+        return fuse_plugin("install", {"name": name, "source": source, "overwrite": _coerce_bool(p.get("overwrite"), False)})
     if extension_type == "dctl":
         category = p.get("category") or dctl_templates.KIND_CATEGORY.get(kind, "lut")
         return dctl("install", {
@@ -32344,7 +32344,7 @@ def _safe_install_extension(p: Dict[str, Any]) -> Dict[str, Any]:
             "category": category,
             "subdir": p.get("subdir"),
             "ext": p.get("ext", ".dctl"),
-            "overwrite": p.get("overwrite", False),
+            "overwrite": _coerce_bool(p.get("overwrite"), False),
         })
     language = _normalize_script_language(p.get("language", options.get("language", "lua")))
     category = p.get("script_category", p.get("category", "Utility"))
@@ -32362,7 +32362,7 @@ def _safe_remove_extension(p: Dict[str, Any]) -> Dict[str, Any]:
     if err:
         return err
     name = p.get("name")
-    invalid = _extension_safe_name(name, allow_non_mcp_name=p.get("allow_non_mcp_name", False))
+    invalid = _extension_safe_name(name, allow_non_mcp_name=_coerce_bool(p.get("allow_non_mcp_name"), False))
     if invalid:
         return invalid
     if extension_type == "fuse":
@@ -32402,7 +32402,7 @@ def _safe_remove_extension(p: Dict[str, Any]) -> Dict[str, Any]:
         marker = _SCRIPT_MARKER
     if not os.path.isfile(path):
         return _err(f"No {extension_type} extension named '{name}' at {path}")
-    if p.get("require_marker", True) and not _file_has_marker(path, marker):
+    if _coerce_bool(p.get("require_marker"), True) and not _file_has_marker(path, marker):
         return _err(f"Refusing to remove unmarked file at {path}; pass require_marker=False only if you intend this")
     if _coerce_bool(p.get("dry_run")):
         return _ok(would_remove=True, extension_type=extension_type, name=name, path=path)
@@ -32429,19 +32429,19 @@ def _probe_fuse_lifecycle(p: Dict[str, Any]) -> Dict[str, Any]:
     if isinstance(source, str):
         out["has_marker"] = _source_has_marker(source, _FUSE_MARKER)
         out["validation"] = fuse_plugin("validate", {"source": source})
-    if p.get("include_template_matrix"):
+    if _coerce_bool(p.get("include_template_matrix")):
         out["template_matrix"] = _extension_template_matrix()["fuse"]
-    if p.get("install"):
+    if _coerce_bool(p.get("install")):
         install = script_plugin("safe_install_extension", {
             "extension_type": "fuse",
             "name": name,
             "source": source,
-            "overwrite": p.get("overwrite", True),
+            "overwrite": _coerce_bool(p.get("overwrite"), True),
         })
         out["install"] = install
         out["read"] = fuse_plugin("read", {"name": name}) if install.get("success") else None
         out["list"] = fuse_plugin("list")
-        if p.get("cleanup", True):
+        if _coerce_bool(p.get("cleanup"), True):
             out["remove"] = script_plugin("safe_remove_extension", {"extension_type": "fuse", "name": name})
     return out
 
@@ -32466,29 +32466,29 @@ def _probe_dctl_lifecycle(p: Dict[str, Any]) -> Dict[str, Any]:
     if isinstance(source, str):
         out["has_marker"] = _source_has_marker(source, _DCTL_MARKER)
         out["validation"] = dctl("validate", {"source": source})
-    if p.get("include_template_matrix"):
+    if _coerce_bool(p.get("include_template_matrix")):
         out["template_matrix"] = _extension_template_matrix()["dctl"]
-    if p.get("install"):
+    if _coerce_bool(p.get("install")):
         install = script_plugin("safe_install_extension", {
             "extension_type": "dctl",
             "name": name,
             "source": source,
             "category": category,
             "subdir": subdir,
-            "overwrite": p.get("overwrite", True),
+            "overwrite": _coerce_bool(p.get("overwrite"), True),
         })
         out["install"] = install
         out["read"] = dctl("read", {"name": name, "category": category, "subdir": subdir}) if install.get("success") else None
         out["list"] = dctl("list", {"category": category, "subdir": subdir})
-        if p.get("refresh_luts") and category == "lut":
+        if _coerce_bool(p.get("refresh_luts")) and category == "lut":
             out["refresh_luts"] = project_settings("refresh_luts")
-        if p.get("cleanup", True):
+        if _coerce_bool(p.get("cleanup"), True):
             out["remove"] = script_plugin("safe_remove_extension", {"extension_type": "dctl", "name": name, "category": category, "subdir": subdir})
     return out
 
 
 def _probe_script_lifecycle(p: Dict[str, Any]) -> Dict[str, Any]:
-    if p.get("execute"):
+    if _coerce_bool(p.get("execute")):
         # Refused rather than ignored: silently skipping it would report a
         # lifecycle probe as complete for a step it never ran.
         return _err(
@@ -32518,21 +32518,21 @@ def _probe_script_lifecycle(p: Dict[str, Any]) -> Dict[str, Any]:
     if isinstance(source, str):
         out["has_marker"] = _source_has_marker(source, _SCRIPT_MARKER)
         out["validation"] = script_plugin("validate", {"source": source, "language": language})
-    if p.get("include_template_matrix"):
+    if _coerce_bool(p.get("include_template_matrix")):
         out["template_matrix"] = _extension_template_matrix()["script"]
-    if p.get("install"):
+    if _coerce_bool(p.get("install")):
         install = script_plugin("safe_install_extension", {
             "extension_type": "script",
             "name": name,
             "source": source,
             "category": category,
             "language": language,
-            "overwrite": p.get("overwrite", True),
+            "overwrite": _coerce_bool(p.get("overwrite"), True),
         })
         out["install"] = install
         out["read"] = script_plugin("read", {"name": name, "category": category, "language": language}) if install.get("success") else None
         out["list"] = script_plugin("list", {"category": category, "language": language})
-        if p.get("cleanup", True):
+        if _coerce_bool(p.get("cleanup"), True):
             out["remove"] = script_plugin("safe_remove_extension", {
                 "extension_type": "script",
                 "name": name,
@@ -32543,7 +32543,7 @@ def _probe_script_lifecycle(p: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _extension_boundary_report(p: Dict[str, Any]) -> Dict[str, Any]:
-    include_matrix = p.get("include_template_matrix", True)
+    include_matrix = _coerce_bool(p.get("include_template_matrix"), True)
     return {
         "capabilities": _extension_capabilities(),
         "refresh_restart": {
@@ -32664,7 +32664,7 @@ def script_plugin(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
         if language_filter and language_filter not in _SCRIPT_VALID_LANG:
             return _err(f"Invalid language '{language_filter}'. "
                         f"Valid: {list(_SCRIPT_VALID_LANG)}; aliases: ['python', 'python3']")
-        show_all = bool(p.get("all", False))
+        show_all = _coerce_bool(p.get("all"), False)
 
         paths = get_resolve_plugin_paths()
         if category:
@@ -32887,7 +32887,7 @@ def knowledge(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str,
             return _ok(**_knowledge_mod.get(
                 str(p["topic"]),
                 section=str(section) if section else None,
-                inline=bool(p.get("inline", True)),
+                inline=_coerce_bool(p.get("inline"), True),
             ))
         if action == "search":
             err, _clean = _validate_params(p, {

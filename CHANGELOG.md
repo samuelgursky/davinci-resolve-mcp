@@ -2,6 +2,54 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.8.20 — every boolean param honours `"false"`
+
+### Fixed
+
+- **Boolean tool params read with bare truthiness, file-wide.** The last four
+  releases fixed this one key at a time (`background`, `create_missing`, `dry_run`,
+  `include_*`). This release sweeps the rest: 126 `p.get("k", True|False)` /
+  `bool(p.get(...))` reads and 36 bare `if p.get("k"):` tests of flag params in
+  `src/server.py`, plus 9 reads in `src/utils` (multicam setup, Fuse/DCTL template
+  options, the batch-analysis `auto_build_index`). A caller sending `"false"` (or
+  `"no"`, `"0"`, `"off"`) got the opposite of what they asked for. The cases that
+  mattered:
+  - `override_governance="false"` skipped AI-governance enforcement in `enforce` mode.
+  - `project_manager(action="close", stop_render="false")` stopped a running render
+    and closed the project instead of refusing.
+  - `timeline_item_color(action="propose_grade", execute="false")` took the execute path.
+  - `timeline_markers(action="clear_annotations_by_scope", clear_flags="false" /
+    clear_clip_color="false")` cleared them, and `media_pool_item(action="open_in_viewer",
+    clear_marks="false")` cleared the clip's mark in/out.
+  - `timeline_item_color(action="apply_trace_plan", allow_timeline_mismatch="false")` allowed a mismatched timeline.
+  - The extension lifecycle probes installed on `install="false"` and removed the
+    install on `cleanup="false"`; `grab_and_export` deleted the grabbed still from the
+    Gallery album on `delete_after="false"` and discarded its staging files on
+    `cleanup="false"`; the export round-trip deleted the
+    imported timeline on `cleanup_imported="false"`.
+  Every read keeps its default when the key is omitted, `None`, or an unrecognized
+  string. One change for explicit `null`: a key whose default is `True` (e.g.
+  `overwrite` in the lifecycle probes, `require_temp_path`) now reads `null` as that
+  default instead of as false.
+- **Correction to an earlier claim.** `allow_non_mcp_name="false"` and
+  `overwrite="false"` were *not* bypasses: `_require_disposable_project_name`,
+  `_extension_safe_name` and the `fuse_plugin`/`dctl` install actions already coerce at
+  the point of use. Their handler reads are coerced now for consistency, and tests pin
+  that a real `False` reaches the next layer.
+- Left as-is on purpose: `from_preset` (a preset name), `reference_movie` (a path), the
+  server-set `_setup_defaults_applied` marker, and `generate_speech`'s
+  `AddToTimeline`, which is passed verbatim to Resolve.
+
+### Tests
+
+- `tests/test_bool_param_coercion.py`: behavioural guards for governance override,
+  close-during-render, `propose_grade` execute, annotation clearing, the Fuse probe's
+  install/cleanup, Fuse/DCTL template flags, and the `allow_non_mcp_name` /
+  `overwrite` contracts. 47 subtests fail on the previous code.
+- Two AST ratchets on `src/server.py`: every `x.get("k", True|False)` sits inside a
+  coercer (fallback chains included), and a key coerced anywhere in the file is never
+  tested with bare truthiness on caller input.
+
 ## What's New in v4.8.19 — generated OFX nodes bind their params on Resolve 21.0
 
 ### Fixed

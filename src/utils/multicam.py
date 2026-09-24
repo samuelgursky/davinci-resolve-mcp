@@ -10,6 +10,8 @@ from __future__ import annotations
 import re
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from src.utils.bool_params import coerce_bool
+
 
 FindClip = Callable[[Any, str], Any]
 
@@ -323,8 +325,8 @@ def build_multicam_setup_plan(root: Any, params: Dict[str, Any], find_clip: Find
     if not sync_mode:
         return None, _err("sync_mode must be stack_start, record_frame, or source_timecode")
 
-    include_video = bool(params.get("include_video", params.get("includeVideo", True)))
-    include_audio = bool(params.get("include_audio", params.get("includeAudio", False)))
+    include_video = coerce_bool(params.get("include_video", params.get("includeVideo")), True)
+    include_audio = coerce_bool(params.get("include_audio", params.get("includeAudio")), False)
     if not include_video and not include_audio:
         return None, _err("At least one of include_video or include_audio must be true")
     audio_mode = _normalize_audio_mode(params.get("audio_track_mode", params.get("audioTrackMode")), include_audio)
@@ -347,7 +349,7 @@ def build_multicam_setup_plan(root: Any, params: Dict[str, Any], find_clip: Find
     angles: List[Dict[str, Any]] = []
     max_video_track = 0
     max_audio_track = 0
-    allow_negative = bool(params.get("allow_negative_record_frame", params.get("allowNegativeRecordFrame", False)))
+    allow_negative = coerce_bool(params.get("allow_negative_record_frame", params.get("allowNegativeRecordFrame")), False)
     record_frame_mode = params.get("record_frame_mode", params.get("recordFrameMode", "relative"))
 
     for index, raw in enumerate(raw_angles):

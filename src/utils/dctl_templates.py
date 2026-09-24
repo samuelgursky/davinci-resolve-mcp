@@ -12,6 +12,8 @@ Resolve re-scan its LUT directory. ACES DCTLs are scanned only at startup.
 
 from typing import Any, Dict, List, Optional
 
+from src.utils.bool_params import coerce_bool
+
 
 def header(name: str, kind: str) -> str:
     """Marker comment used by the dctl tool's `list` action."""
@@ -264,7 +266,7 @@ def aces_idt(name: str, options: Optional[Dict[str, Any]] = None) -> str:
     Install requires a Resolve restart. See docs/notes/dctl-notes.md → "DCTL And ACES".
     """
     options = options or {}
-    parametric = bool(options.get("parametric", False))
+    parametric = coerce_bool(options.get("parametric"), False)
     body = options.get("body") or (
         "    return make_float3(p_R, p_G, p_B);"
     )
@@ -290,7 +292,7 @@ def aces_odt(name: str, options: Optional[Dict[str, Any]] = None) -> str:
     Resolve which side of the pipeline this transform belongs to.
     """
     options = options or {}
-    parametric = bool(options.get("parametric", False))
+    parametric = coerce_bool(options.get("parametric"), False)
     body = options.get("body") or (
         "    return make_float3(p_R, p_G, p_B);"
     )

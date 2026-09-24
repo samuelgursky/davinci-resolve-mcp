@@ -18,6 +18,8 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from src.utils.bool_params import coerce_bool
+
 from src.utils.media_analysis import (
     ANALYSIS_VERSION,
     build_analysis_index,
@@ -641,7 +643,7 @@ def _finish_job_if_complete(
     _event(conn, job_id, "info", "Batch job completed", counts)
     conn.commit()
     summarize_reports(root)
-    if params.get("auto_build_index", True) and not index_already_refreshed:
+    if coerce_bool(params.get("auto_build_index"), True) and not index_already_refreshed:
         _auto_build_index(conn, root, job_id, "Analysis index rebuilt")
 
 
@@ -781,7 +783,7 @@ def run_batch_job_slice(
             conn.commit()
 
         index_refreshed = False
-        if params.get("auto_build_index", True) and any(
+        if coerce_bool(params.get("auto_build_index"), True) and any(
             row.get("status") in {"succeeded", "skipped"} for row in processed
         ):
             _auto_build_index(conn, root, job_id, "Analysis index refreshed after batch slice")
