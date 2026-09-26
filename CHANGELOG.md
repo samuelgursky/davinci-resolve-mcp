@@ -2,6 +2,31 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.8.22 — the control panel port check cannot hang on a wedged lsof
+
+### Fixed
+
+- **`open_control_panel` could block forever behind an unkillable `lsof`.** The
+  port-owner check ran `lsof -iTCP:<port> -sTCP:LISTEN -t` through
+  `subprocess.run(timeout=3)`. On macOS, lsof wedges in uninterruptible kernel wait
+  (state `U` in `ps`) when a network mount is stale, and a process in that state
+  ignores SIGKILL. `subprocess.run`'s timeout path kills the child and then waits
+  for it, so the 3-second timeout never returned: the caller hung with the child.
+  Measured on 2026-09-26 on the release machine, where 489 lsof processes had been
+  stuck for 12 hours and the offline suite sat in this function for 13 minutes.
+  `_port_owner_pid` now starts lsof in its own session, polls to the deadline, and
+  on expiry sends SIGKILL and abandons the child instead of joining it. stdout is
+  read only once `poll()` reports an exit, and the pipe is closed on every path.
+  A missing lsof is still `None`, not an exception.
+
+### Tests
+
+- `tests/test_port_owner_pid.py`: a fake child whose `poll()` never returns and
+  whose `kill()` is a no-op yields `None` within the deadline with `wait()` and
+  `communicate()` never called and the pipe closed; an exited child still yields
+  its PID; a missing binary yields `None`; and a real subprocess that ignores
+  SIGTERM, with `kill` patched out, is left running rather than joined.
+
 ## What's New in v4.8.21 — timeline duration no longer overcounts by one frame
 
 ### Fixed

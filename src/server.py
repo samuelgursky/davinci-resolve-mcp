@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 377-tool granular server instead
 """
 
-VERSION = "4.8.21"
+VERSION = "4.8.22"
 
 import base64
 import os
@@ -17750,24 +17750,57 @@ def _control_panel_remote_version(host: str, port: int, timeout: float = 1.5) ->
     return _control_panel_probe(host, port, timeout).get("version")
 
 
-def _port_owner_pid(host: str, port: int) -> Optional[int]:
+def _port_owner_pid(host: str, port: int, timeout: float = 3.0) -> Optional[int]:
     """Return PID of the process LISTENing on `port`, or None if free/unknown.
 
     Uses lsof with `-iTCP:<port> -sTCP:LISTEN -t`: one PID per line, no header.
     Host is informational only — lsof matches any local LISTEN socket on that
     port (which is what we care about for port-collision detection).
+
+    The deadline is enforced by polling, not by ``subprocess.run(timeout=)``.
+    On macOS, lsof can wedge in uninterruptible kernel wait (state ``U`` in
+    ``ps``) when a network mount is stale, and a child in that state ignores
+    SIGKILL. ``subprocess.run``'s timeout path kills the child and then WAITS
+    for it, so the caller hung with it — measured 2026-09-26 on the release
+    machine: 489 lsof processes stuck in ``U`` for 12 h, and the offline suite
+    blocked here for 13 min. Now the child is killed on expiry and abandoned
+    rather than joined; stdout is read only once ``poll()`` says it exited.
     """
     import subprocess
+    import time as _t
     try:
-        result = subprocess.run(
+        proc = subprocess.Popen(
             ["lsof", "-nP", "-iTCP:" + str(port), "-sTCP:LISTEN", "-t"],
-            capture_output=True, timeout=3, text=True, encoding="utf-8",
-            errors="replace", check=False,
-            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL, start_new_session=True,
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except OSError:
         return None
-    for line in (result.stdout or "").splitlines():
+    deadline = _t.monotonic() + max(0.0, float(timeout))
+    out = b""
+    try:
+        while proc.poll() is None:
+            if _t.monotonic() >= deadline:
+                try:
+                    proc.kill()
+                except OSError:
+                    pass
+                # Deliberately no wait()/communicate(): a wedged lsof never
+                # exits, and joining it is exactly the hang this guards against.
+                return None
+            _t.sleep(0.05)
+        if proc.stdout is not None:
+            try:
+                out = proc.stdout.read() or b""
+            except OSError:
+                out = b""
+    finally:
+        if proc.stdout is not None:
+            try:
+                proc.stdout.close()
+            except OSError:
+                pass
+    for line in out.decode("utf-8", "replace").splitlines():
         line = line.strip()
         if line.isdigit():
             return int(line)
