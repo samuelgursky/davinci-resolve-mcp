@@ -65,7 +65,7 @@ def get_current_timeline() -> Dict[str, Any]:
             "width": current_timeline.GetSetting("timelineResolutionWidth"),
             "height": current_timeline.GetSetting("timelineResolutionHeight")
         },
-        "duration": current_timeline.GetEndFrame() - current_timeline.GetStartFrame() + 1
+        "duration": current_timeline.GetEndFrame() - current_timeline.GetStartFrame()
     }
     
     return result

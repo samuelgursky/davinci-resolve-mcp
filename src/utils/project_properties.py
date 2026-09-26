@@ -592,7 +592,7 @@ def get_project_info(project_obj) -> Dict[str, Any]:
                 timeline_info = {
                     "name": timeline.GetName(),
                     "isCurrent": timeline.GetName() == current_timeline_name,
-                    "duration": timeline.GetEndFrame() - timeline.GetStartFrame() + 1
+                    "duration": timeline.GetEndFrame() - timeline.GetStartFrame()
                 }
                 project_info["timelines"].append(timeline_info)
         
