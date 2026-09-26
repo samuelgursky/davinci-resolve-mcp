@@ -2006,6 +2006,30 @@ API_TRUTH: List[Dict[str, Any]] = [
         "tags": ["timeline", "edit", "off-by-one", "readback"],
     },
     {
+        "symbol": "Timeline.GetEndFrame (exclusive bound)",
+        "object": "Timeline",
+        "signature": "() -> int",
+        "reality": "GetEndFrame() is an EXCLUSIVE bound, one past the last "
+                   "frame: a timeline's frame count is "
+                   "GetEndFrame() - GetStartFrame(), not that plus one. "
+                   "Measured live on Studio 19.1.3.7 (2026-09-26): a "
+                   "timeline whose only full-length item is a 32742-frame "
+                   "clip (media-pool 'Frames' 32742, 'End' 32741) reads "
+                   "GetStartFrame() 0 / GetEndFrame() 32742, and that item's "
+                   "TimelineItem.GetEnd() is also 32742 - the same half-open "
+                   "convention as clipInfo endFrame above. Until v4.8.21 two "
+                   "readers here (granular get_current_timeline and "
+                   "get_project_info's per-timeline duration) added 1 and "
+                   "reported 601 frames for a 600-frame timeline while every "
+                   "other duration path in the server did not (PR #269).",
+        "recommended": "duration_frames = GetEndFrame() - GetStartFrame(). "
+                       "The last frame index is GetEndFrame() - 1. Apply the "
+                       "same rule to TimelineItem.GetEnd(): an item occupies "
+                       "[GetStart(), GetEnd()).",
+        "tags": ["timeline", "off-by-one", "readback", "duration"],
+        "verified_on": "DaVinci Resolve Studio 19.1.3.7",
+    },
+    {
         "symbol": "MediaPool.ImportTimelineFromFile (internal sequence name overrides timelineName)",
         "object": "MediaPool",
         "signature": "(filePath, {timelineName, importSourceClips, ...}) -> Timeline",

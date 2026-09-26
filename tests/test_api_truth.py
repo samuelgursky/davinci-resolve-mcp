@@ -50,6 +50,20 @@ class LookupTest(unittest.TestCase):
         self.assertIn("off-by-one", entry["tags"])
         self.assertIn("exclusive", entry["reality"].lower())
 
+    def test_timeline_endframe_exclusive_bound_recorded(self):
+        # Timeline.GetEndFrame() is one past the last frame, so a timeline's
+        # frame count is end - start. Two readers shipped end - start + 1
+        # until v4.8.21 (PR #269); the ledger must say which it is.
+        hits = lookup_api_truth("GetEndFrame")
+        entry = next(
+            (e for e in hits if e["symbol"].startswith("Timeline.GetEndFrame")),
+            None,
+        )
+        self.assertIsNotNone(entry)
+        self.assertIn("off-by-one", entry["tags"])
+        self.assertIn("exclusive", entry["reality"].lower())
+        self.assertIn("GetEndFrame() - GetStartFrame()", entry["recommended"])
+
     def test_entries_well_formed(self):
         for e in API_TRUTH:
             self.assertIn("symbol", e)

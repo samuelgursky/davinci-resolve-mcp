@@ -2,6 +2,35 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.8.21 — timeline duration no longer overcounts by one frame
+
+### Fixed
+
+- **Two timeline-duration readers reported one frame too many.** ([#269](https://github.com/samuelgursky/davinci-resolve-mcp/pull/269), @Dev-next-gen)
+  The granular `get_current_timeline` and `get_project_info`'s per-timeline
+  `duration` computed `GetEndFrame() - GetStartFrame() + 1`, while the compound
+  server, `brain_edits` and `render_stress` all use `GetEndFrame() - GetStartFrame()`
+  for the same timeline. `GetEndFrame()` is one past the last frame, so the `+ 1`
+  counted a frame that does not exist: a 600-frame timeline read back as 601. Both
+  readers now agree with the rest of the server.
+
+### Documentation
+
+- **`api_truth` records `Timeline.GetEndFrame` as an exclusive bound.** Measured
+  live on Studio 19.1.3.7 while reviewing #269: a timeline whose only full-length
+  item is a 32742-frame clip reads start 0 / end 32742, and the item's
+  `GetEnd()` is also 32742. The entry sits beside the existing
+  `AppendToTimeline clipInfo endFrame` entry, which documents the same half-open
+  convention on the write side, so the frame-count rule is now findable from
+  either direction.
+
+### Tests
+
+- `tests/test_timeline_duration.py` (from the PR): both readers return
+  `end - start` for a stubbed 86400..87000 timeline; fails on v4.8.20 with 601.
+- `tests/test_api_truth.py`: the new ledger entry is findable by `GetEndFrame`,
+  carries the `off-by-one` tag, and states the `end - start` rule.
+
 ## What's New in v4.8.20 — every boolean param honours `"false"`
 
 ### Fixed
