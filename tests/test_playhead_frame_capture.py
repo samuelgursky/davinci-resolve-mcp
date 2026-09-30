@@ -6,6 +6,7 @@ Color-page switch, max_width, and a named timeline — plus the invariant that a
 capture is a *read*: page, playhead, current timeline, gallery, and the temp
 directory all come back the way the caller left them.
 """
+import asyncio
 import base64
 import json
 import os
@@ -15,6 +16,7 @@ from unittest import mock
 from mcp.server.fastmcp import Image
 
 import src.server as s
+from src.utils import page_lock
 
 
 class _FakeResolve:
@@ -31,6 +33,29 @@ class _FakeResolve:
         if self.switch_ok:
             self.page = page
         return self.switch_ok
+
+
+class _SettlingResolve(_FakeResolve):
+    """A Resolve whose page switch does not take straight away (issue #270).
+
+    `refusals` OpenPage calls return False and change nothing before the switch
+    starts working; `lies=True` makes OpenPage return True while staying put.
+    """
+
+    def __init__(self, page="edit", refusals=0, lies=False):
+        super().__init__(page=page)
+        self.refusals = refusals
+        self.lies = lies
+
+    def OpenPage(self, page):
+        self.opened.append(page)
+        if self.lies:
+            return True
+        if self.refusals > 0:
+            self.refusals -= 1
+            return False
+        self.page = page
+        return True
 
 
 def _fake_timeline(resolve, width=4, height=2, name="TL"):
@@ -162,7 +187,11 @@ class CapturePreviewTest(unittest.TestCase):
         proj = mock.Mock()
         proj.GetTimelineCount.return_value = 1
         proj.GetTimelineByIndex.return_value = other
-        proj.SetCurrentTimeline.return_value = True
+        # The switch is verified by readback, so the fake has to honour it: a
+        # project that says True and stays put is reported as a failed restore.
+        active = {"tl": current}
+        proj.GetCurrentTimeline.side_effect = lambda: active["tl"]
+        proj.SetCurrentTimeline.side_effect = lambda tl: active.update(tl=tl) or True
         out, _, _ = self._capture({"timeline_name": "Other"}, resolve=resolve, tl=current, proj=proj)
         self.assertIsInstance(out, Image)
         self.assertEqual(
@@ -236,20 +265,39 @@ class CaptureFullTest(unittest.TestCase):
         self.assertEqual(out["error"]["code"], "EXPORT_STILL_FAILED")
 
 
-class CaptureRenderTest(unittest.TestCase):
-    """quality='frame' — the default, and the only frame-accurate route."""
+def _restored_range(calls):
+    """The last SetRenderSettings payload that carried a render range."""
+    return [c for c in calls if "MarkIn" in c][-1]
+
+
+class _RenderCapture:
+    """Drives quality='frame' against a fake project that renders one file.
+
+    The fake behaves the way Studio 19.1.3.7 was measured to (2026-09-30):
+    GetCurrentRenderMode — a getter — switches Resolve to the Deliver page, and
+    a SetRenderSettings payload carrying an empty CustomName is refused WHOLE,
+    range included. `proj.render_range` is the range Resolve would actually
+    hold, which is what the next render job inherits.
+    """
 
     def _capture(self, params, rendering=False, job="job-1", status="Complete",
-                 write=True, ffmpeg="/usr/bin/ffmpeg", marks=None, mode=1, mode_switch=True):
+                 write=True, ffmpeg="/usr/bin/ffmpeg", marks=None, mode=1, mode_switch=True,
+                 resolve=None, range_restore_ok=True):
         """Returns (result, project mock, list of SetRenderSettings payloads)."""
-        resolve = _FakeResolve(page="color")
+        resolve = resolve or _FakeResolve(page="color")
         tl = _fake_timeline(resolve)
         tl.GetStartFrame.return_value = 86400
         tl.GetEndFrame.return_value = 86544
         tl.GetMarkInOut.return_value = marks if marks is not None else {}
         proj = mock.Mock()
+        proj.render_range = None
         proj.IsRenderingInProgress.side_effect = [rendering, False]
-        proj.GetCurrentRenderMode.return_value = mode
+
+        def _mode():
+            resolve.page = "deliver"
+            return mode
+
+        proj.GetCurrentRenderMode.side_effect = _mode
         proj.SetCurrentRenderMode.return_value = mode_switch
         proj.GetCurrentRenderFormatAndCodec.return_value = {"format": "mov", "codec": "H.264"}
         proj.GetRenderCodecs.return_value = {"JPEG": "YUV420_8"}
@@ -266,12 +314,22 @@ class CaptureRenderTest(unittest.TestCase):
 
         def _settings(payload):
             calls.append(dict(payload))
+            if payload.get("CustomName") == "":
+                return False  # refused whole: nothing below is applied
             if payload.get("CustomName"):
                 target["dir"] = payload["TargetDir"]
                 target["name"] = payload["CustomName"]
+            elif "MarkIn" in payload and not range_restore_ok:
+                return False
+            if "MarkIn" in payload:
+                proj.render_range = (payload["SelectAllFrames"], payload["MarkIn"],
+                                     payload["MarkOut"])
             return True
 
         def _start(jobs, interactive=False, **kwargs):
+            # Rendering pulls Resolve onto the Deliver page, whatever page the
+            # caller was on.
+            resolve.page = "deliver"
             # Resolve writes the file during the render, and appends the frame
             # number to CustomName.
             if write and target:
@@ -285,9 +343,14 @@ class CaptureRenderTest(unittest.TestCase):
         with mock.patch.object(s, "get_resolve", return_value=resolve), \
              mock.patch.object(s, "_get_tl", return_value=(proj, tl, None)), \
              mock.patch.object(s.shutil, "which", return_value=ffmpeg), \
-             mock.patch.object(s, "_ffmpeg_scale_to_bytes", return_value=(b"\xff\xd8scaled", None)):
+             mock.patch.object(s, "_ffmpeg_scale_to_bytes", return_value=(b"\xff\xd8scaled", None)), \
+             mock.patch.object(page_lock.time, "sleep"):
             out = s.timeline_frame("capture", params)
         return out, proj, calls
+
+
+class CaptureRenderTest(_RenderCapture, unittest.TestCase):
+    """quality='frame' — the default, and the only frame-accurate route."""
 
     def test_render_is_the_default_quality(self):
         out, proj, _ = self._capture({})
@@ -344,18 +407,26 @@ class CaptureRenderTest(unittest.TestCase):
         # left pinned to the captured frame.
         out, _, calls = self._capture({"frame": 86424})
         self.assertIsInstance(out, Image)
-        self.assertTrue(calls[-1]["SelectAllFrames"])
-        self.assertEqual(calls[-1]["MarkIn"], 86400)
-        self.assertEqual(calls[-1]["MarkOut"], 86544)
+        self.assertTrue(_restored_range(calls)["SelectAllFrames"])
+        self.assertEqual(_restored_range(calls)["MarkIn"], 86400)
+        self.assertEqual(_restored_range(calls)["MarkOut"], 86544)
+
+    def test_the_range_resolve_holds_afterwards_is_not_the_captured_frame(self):
+        # The range restore used to share a payload with CustomName "", which
+        # Resolve refuses whole (measured on 19.1.3.7), so the range stayed
+        # pinned to the captured frame and the next render job inherited it.
+        out, proj, _ = self._capture({"frame": 86424})
+        self.assertIsInstance(out, Image)
+        self.assertEqual(proj.render_range, (True, 86400, 86544))
 
     def test_an_existing_mark_range_is_restored(self):
         out, _, calls = self._capture(
             {"frame": 86424}, marks={"video": {"in": 86410, "out": 86500},
                                      "audio": {"in": 86410, "out": 86500}})
         self.assertIsInstance(out, Image)
-        self.assertFalse(calls[-1]["SelectAllFrames"])
-        self.assertEqual(calls[-1]["MarkIn"], 86410)
-        self.assertEqual(calls[-1]["MarkOut"], 86500)
+        self.assertFalse(_restored_range(calls)["SelectAllFrames"])
+        self.assertEqual(_restored_range(calls)["MarkIn"], 86410)
+        self.assertEqual(_restored_range(calls)["MarkOut"], 86500)
 
     def test_a_relative_mark_range_is_offset_by_the_timeline_start(self):
         # GetMarkInOut reports marks relative to the timeline start (Resolve's
@@ -366,22 +437,22 @@ class CaptureRenderTest(unittest.TestCase):
             {"frame": 86424}, marks={"video": {"in": 10, "out": 100},
                                      "audio": {"in": 10, "out": 100}})
         self.assertIsInstance(out, Image)
-        self.assertFalse(calls[-1]["SelectAllFrames"])
-        self.assertEqual(calls[-1]["MarkIn"], 86410)
-        self.assertEqual(calls[-1]["MarkOut"], 86500)
+        self.assertFalse(_restored_range(calls)["SelectAllFrames"])
+        self.assertEqual(_restored_range(calls)["MarkIn"], 86410)
+        self.assertEqual(_restored_range(calls)["MarkOut"], 86500)
 
     def test_a_half_set_mark_range_is_not_treated_as_a_range(self):
         # Only an in point: restoring it as a range would invent an out point.
         out, _, calls = self._capture({"frame": 86424},
                                       marks={"video": {"in": 86410}})
         self.assertIsInstance(out, Image)
-        self.assertTrue(calls[-1]["SelectAllFrames"])
-        self.assertEqual(calls[-1]["MarkIn"], 86400)
+        self.assertTrue(_restored_range(calls)["SelectAllFrames"])
+        self.assertEqual(_restored_range(calls)["MarkIn"], 86400)
 
     def test_an_unreadable_mark_range_does_not_break_the_capture(self):
         out, _, calls = self._capture({"frame": 86424}, marks="not a dict")
         self.assertIsInstance(out, Image)
-        self.assertTrue(calls[-1]["SelectAllFrames"])
+        self.assertTrue(_restored_range(calls)["SelectAllFrames"])
 
     def test_refuses_while_another_render_runs(self):
         out, _, _ = self._capture({}, rendering=True)
@@ -436,6 +507,158 @@ class CaptureRenderTest(unittest.TestCase):
         proj.AddRenderJob.assert_called_once()
 
 
+class CaptureRenderPageRestoreTest(_RenderCapture, unittest.TestCase):
+    """Issue #270: a capture from the Edit page left Resolve on Deliver.
+
+    Reported on Studio 21.1.0.17 and reproduced on 19.1.3.7, where the cause
+    was measured: the page was read after GetCurrentRenderMode(), which had
+    already switched to Deliver, so there was never anything to restore. The
+    restore is now also read back, and reported when it does not take.
+    """
+
+    def test_page_is_put_back_after_the_render(self):
+        # The regression itself. GetCurrentRenderMode switches to Deliver, so a
+        # page read after it says 'deliver' and the restore is skipped as
+        # "nothing to restore". The page has to be read first.
+        resolve = _FakeResolve(page="edit")
+        out, proj, _ = self._capture({}, resolve=resolve)
+        self.assertIsInstance(out, Image)
+        proj.GetCurrentRenderMode.assert_called_once()
+        self.assertEqual(resolve.opened, ["edit"])
+        self.assertEqual(resolve.page, "edit")
+
+    def test_page_restore_is_retried_until_it_takes(self):
+        resolve = _SettlingResolve(page="edit", refusals=page_lock.PAGE_RESTORE_ATTEMPTS - 1)
+        out, _, _ = self._capture({}, resolve=resolve)
+        # A restore that took on a later attempt is a clean capture: one image.
+        self.assertIsInstance(out, Image)
+        self.assertEqual(resolve.opened, ["edit"] * page_lock.PAGE_RESTORE_ATTEMPTS)
+        self.assertEqual(resolve.page, "edit")
+
+    def test_page_restore_that_never_takes_is_reported_with_the_image(self):
+        resolve = _FakeResolve(page="edit", switch_ok=False)
+        with self.assertLogs("resolve-mcp.page-lock", level="WARNING") as logs:
+            out, _, _ = self._capture({}, resolve=resolve)
+        self.assertIsInstance(out, list)
+        image, note = out
+        self.assertIsInstance(image, Image)
+        self.assertEqual(len(note["warnings"]), 1)
+        warning = note["warnings"][0]
+        self.assertIn("'edit'", warning)
+        self.assertIn("'deliver'", warning)
+        self.assertIn("open_page", warning)
+        self.assertEqual(len(resolve.opened), page_lock.PAGE_RESTORE_ATTEMPTS)
+        self.assertIn("could not restore the 'edit' page", logs.output[0])
+
+    def test_page_open_that_returns_true_without_moving_is_a_failure(self):
+        # The return is not the evidence; the page read back is.
+        resolve = _SettlingResolve(page="edit", lies=True)
+        with self.assertLogs("resolve-mcp.page-lock", level="WARNING"):
+            out, _, _ = self._capture({}, resolve=resolve)
+        self.assertIsInstance(out, list)
+        self.assertIn("returned True but Resolve is on 'deliver'", out[1]["warnings"][0])
+
+    def test_page_failure_rides_on_an_error_result_too(self):
+        resolve = _FakeResolve(page="edit", switch_ok=False)
+        with self.assertLogs("resolve-mcp.page-lock", level="WARNING"):
+            out, _, _ = self._capture({}, resolve=resolve, status="Failed")
+        self.assertEqual(out["error"]["code"], "RENDER_FAILED")
+        self.assertIn("'edit'", out["warnings"][0])
+
+    def test_page_is_restored_even_when_the_capture_is_refused_early(self):
+        # The mode getter has already moved the page by the time the mode
+        # switch is refused; an error return must not strand the user either.
+        resolve = _FakeResolve(page="fairlight")
+        out, _, _ = self._capture({}, resolve=resolve, mode=0, mode_switch=False)
+        self.assertEqual(out["error"]["code"], "RENDER_MODE_REFUSED")
+        self.assertEqual(resolve.page, "fairlight")
+
+    def test_page_is_left_alone_when_the_caller_was_on_deliver(self):
+        resolve = _FakeResolve(page="deliver")
+        out, _, _ = self._capture({}, resolve=resolve)
+        self.assertIsInstance(out, Image)
+        self.assertEqual(resolve.opened, [])
+
+    def test_page_is_not_switched_when_the_render_never_left_it(self):
+        # Refused before any job: Resolve is still where the caller left it.
+        resolve = _FakeResolve(page="edit")
+        out, _, _ = self._capture({}, resolve=resolve, rendering=True)
+        self.assertEqual(out["error"]["code"], "RENDER_BUSY")
+        self.assertEqual(resolve.opened, [])
+        self.assertNotIn("warnings", out)
+
+    def test_page_warning_reaches_the_client_as_a_block_after_the_image(self):
+        resolve = _FakeResolve(page="edit", switch_ok=False)
+        with self.assertLogs("resolve-mcp.page-lock", level="WARNING"):
+            out, _, _ = self._capture({}, resolve=resolve)
+        with mock.patch.object(s, "_playhead_frame_capture", return_value=out):
+            sent = asyncio.run(s.mcp.call_tool("timeline_frame", {"action": "capture"}))
+        blocks = sent[0] if isinstance(sent, tuple) else sent
+        self.assertEqual([b.type for b in blocks], ["image", "text"])
+        self.assertIn("open_page", json.loads(blocks[1].text)["warnings"][0])
+
+
+class CaptureTeardownReportTest(_RenderCapture, unittest.TestCase):
+    """Every restore the render route already detected as failed is reported."""
+
+    def test_teardown_reports_a_render_mode_that_was_not_put_back(self):
+        modes = iter([True, False])  # switch to single clip works, restore does not
+        with mock.patch.object(s.logger, "warning"):
+            resolve = _FakeResolve(page="color")
+            tl = _fake_timeline(resolve)
+            tl.GetStartFrame.return_value = 86400
+            tl.GetEndFrame.return_value = 86544
+            tl.GetMarkInOut.return_value = {}
+            proj = mock.Mock()
+            proj.IsRenderingInProgress.return_value = False
+            proj.GetCurrentRenderMode.return_value = 0
+            proj.SetCurrentRenderMode.side_effect = lambda mode: next(modes)
+            proj.GetCurrentRenderFormatAndCodec.return_value = {"format": "mov", "codec": "H.264"}
+            proj.GetRenderCodecs.return_value = {"JPEG": "YUV420_8"}
+            proj.SetCurrentRenderFormatAndCodec.return_value = True
+            proj.SetRenderSettings.return_value = False  # refused: an error result
+            teardown = []
+            out = s._playhead_frame_render(proj, tl, {"frame": 86424}, teardown)
+        self.assertEqual(out["error"]["code"], "RENDER_SETTINGS_REFUSED")
+        self.assertEqual(len(teardown), 1)
+        self.assertIn("render mode", teardown[0])
+
+    def test_teardown_reports_a_playhead_that_was_not_put_back(self):
+        resolve = _FakeResolve(page="color")
+        tl = _fake_timeline(resolve)
+        tl.GetStartFrame.return_value = 86400
+        tl.GetEndFrame.return_value = 86544
+        tl.GetMarkInOut.return_value = {}
+        tl.SetCurrentTimecode.side_effect = lambda tc: False
+        proj = mock.Mock()
+        proj.IsRenderingInProgress.return_value = False
+        proj.GetCurrentRenderMode.return_value = 1
+        proj.GetCurrentRenderFormatAndCodec.return_value = {"format": "mov", "codec": "H.264"}
+        proj.GetRenderCodecs.return_value = {"JPEG": "YUV420_8"}
+        proj.SetCurrentRenderFormatAndCodec.return_value = True
+        proj.SetRenderSettings.return_value = False
+        teardown = []
+        with mock.patch.object(s, "get_resolve", return_value=resolve), \
+             mock.patch.object(s.logger, "warning"):
+            s._playhead_frame_render(proj, tl, {"frame": 86424}, teardown)
+        self.assertEqual(len(teardown), 1)
+        self.assertIn("playhead", teardown[0])
+        self.assertIn("01:00:00:00", teardown[0])
+
+    def test_teardown_reports_a_render_range_that_was_not_put_back(self):
+        with mock.patch.object(s.logger, "warning"):
+            out, proj, _ = self._capture({"frame": 86424}, range_restore_ok=False)
+        self.assertIsInstance(out, list)
+        self.assertIsInstance(out[0], Image)
+        self.assertIn("render range", out[1]["warnings"][0])
+        self.assertIn("86424", out[1]["warnings"][0])
+        self.assertEqual(proj.render_range, (False, 86424, 86424))
+
+    def test_teardown_is_empty_for_a_clean_capture(self):
+        out, _, _ = self._capture({})
+        self.assertIsInstance(out, Image)
+
+
 class ToolSurfaceTest(unittest.TestCase):
     def test_unknown_action_lists_valid_actions(self):
         out = s.timeline_frame("screenshot")
@@ -448,6 +671,17 @@ class ToolSurfaceTest(unittest.TestCase):
         self.assertEqual(out["default_quality"], "frame")
         self.assertEqual(out["current_page"], "edit")
         self.assertIsNone(out["timeline"])
+
+    def test_capabilities_says_which_render_settings_come_back(self):
+        # The docstring has long advertised this key; issue #270 asked that the
+        # TargetDir/CustomName reset be readable without opening the source.
+        with mock.patch.object(s, "get_resolve", return_value=_FakeResolve(page="edit")), \
+             mock.patch.object(s, "_get_tl", return_value=(None, None, {"error": "no timeline"})):
+            restorable = s.timeline_frame("capabilities")["render_settings_restorable"]
+        self.assertFalse(restorable["TargetDir"])
+        self.assertFalse(restorable["CustomName"])
+        self.assertTrue(restorable["format_codec"])
+        self.assertTrue(restorable["mark_range"])
 
     def test_legacy_get_thumbnail_image_still_returns_an_image(self):
         resolve = _FakeResolve(page="edit")

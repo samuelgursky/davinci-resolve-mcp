@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 377-tool granular server instead
 """
 
-VERSION = "4.8.22"
+VERSION = "4.8.23"
 
 import base64
 import os
@@ -67,6 +67,8 @@ from src.utils.page_lock import (
     color_page_for_thumbnails as _color_page_for_thumbnails,
     edit_page_for_timeline_edits as _edit_page_for_timeline_edits,
     open_page_serialized as _open_page_serialized,
+    restore_page as _restore_page,
+    restoring_page as _restoring_page,
     page_lock as _page_lock,
 )
 from src.utils.proc import safe_run
@@ -14975,7 +14977,8 @@ def _render_job_completed(status: Optional[Dict[str, Any]]) -> bool:
         return False
 
 
-def _playhead_frame_render(proj, tl, p: Dict[str, Any]):
+def _playhead_frame_render(proj, tl, p: Dict[str, Any],
+                           teardown: Optional[List[str]] = None):
     """Render exactly one frame — the only frame-accurate capture route.
 
     The two cheaper routes cannot do this job (both measured on Studio 19.1.3.7,
@@ -14995,11 +14998,20 @@ def _playhead_frame_render(proj, tl, p: Dict[str, Any]):
       - The mark range is readable via Timeline.GetMarkInOut, so a range the
         caller had set is put back (offset into SetRenderSettings' absolute
         frame space); with no range set it falls back to the whole timeline.
-      - TargetDir and CustomName are readable from nowhere, so they are reset to
-        sane values rather than restored.
+      - TargetDir and CustomName are readable from nowhere, so they are NOT
+        restored: they stay on the capture's temporary folder and name. An
+        empty CustomName cannot be written back either (refused on 19.1.3.7).
     Callers who need a strictly side-effect-free read should use
     quality="thumbnail" and accept per-clip granularity.
+
+    `teardown` collects one sentence per restore that did not take (render
+    mode, format/codec, render range, playhead, page). The restores run in a
+    `finally`, which cannot change the value already being returned, so the
+    caller passes the list in and attaches it to the result afterwards (issue
+    #270: the user was left on Deliver with nothing in the result to say so).
     """
+    if teardown is None:
+        teardown = []
     fmt = str(p.get("format", "jpg")).lower().lstrip(".")
     if fmt == "jpeg":
         fmt = "jpg"
@@ -15042,6 +15054,24 @@ def _playhead_frame_render(proj, tl, p: Dict[str, Any]):
     os.makedirs(folder, exist_ok=True)
     name = f"capture-{int(time.time() * 1000)}"
 
+    # Where the user is comes FIRST, before any render call. Issue #270: this
+    # was read after GetCurrentRenderMode(), and that getter itself switches
+    # Resolve to the Deliver page (measured on Studio 19.1.3.7 from Edit, Color
+    # and Fairlight; api_truth 'Project.GetCurrentRenderMode'). So the page
+    # recorded here was always 'deliver', the restore below was skipped as
+    # "nothing to restore", and every capture left the user on Deliver.
+    # Rendering can move the playhead as well. Both are ours to put back.
+    resolve = get_resolve()
+    original_page = None
+    try:
+        original_page = resolve.GetCurrentPage() if resolve else None
+    except Exception:
+        original_page = None
+    original_tc = None
+    try:
+        original_tc = tl.GetCurrentTimecode()
+    except Exception:
+        pass
     original_fc = None
     try:
         original_fc = proj.GetCurrentRenderFormatAndCodec()
@@ -15059,20 +15089,6 @@ def _playhead_frame_render(proj, tl, p: Dict[str, Any]):
         original_mode = proj.GetCurrentRenderMode()
     except Exception:
         original_mode = None
-    # Rendering pulls Resolve onto the Deliver page and moves the playhead;
-    # measured leaving the user on Deliver at a different frame. Both are ours
-    # to put back.
-    resolve = get_resolve()
-    original_page = None
-    try:
-        original_page = resolve.GetCurrentPage() if resolve else None
-    except Exception:
-        original_page = None
-    original_tc = None
-    try:
-        original_tc = tl.GetCurrentTimecode()
-    except Exception:
-        pass
     # The capture pins the render range to the captured frame, and there is no
     # GetRenderSettings to read the surrounding settings back from (still absent
     # in 21.1). The mark range is the exception: Timeline.GetMarkInOut reports it
@@ -15109,6 +15125,7 @@ def _playhead_frame_render(proj, tl, p: Dict[str, Any]):
             original_marks = None
 
     job = None
+    range_pinned = False
     try:
         if original_mode is not None and original_mode != 1:
             if not proj.SetCurrentRenderMode(1):
@@ -15143,6 +15160,7 @@ def _playhead_frame_render(proj, tl, p: Dict[str, Any]):
                 code="RENDER_SETTINGS_REFUSED", category="api_error",
                 state={"frame": frame},
             )
+        range_pinned = True
         job = proj.AddRenderJob()
         if not job:
             return _err("AddRenderJob returned nothing", code="RENDER_JOB_FAILED", category="api_error")
@@ -15213,6 +15231,10 @@ def _playhead_frame_render(proj, tl, p: Dict[str, Any]):
                     "frame capture could not restore render mode %r: %s",
                     original_mode, mode_exc or "SetCurrentRenderMode returned False",
                 )
+                teardown.append(
+                    f"The render mode was left on single clip (1); restoring {original_mode!r} "
+                    "failed. Put it back with render(action='set_mode')."
+                )
         if original_fc:
             # A failed restore leaves the Deliver page on the capture's format
             # and codec, which the user's next render would silently inherit.
@@ -15230,6 +15252,11 @@ def _playhead_frame_render(proj, tl, p: Dict[str, Any]):
                     original_fc.get("format"), original_fc.get("codec"),
                     restore_exc or "SetCurrentRenderFormatAndCodec returned False",
                 )
+                teardown.append(
+                    "The render format/codec was left on the capture's "
+                    f"({fmt}); restoring {original_fc.get('format')}/{original_fc.get('codec')} "
+                    "failed, so the next render job would inherit it."
+                )
         # Still not a full restore — GetRenderSettings does not exist, so the
         # other settings cannot be read back. The mark range can: put the user's
         # own range back when they had one, and fall back to the whole timeline
@@ -15237,6 +15264,12 @@ def _playhead_frame_render(proj, tl, p: Dict[str, Any]):
         # frame for the next render job to inherit.
         # (original_marks is already in SetRenderSettings' absolute space — see
         # the offset above.)
+        #
+        # The range goes in a payload of its own. It used to travel with
+        # CustomName "", and SetRenderSettings refuses an empty CustomName by
+        # rejecting the WHOLE payload (measured on Studio 19.1.3.7: False, and a
+        # job added afterwards still carried MarkIn == MarkOut == the captured
+        # frame). So the range was never put back, and the False was discarded.
         try:
             if original_marks:
                 restored_marks = {
@@ -15250,8 +15283,25 @@ def _playhead_frame_render(proj, tl, p: Dict[str, Any]):
                     "MarkIn": tl.GetStartFrame(),
                     "MarkOut": tl.GetEndFrame(),
                 }
-            restored_marks["CustomName"] = ""
-            proj.SetRenderSettings(restored_marks)
+            marks_restored = bool(proj.SetRenderSettings(restored_marks))
+            marks_exc = None
+        except Exception as exc:
+            marks_restored, marks_exc = False, exc
+        if not marks_restored:
+            logger.warning(
+                "frame capture could not restore the render range: %s",
+                marks_exc or "SetRenderSettings returned False",
+            )
+            if range_pinned:
+                teardown.append(
+                    f"The render range was left pinned to the captured frame ({frame}); "
+                    "restoring it failed, so the next render job would render one "
+                    "frame. Set the range again before rendering."
+                )
+        # Best effort, and expected to be refused on 19.1.3.7 (see above): where
+        # a build does accept it, the capture's name stops being inherited.
+        try:
+            proj.SetRenderSettings({"CustomName": ""})
         except Exception:
             pass
         try:
@@ -15265,12 +15315,22 @@ def _playhead_frame_render(proj, tl, p: Dict[str, Any]):
                 os.rmdir(folder)
         except OSError:
             pass
-        _restore_playhead(tl, original_tc, what="the render capture")
+        if not _restore_playhead(tl, original_tc, what="the render capture"):
+            teardown.append(
+                f"The playhead was not put back at {original_tc}. Restore it with "
+                "timeline_markers(action='set_current_timecode')."
+            )
+        # Last, and checked: the render calls pull Resolve onto Deliver. The
+        # switch back is read back, and reported when it does not take.
         if original_page and original_page != "deliver":
-            try:
-                _open_page_serialized(resolve, original_page)
-            except Exception:
-                pass
+            page = _restore_page(resolve, original_page, what="the render capture")
+            if not page["restored"]:
+                teardown.append(
+                    f"Resolve is not back on the {original_page!r} page (it reads "
+                    f"{page['page']!r}): the switch failed after {page['attempts']} "
+                    f"attempt(s) ({page['error']}). Restore it with "
+                    f"resolve_control(action='open_page', params={{'page': {original_page!r}}})."
+                )
 
 
 def _playhead_frame_full(proj, tl, p: Dict[str, Any]):
@@ -15442,19 +15502,22 @@ def _playhead_frame_capture(p: Dict[str, Any]):
                 f"Failed to make {wanted!r} the current timeline",
                 code="SET_TIMELINE_FAILED", category="api_error",
             )
+    # One sentence per restore that did not take. A capture is promised to be a
+    # read, so a restore that failed is part of the answer, not just of the log.
+    teardown: List[str] = []
     try:
         if quality == "thumbnail":
-            return _playhead_frame_preview(tl, p)
-        if quality == "still":
-            return _playhead_frame_full(proj, tl, p)
-        return _playhead_frame_render(proj, tl, p)
+            result = _playhead_frame_preview(tl, p)
+        elif quality == "still":
+            result = _playhead_frame_full(proj, tl, p)
+        else:
+            result = _playhead_frame_render(proj, tl, p, teardown)
     finally:
         if original_tl is not None:
             # Best-effort by necessity: this runs in a finally, so raising or
             # returning here would replace the caller's real result (or its real
-            # exception) with a restore failure. It is still not silent -- a
-            # failed restore leaves the editor on a different timeline, which is
-            # visible immediately, and it is logged.
+            # exception) with a restore failure. It is logged, and reported
+            # alongside the result below.
             restore_err = _set_current_timeline_checked(
                 proj, original_tl, what="restoring the timeline after the capture")
             if restore_err:
@@ -15462,10 +15525,35 @@ def _playhead_frame_capture(p: Dict[str, Any]):
                     "frame capture could not restore the current timeline: %s",
                     restore_err["error"]["message"],
                 )
+                teardown.append(
+                    "The current timeline was not switched back after the capture: "
+                    f"{restore_err['error']['message']}"
+                )
+    return _capture_with_teardown(result, teardown)
 
 
-def _restore_playhead(tl, timecode, *, what: str) -> None:
+def _capture_with_teardown(result, teardown: List[str]):
+    """Attach failed restores to a capture result without replacing the capture.
+
+    An image comes back as [image, {"warnings": [...]}] -- MCP content is a list
+    of blocks anyway, so the frame is still the first block and the warnings
+    follow as text. An error envelope gains a "warnings" key. With nothing to
+    report the result is returned untouched, so a clean capture is exactly what
+    it was before: one image.
+    """
+    if not teardown:
+        return result
+    if isinstance(result, dict):
+        result["warnings"] = list(result.get("warnings") or []) + list(teardown)
+        return result
+    return [result, {"warnings": list(teardown)}]
+
+
+def _restore_playhead(tl, timecode, *, what: str) -> bool:
     """Put the playhead back after a capture. Logged, never raised.
+
+    Returns False when the restore did not take, True otherwise (including when
+    there was no timecode to restore).
 
     Deliberately fire-and-forget on the CALLER's behalf: every use of this runs
     in a `finally`, so raising or returning an error would replace the caller's
@@ -15475,16 +15563,30 @@ def _restore_playhead(tl, timecode, *, what: str) -> None:
     diagnosis and an afternoon.
     """
     if not timecode:
-        return
+        return True
     try:
         moved = tl.SetCurrentTimecode(timecode)
     except Exception as exc:
         logger.warning("could not restore the playhead to %s after %s: %s",
                        timecode, what, exc)
-        return
+        return False
     if not moved:
         logger.warning("could not restore the playhead to %s after %s: "
                        "SetCurrentTimecode returned %r", timecode, what, moved)
+        return False
+    # The return is not the evidence. A True that did not move the playhead has
+    # been observed on Studio 19.1.3.7 (straight after leaving the Deliver
+    # page), so read it back wherever it can be read.
+    try:
+        landed = tl.GetCurrentTimecode()
+    except Exception:
+        return True
+    if isinstance(landed, str) and landed and landed != timecode:
+        logger.warning("could not restore the playhead to %s after %s: "
+                       "SetCurrentTimecode returned True but the playhead reads %s",
+                       timecode, what, landed)
+        return False
+    return True
 
 
 def _set_current_timeline_checked(proj, tl, *, what: str):
@@ -18112,11 +18214,13 @@ def _resolve_restore_state(p: Dict[str, Any]) -> Dict[str, Any]:
 
     # Restore page first so subsequent ops land in the right context
     if state.get("page"):
-        try:
-            r.OpenPage(state["page"])
+        # Reported from a readback, not from having asked: OpenPage's return
+        # used to be discarded and the page listed as restored regardless.
+        page = _restore_page(r, state["page"], what="restore_state")
+        if page["restored"]:
             restored["page"] = state["page"]
-        except Exception as exc:
-            restored["page_error"] = str(exc)
+        else:
+            restored["page_error"] = page["error"]
 
     pm = r.GetProjectManager()
     proj = pm.GetCurrentProject() if pm else None
@@ -21043,7 +21147,10 @@ def render(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
             )
         return {"success": True, "format_id": _format_id, "codec_id": _codec_id}
     elif action == "get_mode":
-        return {"mode": proj.GetCurrentRenderMode()}
+        # The getter itself switches Resolve to the Deliver page (api_truth
+        # 'Project.GetCurrentRenderMode'); a read must not move the user.
+        with _restoring_page(get_resolve(), what="a render-mode read"):
+            return {"mode": proj.GetCurrentRenderMode()}
     elif action == "set_mode":
         return {"success": bool(proj.SetCurrentRenderMode(p["mode"]))}
     elif action == "get_resolutions":
@@ -21102,7 +21209,9 @@ def render(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
     elif action == "probe_render_matrix":
         return _probe_render_matrix(proj, p)
     elif action == "probe_render_settings":
-        return _render_settings_snapshot(proj)
+        # Reads the render mode, which switches to Deliver; see get_mode.
+        with _restoring_page(get_resolve(), what="a render-settings read"):
+            return _render_settings_snapshot(proj)
     elif action == "validate_render_settings":
         return _validate_render_settings_action(p)
     elif action == "safe_set_render_settings":
@@ -26578,6 +26687,7 @@ def timeline_frame(action: str, params: Optional[Dict[str, Any]] = None) -> Any:
 
     Actions:
       capture(timecode?|frame?, quality?, max_width?, format?, timeline_name?) -> MCP image content
+        (followed by a {"warnings": [...]} block only when a restore failed; see below)
       capabilities() -> {quality_modes, ffmpeg, render_settings_restorable, ...}
 
     capture parameters:
@@ -26599,11 +26709,13 @@ def timeline_frame(action: str, params: Optional[Dict[str, Any]] = None) -> Any:
     Choosing a quality — the trade-off is accuracy against side effects:
 
       'frame'/'preview'  Frame-exact. Renders one frame, so it changes
-                   project-level render settings. Format and codec are restored;
-                   TargetDir, CustomName and the mark range cannot be read back
-                   on builds without GetRenderSettings, so they are reset to the
-                   full timeline rather than truly restored. Refuses while
-                   another render is running.
+                   project-level render settings. Render mode, format, codec
+                   and the mark range are restored. TargetDir and CustomName
+                   cannot be read back (there is no GetRenderSettings), so they
+                   are NOT restored: they stay on the capture's temporary folder
+                   and name, and capabilities() lists them under
+                   render_settings_restorable. Set your own before the next
+                   render. Refuses while another render is running.
       'thumbnail'  Changes nothing and returns instantly, but it is NOT frame
                    accurate: GetCurrentClipThumbnailImage returns the clip's
                    thumbnail, identical for every frame of that clip (measured
@@ -26614,8 +26726,13 @@ def timeline_frame(action: str, params: Optional[Dict[str, Any]] = None) -> Any:
                    be open on the Color page — no scripting call can open it,
                    so this fails with a bare refusal when it is closed.
 
-    The playhead, the Color page, the current timeline and the Gallery are all
-    restored; a capture is a read of the picture, not an edit of the cut.
+    The playhead, the page you were on, the current timeline and the Gallery
+    are all restored; a capture is a read of the picture, not an edit of the
+    cut. The render calls pull Resolve onto the Deliver page, so the render
+    route switches back and reads the page to confirm it. If any restore does
+    not take, the image is followed by {"warnings": [...]} naming what was left
+    changed and the call that puts it back (an error result carries the same
+    "warnings" key). No warnings block means every restore was confirmed.
     """
     p = _params(params)
     if action == "capture":
@@ -26634,6 +26751,16 @@ def timeline_frame(action: str, params: Optional[Dict[str, Any]] = None) -> Any:
             "ffmpeg": bool(shutil.which("ffmpeg")),
             "max_width_supported": bool(shutil.which("ffmpeg")),
             "current_page": current_page,
+            # What the render route ('frame'/'preview') puts back afterwards.
+            # False means left on the capture's own value, because Resolve
+            # offers no way to read the original: there is no GetRenderSettings.
+            "render_settings_restorable": {
+                "render_mode": True,
+                "format_codec": True,
+                "mark_range": True,
+                "TargetDir": False,
+                "CustomName": False,
+            },
         }
         _, tl, err = _get_tl()
         if err:

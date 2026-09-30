@@ -1,6 +1,7 @@
 """Project, render, cache, cloud, and project-property tools."""
 
 from src.granular.common import *  # noqa: F401,F403
+from src.utils.page_lock import restoring_page
 
 resolve = ResolveProxy()
 
@@ -1338,7 +1339,10 @@ def get_current_render_mode() -> Dict[str, Any]:
     project = resolve.GetProjectManager().GetCurrentProject()
     if not project:
         return {"error": "No project currently open"}
-    mode = project.GetCurrentRenderMode()
+    # The getter itself switches Resolve to the Deliver page (api_truth
+    # 'Project.GetCurrentRenderMode'); a read must not move the user.
+    with restoring_page(resolve, what="a render-mode read"):
+        mode = project.GetCurrentRenderMode()
     return {"render_mode": mode, "mode_name": "Individual Clips" if mode == 0 else "Single Clip"}
 
 

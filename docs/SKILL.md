@@ -1860,11 +1860,19 @@ metadata. (For the raw camera file instead, use
   `frame` is the absolute timeline frame. Omit both to capture the playhead.
 
 The playhead, page, current timeline and Gallery are restored. The render route
-additionally touches project render settings: format and codec are restored and
-the render job is deleted, but `TargetDir`/`CustomName`/mark range cannot be read
-back on builds without `GetRenderSettings`, so they are reset to the full
-timeline rather than restored. Reach for `quality="thumbnail"` when zero side
-effects matter more than accuracy.
+additionally touches project render settings: render mode, format, codec and the
+mark range are restored and the render job is deleted. `TargetDir` and
+`CustomName` cannot be read back (there is no `GetRenderSettings`), so they are
+not restored: they stay on the capture's temporary folder and name, and
+`capabilities` reports them under `render_settings_restorable`. Set your own
+before the next render. Reach for `quality="thumbnail"` when zero side effects
+matter more than accuracy.
+
+The render calls pull Resolve onto the Deliver page. The capture switches back
+and reads the page to confirm it. If a restore does not take (page, playhead,
+timeline, render mode, format or range), the image is followed by a
+`{"warnings": [...]}` block naming what was left changed and the call that puts
+it back. No warnings block means every restore was confirmed.
 
 ```
 timeline_frame(action="capture", params={"timecode": "01:00:15:12", "max_width": 1280})

@@ -2,6 +2,71 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.8.23 — a frame capture no longer leaves Resolve on the Deliver page
+
+### Fixed
+
+- **`timeline_frame` capture left Resolve on the Deliver page.** ([#270](https://github.com/samuelgursky/davinci-resolve-mcp/issues/270), reported by @Dragonfist76 on Studio 21.1.0.17)
+  The render route (`quality="frame"`, `"preview"`, `"full"`) recorded the page
+  to return to *after* calling `Project.GetCurrentRenderMode()`. That getter
+  switches Resolve to the Deliver page by itself (measured on Studio 19.1.3.7
+  from Edit, Color and Fairlight), so the page recorded was always `deliver` and
+  the restore was skipped as having nothing to do. The page is now read before
+  any render call. Live on 19.1.3.7: 14 captures from seven starting pages all
+  ended on the page they started on.
+- **A restore that does not take is no longer silent.** The switch back is read
+  back with `GetCurrentPage()`. If the page, playhead, current timeline, render
+  mode, render format or render range is not put back, the image is followed by
+  a `{"warnings": [...]}` block naming what was left changed and the call that
+  restores it; an error result carries the same `warnings` key. A clean capture
+  is unchanged: one image.
+- **The render range was never restored after a capture.** The restore shared a
+  `SetRenderSettings` payload with `CustomName: ""`, and Resolve refuses an empty
+  `CustomName` by rejecting the whole payload (measured on 19.1.3.7: `False`, and
+  a job queued afterwards still carried `MarkIn == MarkOut ==` the captured
+  frame). The range now goes in its own payload and its result is checked. Live
+  on 19.1.3.7: a job queued after each capture carried the whole timeline.
+- **`render get_mode`, `render probe_render_settings` and the granular
+  `get_current_render_mode` left Resolve on the Deliver page**, for the same
+  reason: they call the same getter. They now return to the page they were
+  called from.
+- **`resolve_control restore_state` reported the page as restored without
+  checking.** `OpenPage`'s return was discarded. `restored.page` is now written
+  only when the page reads back, and `page_error` says why otherwise.
+- The Color-page and Edit-page guards used by thumbnails and timeline edits
+  discarded `OpenPage` on their way back too. Both now read the page back and
+  log a failure.
+
+### Changed
+
+- `timeline_frame capabilities` returns `render_settings_restorable`, which its
+  docstring already listed. `TargetDir` and `CustomName` are `false`: there is no
+  `GetRenderSettings`, so after a render capture they stay on the capture's
+  temporary folder and name. The docs previously said they were reset.
+
+### Documentation
+
+- `api_truth` gains two measured entries, both on Studio 19.1.3.7:
+  `Project.GetCurrentRenderMode` switches to the Deliver page (with the list of
+  render calls that do and do not), and `Project.SetRenderSettings` rejects a
+  whole payload over an empty `CustomName`. `docs/reference/api-limitations.md`
+  is regenerated.
+
+### Tests
+
+- `tests/test_playhead_frame_capture.py`: the render fake now behaves as
+  measured (the mode getter switches page; an empty `CustomName` refuses the
+  payload). New tests cover the page coming back, a refused or lying `OpenPage`
+  being reported with the image, the warning reaching an MCP client as a text
+  block after the image, and the range Resolve holds after a capture. The two
+  regression tests fail against v4.8.22.
+- `tests/test_page_restore.py`: `restore_page`, `restoring_page`, both page
+  guards, the three render-mode readers and `restore_state`.
+- `tests/test_discarded_resolve_returns.py` now treats `OpenPage` and the
+  `open_page_serialized` wrapper as mutators whose return must be used.
+- `tests/live_frame_capture_page_restore_validation.py`: the live harness behind
+  the numbers above.
+
 ## What's New in v4.8.22 — the control panel port check cannot hang on a wedged lsof
 
 ### Fixed

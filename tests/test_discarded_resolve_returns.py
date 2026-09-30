@@ -39,8 +39,13 @@ SRC = pathlib.Path(__file__).resolve().parent.parent / "src"
 MUTATOR_PREFIXES = (
     "Set", "Add", "Delete", "Import", "Save", "Append", "Create", "Load", "Link",
     "Relink", "Unlink", "Export", "Apply", "Move", "Insert", "Refresh", "Render",
-    "Start", "Stop", "Remove",
+    "Start", "Stop", "Remove", "OpenPage",
 )
+
+# Lowercase helpers that hand a Resolve mutator's return straight back. The
+# PascalCase rule above cannot see them, which is how a discarded OpenPage sat
+# in a capture's teardown behind `_open_page_serialized(...)` (issue #270).
+RETURNING_WRAPPERS = ("open_page_serialized", "_open_page_serialized")
 
 NIL = "Fusion Lua bridge: returns nil whether or not it took, so the return is not evidence"
 TEARDOWN = "teardown after the measured work; a failure here is visible, not silent, and is logged"
@@ -97,8 +102,9 @@ ALLOWED: dict[tuple[str, str, str], str] = {
     # --- teardown ----------------------------------------------------------
     ("server.py", "_playhead_frame_render", "DeleteRenderJob"): TEARDOWN,
     ("server.py", "_playhead_frame_render", "SetRenderSettings"): (
-        TEARDOWN + "; explicitly not a restore either -- without GetRenderSettings "
-        "there is nothing to restore FROM"
+        TEARDOWN + "; this is only the best-effort CustomName clear, which "
+        "19.1.3.7 refuses outright and there is no GetRenderSettings to restore "
+        "it from. The render-range restore beside it IS checked and reported"
     ),
     ("server.py", "_playhead_frame_full", "DeleteStills"): TEARDOWN,
     ("server.py", "render", "StopRendering"): (
@@ -154,7 +160,13 @@ def _discarded_mutator_calls():
             if not isinstance(node, ast.Expr):
                 continue
             call = node.value
-            if not isinstance(call, ast.Call) or not isinstance(call.func, ast.Attribute):
+            if not isinstance(call, ast.Call):
+                continue
+            if isinstance(call.func, ast.Name) and call.func.id in RETURNING_WRAPPERS:
+                found.append((path.name, owner.get(node, "<module>"), call.func.id,
+                              node.lineno, str(path.relative_to(SRC.parent))))
+                continue
+            if not isinstance(call.func, ast.Attribute):
                 continue
             method = call.func.attr
             # Capitalised first letter is the discriminator: Resolve's API is

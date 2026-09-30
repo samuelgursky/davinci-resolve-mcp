@@ -12,7 +12,7 @@ that none exists).
 
 **Verified on:** DaVinci Resolve Studio 21.0.2
 
-**Totals:** 41 missing capabilities, 54 bugs / unreliable behaviors.
+**Totals:** 41 missing capabilities, 56 bugs / unreliable behaviors.
 
 The authoritative source is the runtime-queryable `api_truth` ledger
 (`resolve_control api_truth "<query>"`); this document is generated from
@@ -688,6 +688,24 @@ values, or automation-hostile modal prompts.
 - **Workaround / current handling:** Pin the base state instead of inheriting one — prepare_render_job(from_preset='<a video preset>') runs LoadRenderPreset before the explicit settings go on top (PresetName flips to 'Custom' once they do, which is expected). Then verify the OUTPUT, not the job: ffprobe for a codec_type=video stream. A long timeline that completes in seconds is the tell.
 - **Reference:** [issue #123](https://github.com/samuelgursky/davinci-resolve-mcp/issues/123)
 - **Tags:** render, deliver, silent-failure, preset, readback-lies
+
+### Project.GetCurrentRenderMode (switches to the Deliver page)
+
+- **Object:** `Project`
+- **Signature:** `() -> int`
+- **Behavior:** A getter with a side effect: calling it switches Resolve to the Deliver page. Measured 2026-09-30 on Studio 19.1.3.7 from the Edit, Color and Fairlight pages: GetCurrentPage() read 'deliver' immediately afterwards, every time. The other render readers do not do this — GetCurrentRenderFormatAndCodec, GetRenderFormats, GetRenderCodecs, GetRenderResolutions, GetRenderJobList, GetRenderPresetList, IsRenderingInProgress and Timeline.GetMarkInOut all left the page alone in the same run. The render WRITERS all switch: SetCurrentRenderMode, SetCurrentRenderFormatAndCodec, SetRenderSettings, AddRenderJob and StartRendering each moved Edit to Deliver; DeleteRenderJob did not. Nothing switches back on its own. Issue #270 reported the consequence on Studio 21.1.0.17 — a frame capture that left the user on Deliver — but the per-call measurement was not repeated on that build.
+- **Workaround / current handling:** Read GetCurrentPage() BEFORE the first render call, not after, and OpenPage back when done. A page read after GetCurrentRenderMode is always 'deliver', which makes a restore look unnecessary — that ordering is how the capture stranded users. src/utils/page_lock.py:restoring_page reads first, restores after, and reads the page back to confirm.
+- **Reference:** [issue #270](https://github.com/samuelgursky/davinci-resolve-mcp/issues/270)
+- **Tags:** render, deliver, page, side-effect, getter
+
+### Project.SetRenderSettings (an empty CustomName rejects the whole payload)
+
+- **Object:** `Project`
+- **Signature:** `({settings}) -> bool`
+- **Behavior:** SetRenderSettings returns False for {'CustomName': ''} and for {'CustomName': None}, and when that key rides in a larger payload the WHOLE payload is rejected, not just the name. Measured 2026-09-30 on Studio 19.1.3.7: with the render range pinned to one frame, {SelectAllFrames: True, MarkIn: start, MarkOut: end, CustomName: ''} returned False and a job added afterwards still carried MarkIn == MarkOut == the pinned frame; the same payload without CustomName returned True and the job carried the whole timeline. A single space IS accepted, and becomes the file name. So a custom name, once set, cannot be cleared through this API, and there is no GetRenderSettings to read the previous one back from.
+- **Workaround / current handling:** Never send an empty CustomName, and never bundle a best-effort key with keys that matter: send the range in its own payload and check its return. To see what a job will inherit, AddRenderJob, read MarkIn/MarkOut/TargetDir/OutputFilename off GetRenderJobList, then DeleteRenderJob.
+- **Reference:** [issue #270](https://github.com/samuelgursky/davinci-resolve-mcp/issues/270)
+- **Tags:** render, deliver, silent-failure, unreliable-return
 
 ### ProjectManager.SaveProject
 
