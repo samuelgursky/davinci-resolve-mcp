@@ -2,6 +2,47 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.8.25 — open_settings and open_app_preferences say what Resolve cannot do
+
+### Fixed
+
+- **The granular `open_settings` and `open_app_preferences` tools could never
+  work, and reported that as an ordinary failure.** Both went through
+  `Resolve.GetUIManager()`, which does not exist. Measured on Studio 19.1.3.7:
+  `dir(resolve)` lists 23 methods and `GetUIManager` is not one of them;
+  `Fusion().UIManager` is real but has neither `OpenProjectSettings` nor
+  `OpenPreferences`; and none of the three names appears in the 21.1 typed API.
+  The call raised `'NoneType' object is not callable`, a broad `except`
+  swallowed it, an ERROR was logged, and the tool answered
+  `Failed to open Project Settings dialog` with no reason.
+  Both tools now answer `Not supported:` and name the call that is missing;
+  `open_settings` also names the tools that read and write project settings.
+  Nothing is logged as an error, because nothing went wrong.
+- The route is now probed with `has_method` rather than `hasattr`, which is
+  true for every name on a Resolve object. If a future build does provide these
+  calls they are used, and their result is reported: the old code discarded the
+  return and answered success regardless, so a refusal would have read as a
+  dialog that opened.
+
+### Documentation
+
+- `api_truth` records the absence, with what `Fusion().UIManager` does expose.
+  Whether `UIManager.DoAction` or `QueueAction` can open these dialogs was not
+  tried: both dialogs are modal, and a modal dialog blocks the scripting API
+  until a person closes it.
+- `scripts/audit_api_parity.py` no longer describes `GetUIManager` as a
+  documented API.
+
+### Tests
+
+- `tests/test_app_control_dialogs.py`: a fake that fabricates attributes the way
+  a Resolve object does (every `hasattr` true, a missing `getattr` is `None`).
+  Covers the measured build, a manager without the method, a build that has
+  the call, a refusal, an exception, and both granular tools. Eight of its
+  twelve tests fail against v4.8.24.
+- `tests/test_discarded_resolve_returns.py` now covers every `Open*` call, not
+  only `OpenPage`.
+
 ## What's New in v4.8.24 — a frame capture leaves the render output folder and file name alone
 
 ### Fixed

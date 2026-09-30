@@ -16,6 +16,8 @@ import platform
 import subprocess
 from typing import Dict, Any, Optional, Union, List
 
+from src.utils.resolve_probe import has_method
+
 # Configure logging
 logger = logging.getLogger("davinci-resolve-mcp.app_control")
 APP_CONTROL_TIMEOUT_SECONDS = 10
@@ -267,65 +269,68 @@ def restart_resolve_app(resolve_obj, wait_seconds: int = 5) -> bool:
         logger.error(f"Error restarting DaVinci Resolve: {str(e)}")
         return False
 
-def open_project_settings(resolve_obj) -> bool:
-    """
-    Open the Project Settings dialog in DaVinci Resolve.
-    
-    Args:
-        resolve_obj: DaVinci Resolve API object
-        
-    Returns:
-        True if successful, False otherwise
-    """
-    try:
-        # Check if UI Manager is available
-        ui_manager = resolve_obj.GetUIManager()
-        if not ui_manager:
-            logger.error("Failed to get UI Manager")
-            return False
-        
-        # Open Project Settings dialog
-        if hasattr(ui_manager, 'OpenProjectSettings') and callable(getattr(ui_manager, 'OpenProjectSettings')):
-            ui_manager.OpenProjectSettings()
-            return True
-        
-        # Alternative method - send keyboard shortcut based on platform
-        current_page = resolve_obj.GetCurrentPage()
-        
-        # Ensure we're on a page that supports project settings
-        if current_page not in ['media', 'cut', 'edit', 'fusion', 'color', 'fairlight', 'deliver']:
-            logger.error(f"Can't open settings from page: {current_page}")
-            return False
-        
-        return False  # Keyboard shortcuts not implemented yet
-    except Exception as e:
-        logger.error(f"Error opening project settings: {str(e)}")
-        return False
+def _open_dialog(resolve_obj, method_name: str, label: str) -> Dict[str, Any]:
+    """Ask Resolve to open a dialog, and say what actually happened.
 
-def open_preferences(resolve_obj) -> bool:
+    Returns {"success", "supported", "message"}.
+
+    The route this module has always used is Resolve.GetUIManager() and then a
+    method on the manager. Neither half exists on any build measured so far.
+    On Studio 19.1.3.7 (2026-09-30): dir(resolve) lists 23 methods and
+    GetUIManager is not one of them; Fusion().UIManager is real but offers
+    neither OpenProjectSettings nor OpenPreferences; and none of the three
+    names appears in the 21.1 typed API. So the old code raised "'NoneType'
+    object is not callable" on its first line, caught it, logged an error and
+    returned a bare False — a tool that could never work, reporting that as an
+    ordinary failure with no reason.
+
+    `hasattr` cannot make this distinction: it is True for every name on a
+    Resolve object (see src/utils/resolve_probe.py). `has_method` can, so the
+    route is probed with it, and a build that does grow these calls is used
+    and its answer reported instead of assumed.
     """
-    Open the Preferences dialog in DaVinci Resolve.
-    
-    Args:
-        resolve_obj: DaVinci Resolve API object
-        
-    Returns:
-        True if successful, False otherwise
-    """
+    if not has_method(resolve_obj, "GetUIManager"):
+        return {
+            "success": False,
+            "supported": False,
+            "message": (
+                f"Not supported: DaVinci Resolve's scripting API has no call that opens the "
+                f"{label} dialog. Resolve.GetUIManager does not exist on this build."
+            ),
+        }
+    ui_manager = resolve_obj.GetUIManager()
+    if not has_method(ui_manager, method_name):
+        return {
+            "success": False,
+            "supported": False,
+            "message": (
+                f"Not supported: DaVinci Resolve's scripting API has no call that opens the "
+                f"{label} dialog. UIManager.{method_name} does not exist on this build."
+            ),
+        }
     try:
-        # Check if UI Manager is available
-        ui_manager = resolve_obj.GetUIManager()
-        if not ui_manager:
-            logger.error("Failed to get UI Manager")
-            return False
-        
-        # Open Preferences dialog
-        if hasattr(ui_manager, 'OpenPreferences') and callable(getattr(ui_manager, 'OpenPreferences')):
-            ui_manager.OpenPreferences()
-            return True
-        
-        # Alternative method - send keyboard shortcut based on platform
-        return False  # Keyboard shortcuts not implemented yet
-    except Exception as e:
-        logger.error(f"Error opening preferences: {str(e)}")
-        return False
+        opened = getattr(ui_manager, method_name)()
+    except Exception as exc:
+        logger.error("UIManager.%s raised: %s", method_name, exc)
+        return {
+            "success": False,
+            "supported": True,
+            "message": f"Failed to open the {label} dialog: UIManager.{method_name} raised {exc}",
+        }
+    if opened is False:
+        return {
+            "success": False,
+            "supported": True,
+            "message": f"Failed to open the {label} dialog: UIManager.{method_name} returned False",
+        }
+    return {"success": True, "supported": True, "message": f"{label} dialog opened"}
+
+
+def open_project_settings(resolve_obj) -> Dict[str, Any]:
+    """Open the Project Settings dialog. See `_open_dialog` for the result shape."""
+    return _open_dialog(resolve_obj, "OpenProjectSettings", "Project Settings")
+
+
+def open_preferences(resolve_obj) -> Dict[str, Any]:
+    """Open the Preferences dialog. See `_open_dialog` for the result shape."""
+    return _open_dialog(resolve_obj, "OpenPreferences", "Preferences")

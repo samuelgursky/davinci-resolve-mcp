@@ -2750,6 +2750,34 @@ API_TRUTH: List[Dict[str, Any]] = [
         "mitigation": ["_render_target_dir", "_playhead_frame_render"],
     },
     {
+        "symbol": "Resolve.GetUIManager / UIManager.OpenProjectSettings / OpenPreferences (do not exist)",
+        "object": "Resolve",
+        "reality": "No scripting call opens the Project Settings or Preferences "
+                   "dialog. Measured 2026-09-30 on Studio 19.1.3.7, direct "
+                   "connection: dir(resolve) lists 23 methods and GetUIManager "
+                   "is not among them (getattr returns None; hasattr says True, "
+                   "as it does for every name). Fusion().UIManager is a real "
+                   "object with 15 names — AddNotify, Comp, Composition, "
+                   "DoAction, FindWindow, FindWindows, GetData, GetEvent, GetID, "
+                   "GetReg, QueueAction, QueueEvent, RemoveNotify, SetData, "
+                   "TriggerEvent — and none of OpenProjectSettings, "
+                   "OpenPreferences, SaveUILayout or LoadUILayout. None of those "
+                   "names, nor GetUIManager, appears in the 21.1 typed API "
+                   "either. Code written against them calls None and raises "
+                   "\"'NoneType' object is not callable\"; wrapped in a broad "
+                   "except, that reads as an ordinary failure. Whether "
+                   "UIManager.DoAction or QueueAction can open these dialogs was "
+                   "not tried: both dialogs are modal, and a modal dialog blocks "
+                   "the scripting API until a person closes it.",
+        "recommended": "Do not offer to open these dialogs. Read and write "
+                       "project settings through Project.GetSetting/SetSetting. "
+                       "UI layouts go through Resolve.SaveLayoutPreset / "
+                       "LoadLayoutPreset, which do exist. Probe with "
+                       "resolve_probe.has_method, never hasattr.",
+        "tags": ["ui", "unsupported", "dialog"],
+        "verified_on": "DaVinci Resolve Studio 19.1.3.7",
+    },
+    {
         "symbol": "ProjectManager.SaveProject",
         "object": "ProjectManager",
         "signature": "() -> bool",

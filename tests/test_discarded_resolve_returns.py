@@ -39,7 +39,7 @@ SRC = pathlib.Path(__file__).resolve().parent.parent / "src"
 MUTATOR_PREFIXES = (
     "Set", "Add", "Delete", "Import", "Save", "Append", "Create", "Load", "Link",
     "Relink", "Unlink", "Export", "Apply", "Move", "Insert", "Refresh", "Render",
-    "Start", "Stop", "Remove", "OpenPage",
+    "Start", "Stop", "Remove", "Open",
 )
 
 # Lowercase helpers that hand a Resolve mutator's return straight back. The
