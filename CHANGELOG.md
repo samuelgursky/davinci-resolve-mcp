@@ -2,6 +2,26 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.8.26 — two dead layout-preset helpers removed
+
+### Removed
+
+- `src/utils/layout_presets.py` no longer carries `save_layout_preset` and
+  `load_layout_preset`. Both went through `Resolve.GetUIManager()` and then
+  `SaveUILayout` / `LoadUILayout`, none of which exist on any build measured
+  (Studio 19.1.3.7; see the `api_truth` entry added in v4.8.25). Nothing called
+  them: the granular `save_layout_preset_tool` and `load_layout_preset_tool`
+  use `Resolve.SaveLayoutPreset` / `LoadLayoutPreset` directly, and still do.
+  No tool, action or count changes. The module docstring now says what the
+  file actually does (preset files on disk) and where live save/load happens.
+- `scripts/audit_api_parity.py` drops `LoadUILayout` and `SaveUILayout` from
+  its allowlist, since no source calls them any more.
+
+### Validation
+
+- No Resolve behavior changed; the removed functions had no callers. Live test
+  not required.
+
 ## What's New in v4.8.25 — open_settings and open_app_preferences say what Resolve cannot do
 
 ### Fixed

@@ -45,8 +45,6 @@ from src.utils.layout_presets import (
     export_layout_preset,
     import_layout_preset,
     list_layout_presets,
-    load_layout_preset,
-    save_layout_preset,
 )
 from src.utils.object_inspection import inspect_object, print_object_help
 from src.utils.platform import get_platform, get_resolve_paths
@@ -93,7 +91,7 @@ if not logging.getLogger().handlers:
         handlers=[logging.StreamHandler()],
     )
 
-VERSION = "4.8.25"
+VERSION = "4.8.26"
 logger = logging.getLogger("davinci-resolve-mcp")
 logger.info(f"Starting DaVinci Resolve MCP Server v{VERSION}")
 logger.info(f"Detected platform: {get_platform()}")

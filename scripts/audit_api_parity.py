@@ -148,10 +148,9 @@ ALLOWLIST_UNDOCUMENTED: Set[str] = {
     # Resolve app-control method, not in the scripting README this audit parses
     "SetHighPriority",
     # NOT a documented API: Resolve has no GetUIManager on any build measured
-    # (Studio 19.1.3.7; api_truth 'Resolve.GetUIManager ...'). It is called
-    # only behind has_method in src/utils/app_control.py, and from the unused
-    # helpers in src/utils/layout_presets.py along with the other two.
-    "GetUIManager", "LoadUILayout", "SaveUILayout",
+    # (Studio 19.1.3.7; api_truth 'Resolve.GetUIManager ...'). Called only
+    # behind has_method in src/utils/app_control.py.
+    "GetUIManager",
     # Lua-table iteration helper used as a fallback in object_inspection.py
     "GetKeyList",
     # Project metadata accessor used defensively (hasattr-guarded)

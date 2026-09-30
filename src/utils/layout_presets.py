@@ -2,11 +2,17 @@
 """
 DaVinci Resolve MCP Server - Layout Presets Utilities
 
-This module provides functions for working with DaVinci Resolve UI layout presets:
-- Saving layout presets
-- Loading layout presets
+This module works with DaVinci Resolve UI layout preset FILES on disk:
+- Listing the presets in Resolve's preset folder
 - Exporting/importing preset files
-- Managing layout configurations
+- Deleting a preset file
+
+Saving and loading the live layout are not done here. They go through
+Resolve.SaveLayoutPreset / LoadLayoutPreset, which the granular tools in
+src/granular/resolve_control.py call directly. Two earlier helpers here tried
+Resolve.GetUIManager().SaveUILayout / LoadUILayout instead; neither method
+exists on any build measured (api_truth 'Resolve.GetUIManager ...'), nothing
+called them, and they were removed in v4.8.26.
 """
 
 import os
@@ -136,71 +142,6 @@ def list_layout_presets(layout_type: str = "ui") -> List[Dict[str, Any]]:
             })
     
     return presets
-
-def save_layout_preset(resolve_obj, preset_name: str, layout_type: str = "ui") -> bool:
-    """
-    Save the current layout as a preset.
-    
-    Args:
-        resolve_obj: DaVinci Resolve API object
-        preset_name: Name for the saved preset
-        layout_type: Type of layout to save ('ui', 'window', 'workspace')
-        
-    Returns:
-        True if successful, False otherwise
-    """
-    try:
-        # Ensure preset name has no spaces or special characters
-        safe_name = preset_name.replace(" ", "_").replace("/", "_").replace("\\", "_")
-        
-        # Different layout types have different save methods
-        if layout_type.lower() == "ui":
-            # For UI layouts, use the UI Manager
-            ui_manager = resolve_obj.GetUIManager()
-            if not ui_manager:
-                logger.error("Failed to get UI Manager")
-                return False
-            
-            # Save the current UI layout
-            return ui_manager.SaveUILayout(safe_name)
-        else:
-            # Other layout types would be handled here
-            logger.error(f"Unsupported layout type: {layout_type}")
-            return False
-    except Exception as e:
-        logger.error(f"Error saving layout preset: {str(e)}")
-        return False
-
-def load_layout_preset(resolve_obj, preset_name: str, layout_type: str = "ui") -> bool:
-    """
-    Load a layout preset.
-    
-    Args:
-        resolve_obj: DaVinci Resolve API object
-        preset_name: Name of the preset to load
-        layout_type: Type of layout to load ('ui', 'window', 'workspace')
-        
-    Returns:
-        True if successful, False otherwise
-    """
-    try:
-        # Different layout types have different load methods
-        if layout_type.lower() == "ui":
-            # For UI layouts, use the UI Manager
-            ui_manager = resolve_obj.GetUIManager()
-            if not ui_manager:
-                logger.error("Failed to get UI Manager")
-                return False
-            
-            # Load the specified UI layout
-            return ui_manager.LoadUILayout(preset_name)
-        else:
-            # Other layout types would be handled here
-            logger.error(f"Unsupported layout type: {layout_type}")
-            return False
-    except Exception as e:
-        logger.error(f"Error loading layout preset: {str(e)}")
-        return False
 
 def export_layout_preset(preset_name: str, export_path: str, layout_type: str = "ui") -> bool:
     """
