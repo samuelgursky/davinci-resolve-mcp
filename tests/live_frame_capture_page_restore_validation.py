@@ -13,18 +13,26 @@ generator-only timeline, then:
 
   0. Control: calls the raw getter from the Edit page and prints whether this
      build switches page on it. Informational — either answer is a finding.
+  A. Captures once while the project has never had a render output folder.
+     There is nothing to read back then (AddRenderJob returns ''), and the
+     capture must still work and say nothing.
+  B. Gives the project a user's render settings — a .mov format, an output
+     folder and a custom file name — and records what a render job queued
+     now would inherit.
   1. For each starting page: parks the playhead, captures a DIFFERENT frame
      through the render route, and reads the page, playhead and current
      timeline back. The Media and Fusion pages are included; if a capture is
      refused there the page must still be where it started.
-  2. After each capture, queues a throwaway render job and reads ITS range
-     back. The capture pins the render range to one frame; a job added
-     afterwards must carry the whole timeline again, not the captured frame.
+  2. After each capture, queues a throwaway render job and compares what IT
+     inherits with the record from B: output folder, file name, range, and the
+     render format. The render queue must be as empty as it was.
   3. render(action="get_mode") from the Edit page must leave the page alone.
+  4. One capture with the project in Individual-clips render mode: the mode,
+     and everything in B, must come back.
 
-A pass needs every page read back to be the starting page AND no capture to
-carry a warnings block. The harness also prints how many OpenPage attempts each
-restore needed on this build.
+A pass needs every page read back to be the starting page, every job readback
+to match B, AND no capture to carry a warnings block. The harness also prints
+how many OpenPage attempts each restore needed on this build.
 
 The project that was open beforehand is saved before the switch and loaded
 again at the end.
@@ -33,13 +41,17 @@ again at the end.
 from __future__ import annotations
 
 import argparse
+import os
+import shutil
 import sys
+import tempfile
 import time
 from pathlib import Path
 from unittest import mock
 
 PAGES = ("edit", "color", "fairlight", "cut", "media", "fusion", "deliver")
 PARK_TC = "01:00:02:00"
+USER_NAME = "user reel A"
 # Captured frame, as an offset from the timeline start. Deliberately NOT the
 # parked frame: if the capture renders the frame the playhead is already on, a
 # playhead left on the rendered frame is indistinguishable from one put back.
@@ -117,6 +129,9 @@ def main() -> int:
     previous_project = None
     failures = []
     rows = []
+    user_root = tempfile.mkdtemp(prefix="mcp-capture-live-")
+    user_target = os.path.join(user_root, "user deliveries")
+    os.makedirs(user_target)
 
     try:
         version = _require_success("resolve_control.get_version", server.resolve_control("get_version"))
@@ -164,18 +179,60 @@ def main() -> int:
             f"{after_getter!r} ({'SWITCHES page' if after_getter != 'edit' else 'does not switch page'})"
         )
 
-        def _job_range():
-            """The render range a job queued right now would inherit."""
+        def _inherits():
+            """What a render job queued right now would inherit, or None."""
             job = proj.AddRenderJob()
             if not job:
                 return None
             try:
                 for entry in proj.GetRenderJobList() or []:
                     if entry.get("JobId") == job:
-                        return entry.get("MarkIn"), entry.get("MarkOut")
+                        return {
+                            "TargetDir": entry.get("TargetDir"),
+                            "OutputFilename": entry.get("OutputFilename"),
+                            "MarkIn": entry.get("MarkIn"),
+                            "MarkOut": entry.get("MarkOut"),
+                            "format": proj.GetCurrentRenderFormatAndCodec(),
+                        }
                 return None
             finally:
                 proj.DeleteRenderJob(job)
+
+        def _image_of(result):
+            """(image or error dict, warnings) from a capture result."""
+            if isinstance(result, list):
+                return result[0], result[1].get("warnings")
+            return result, None
+
+        # A. Never had an output folder: nothing to read, nothing to say.
+        resolve.OpenPage("edit")
+        unset = _inherits()
+        first, first_warnings = _image_of(server.timeline_frame(
+            "capture", {"quality": "frame", "format": "jpg", "frame": tl_start + CAPTURE_OFFSET}))
+        print(
+            f"A. no output folder yet: a job queues -> {unset is not None}; capture -> "
+            f"{type(first).__name__}, warnings {first_warnings}"
+        )
+        if unset is not None:
+            failures.append("A: expected a fresh project to refuse a render job (no TargetDir)")
+        if isinstance(first, dict) or first_warnings:
+            failures.append(f"A: capture with no output folder: {first if isinstance(first, dict) else first_warnings}")
+
+        # B. A user's render settings, and what a job inherits from them.
+        mov_codecs = proj.GetRenderCodecs("mov") or {}
+        if not proj.SetCurrentRenderFormatAndCodec("mov", list(mov_codecs.values())[0]):
+            raise AssertionError("could not select the mov render format")
+        if not proj.SetRenderSettings({"TargetDir": user_target, "CustomName": USER_NAME,
+                                       "SelectAllFrames": True}):
+            raise AssertionError("could not apply the user's render settings")
+        baseline = _inherits()
+        queue_baseline = len(proj.GetRenderJobList() or [])
+        print(f"B. a job inherits: {baseline}")
+        if not baseline or baseline["TargetDir"] != user_target \
+                or not baseline["OutputFilename"].startswith(USER_NAME):
+            raise AssertionError(f"the user's render settings did not read back: {baseline}")
+        if (baseline["MarkIn"], baseline["MarkOut"]) != (tl_start, tl_end - 1):
+            raise AssertionError(f"expected the whole timeline as the starting range: {baseline}")
 
         # Record what the restore actually did, without changing it.
         outcomes = []
@@ -216,12 +273,7 @@ def main() -> int:
                         playhead = tl.GetCurrentTimecode()
                     current = proj.GetCurrentTimeline()
 
-                    warnings = None
-                    if isinstance(result, list):
-                        warnings = result[1].get("warnings")
-                        image = result[0]
-                    else:
-                        image = result
+                    image, warnings = _image_of(result)
                     if isinstance(image, dict):
                         message = (image.get("error") or {}).get("message")
                         print(f"  {page:<9} #{run}: capture refused ({message}); page {ended!r}")
@@ -250,11 +302,16 @@ def main() -> int:
                     if not current or current.GetName() != timeline_name:
                         failures.append(f"{page} #{run}: current timeline changed")
                     # 2. Read last: queuing a job moves the page by itself.
-                    inherited = _job_range()
-                    if inherited != (tl_start, tl_end - 1):
+                    inherited = _inherits()
+                    if inherited != baseline:
                         failures.append(
-                            f"{page} #{run}: a job queued after the capture would render "
-                            f"{inherited}, not the whole timeline {(tl_start, tl_end - 1)}"
+                            f"{page} #{run}: a job queued after the capture would inherit "
+                            f"{inherited}, not {baseline}"
+                        )
+                    queued = len(proj.GetRenderJobList() or [])
+                    if queued != queue_baseline:
+                        failures.append(
+                            f"{page} #{run}: render queue holds {queued} job(s), was {queue_baseline}"
                         )
 
         # 3. The render-mode read on its own must not move the user.
@@ -264,6 +321,36 @@ def main() -> int:
         print(f"  render.get_mode -> {mode.get('mode')!r}, page afterwards {after_read!r}")
         if after_read != "edit":
             failures.append(f"render.get_mode left Resolve on {after_read!r}")
+
+        # 4. Individual-clips mode: the capture forces single clip, and the
+        # output folder is read only once it has.
+        resolve.OpenPage("edit")
+        _park(tl)
+        if not proj.SetCurrentRenderMode(0):
+            raise AssertionError("could not select Individual-clips render mode")
+        resolve.OpenPage("edit")
+        image, warnings = _image_of(server.timeline_frame(
+            "capture", {"quality": "frame", "format": "jpg", "frame": tl_start + CAPTURE_OFFSET}))
+        page_after = resolve.GetCurrentPage()
+        mode_after = proj.GetCurrentRenderMode()
+        proj.SetCurrentRenderMode(1)
+        inherited = _inherits()
+        print(
+            f"  individual-clips mode: capture {type(image).__name__}, warnings {warnings}, "
+            f"mode afterwards {mode_after!r}, page {page_after!r}, job inherits baseline: "
+            f"{inherited == baseline}"
+        )
+        if isinstance(image, dict) or warnings:
+            failures.append(f"mode 0: capture {image if isinstance(image, dict) else warnings}")
+        if mode_after != 0:
+            failures.append(f"mode 0: render mode came back as {mode_after!r}")
+        if page_after != "edit":
+            failures.append(f"mode 0: ended on {page_after!r}")
+        if inherited != baseline:
+            failures.append(f"mode 0: a job would inherit {inherited}, not {baseline}")
+        queued = len(proj.GetRenderJobList() or [])
+        if queued != queue_baseline:
+            failures.append(f"mode 0: render queue holds {queued} job(s), was {queue_baseline}")
 
         if not rows:
             failures.append("no capture ran")
@@ -283,6 +370,7 @@ def main() -> int:
             if previous_project and previous_project != project_name:
                 reloaded = server.project_manager("load", {"name": previous_project})
                 print(f"Reloaded the project that was open before: {reloaded.get('success')}")
+        shutil.rmtree(user_root, ignore_errors=True)
 
     if delete_result and delete_result.get("success") is not True:
         raise AssertionError(f"Cleanup failed for {project_name}: {delete_result!r}")

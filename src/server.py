@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 377-tool granular server instead
 """
 
-VERSION = "4.8.23"
+VERSION = "4.8.24"
 
 import base64
 import os
@@ -14977,6 +14977,47 @@ def _render_job_completed(status: Optional[Dict[str, Any]]) -> bool:
         return False
 
 
+def _render_target_dir(proj, teardown: List[str]) -> Optional[str]:
+    """The project's current render TargetDir, read off a throwaway render job.
+
+    There is no GetRenderSettings, but a queued job carries the settings it
+    inherited: queue one, read TargetDir off its GetRenderJobList entry, delete
+    it. Measured on Studio 19.1.3.7 (api_truth 'Project.AddRenderJob (the only
+    readback for render settings)'): about 150 ms, no dialog even when an
+    identical job is already queued or the output file already exists.
+
+    Returns None when no job can be queued. That is what a project with no
+    render target does (AddRenderJob returns ''), and then there is nothing to
+    put back. A job that was queued and could not be removed again is reported
+    through `teardown`: it is the one thing this read can leave behind.
+    """
+    try:
+        job = proj.AddRenderJob()
+    except Exception:
+        return None
+    if not job:
+        return None
+    target = None
+    try:
+        for entry in proj.GetRenderJobList() or []:
+            if isinstance(entry, dict) and entry.get("JobId") == job:
+                target = entry.get("TargetDir")
+                break
+    except Exception:
+        target = None
+    try:
+        removed = bool(proj.DeleteRenderJob(job))
+    except Exception:
+        removed = False
+    if not removed:
+        logger.warning("frame capture could not remove its throwaway render job %s", job)
+        teardown.append(
+            f"A render job ({job}) queued only to read the output folder could not be "
+            "removed from the render queue. Delete it with render(action='delete_job')."
+        )
+    return target if isinstance(target, str) and target else None
+
+
 def _playhead_frame_render(proj, tl, p: Dict[str, Any],
                            teardown: Optional[List[str]] = None):
     """Render exactly one frame — the only frame-accurate capture route.
@@ -14991,24 +15032,30 @@ def _playhead_frame_render(proj, tl, p: Dict[str, Any],
     runs in well under a second, and needs no GUI panel or foreground window.
 
     The cost is that render settings are project-level state, and there is still
-    no GetRenderSettings to read them back from (absent as of 21.1). Three
-    different things happen on the way out:
+    no GetRenderSettings to read them back from (absent as of 21.1). Each one
+    the capture touches is put back by whatever route exists:
       - Format and codec are readable via GetCurrentRenderFormatAndCodec and are
         genuinely restored.
       - The mark range is readable via Timeline.GetMarkInOut, so a range the
         caller had set is put back (offset into SetRenderSettings' absolute
         frame space); with no range set it falls back to the whole timeline.
-      - TargetDir and CustomName are readable from nowhere, so they are NOT
-        restored: they stay on the capture's temporary folder and name. An
-        empty CustomName cannot be written back either (refused on 19.1.3.7).
+      - TargetDir is read off a throwaway render job before the capture changes
+        it (_render_target_dir) and written back afterwards. A project that
+        has never had a render target has nothing to read, and Resolve cannot
+        clear one once set, so there it is left on the capture's folder.
+      - CustomName is never written. It can be neither read nor cleared (an
+        empty one is refused on 19.1.3.7), so the capture renders under
+        whatever name the project already produces, into a folder of its own,
+        and takes the one file that appears there.
     Callers who need a strictly side-effect-free read should use
     quality="thumbnail" and accept per-clip granularity.
 
     `teardown` collects one sentence per restore that did not take (render
-    mode, format/codec, render range, playhead, page). The restores run in a
-    `finally`, which cannot change the value already being returned, so the
-    caller passes the list in and attaches it to the result afterwards (issue
-    #270: the user was left on Deliver with nothing in the result to say so).
+    mode, format/codec, render range, output folder, playhead, page). The
+    restores run in a `finally`, which cannot change the value already being
+    returned, so the caller passes the list in and attaches it to the result
+    afterwards (issue #270: the user was left on Deliver with nothing in the
+    result to say so).
     """
     if teardown is None:
         teardown = []
@@ -15050,9 +15097,13 @@ def _playhead_frame_render(proj, tl, p: Dict[str, Any],
     except (TypeError, ValueError):
         return _err("frame must be an integer", code="INVALID_FRAME", category="invalid_input")
 
-    folder = _resolve_safe_dir(os.path.join(tempfile.gettempdir(), "resolve-frame-captures"))
+    # A directory of this capture's own, inside the shared capture folder. The
+    # render is NOT given a CustomName (see the docstring), so the file comes
+    # out under the project's own naming and cannot be picked out of a shared
+    # folder by prefix; whatever appears in here is the frame.
+    base = _resolve_safe_dir(os.path.join(tempfile.gettempdir(), "resolve-frame-captures"))
+    folder = os.path.join(base, f"{STILL_STAGING_PREFIX}{_uuid.uuid4().hex}")
     os.makedirs(folder, exist_ok=True)
-    name = f"capture-{int(time.time() * 1000)}"
 
     # Where the user is comes FIRST, before any render call. Issue #270: this
     # was read after GetCurrentRenderMode(), and that getter itself switches
@@ -15078,9 +15129,9 @@ def _playhead_frame_render(proj, tl, p: Dict[str, Any],
     except Exception:
         pass
     # Render MODE is project state too, and it decides whether the capture can
-    # work at all. In "Individual clips" mode (0) Resolve ignores CustomName,
-    # renders the WHOLE clip under the frame's own file naming, and the
-    # single-frame file this helper waits for never appears — measured
+    # work at all. In "Individual clips" mode (0) Resolve renders the WHOLE
+    # clip under its own per-clip file naming, and the single-frame file this
+    # helper waits for never appears — measured
     # 2026-09-09 on a project whose delivery preset was per-clip: every capture
     # reported success, wrote no file, and took 30+ s rendering the clip.
     # Force single clip (1) for the capture and put the mode back afterwards.
@@ -15126,6 +15177,7 @@ def _playhead_frame_render(proj, tl, p: Dict[str, Any],
 
     job = None
     range_pinned = False
+    original_target = None
     try:
         if original_mode is not None and original_mode != 1:
             if not proj.SetCurrentRenderMode(1):
@@ -15137,6 +15189,11 @@ def _playhead_frame_render(proj, tl, p: Dict[str, Any],
                     remediation="render(action='set_mode', params={'mode': 1}) then retry.",
                     state={"render_mode": original_mode},
                 )
+        # Read the output folder while the settings are still the user's, and
+        # in single-clip mode: in individual-clips mode a job may not queue at
+        # all (generator-only timeline, 19.1.3.7), and then there is no entry
+        # to read it from.
+        original_target = _render_target_dir(proj, teardown)
         codecs = proj.GetRenderCodecs("JPEG" if fmt == "jpg" else fmt.upper()) or {}
         codec = list(codecs.values())[0] if codecs else fmt
         if not proj.SetCurrentRenderFormatAndCodec(fmt, codec):
@@ -15147,7 +15204,6 @@ def _playhead_frame_render(proj, tl, p: Dict[str, Any],
             )
         applied = proj.SetRenderSettings({
             "TargetDir": folder,
-            "CustomName": name,
             "MarkIn": frame,
             "MarkOut": frame,
             "SelectAllFrames": False,
@@ -15164,14 +15220,12 @@ def _playhead_frame_render(proj, tl, p: Dict[str, Any],
         job = proj.AddRenderJob()
         if not job:
             return _err("AddRenderJob returned nothing", code="RENDER_JOB_FAILED", category="api_error")
-        # The folder is shared (every sandbox path redirects to one
-        # ~/Documents/resolve-stills) and the cleanup below removes it when it
-        # empties, so another capture — or anything else — can take it away
-        # between the makedirs above and here. Measured 2026-09-09: frame 81 of a
-        # 214-frame QC batch died in os.listdir on the missing folder. Recreate,
-        # don't assume.
+        # The parent is shared (every sandbox path redirects to one
+        # ~/Documents/resolve-stills) and each capture's cleanup removes it
+        # when it empties. Measured 2026-09-09, when captures still shared the
+        # folder itself: frame 81 of a 214-frame QC batch died in os.listdir on
+        # a folder another capture had just removed. Recreate, don't assume.
         os.makedirs(folder, exist_ok=True)
-        before = set(os.listdir(folder))
         # Positional on purpose: the free-edition bridge proxies method calls
         # positionally, and a keyword argument dies inside _BoundMethod with
         # "unexpected keyword argument 'isInteractiveMode'" before reaching
@@ -15194,15 +15248,19 @@ def _playhead_frame_render(proj, tl, p: Dict[str, Any],
                 code="RENDER_FAILED", category="api_error",
                 state={"status": status, "frame": frame},
             )
-        # Resolve appends the frame number to CustomName, so match on the prefix.
-        written = sorted(f for f in set(os.listdir(folder)) - before if f.startswith(name))
+        # The folder is this capture's alone, so whatever is in it is the
+        # frame — named by the project (custom name or timeline name, plus the
+        # frame number), which is not ours to predict.
+        written = sorted(
+            os.path.join(root, f) for root, _dirs, files in os.walk(folder) for f in files
+        )
         if not written:
             return _err(
                 "Render reported success but wrote no file",
                 code="RENDER_FAILED", category="api_error",
                 state={"folder": folder, "frame": frame},
             )
-        src_path = os.path.join(folder, written[0])
+        src_path = written[0]
         out_format = "jpg" if fmt == "jpg" else "png"
         if max_width or fmt == "tif":
             data, ff_err = _ffmpeg_scale_to_bytes(src_path, int(max_width) if max_width else None, out_format)
@@ -15257,11 +15315,10 @@ def _playhead_frame_render(proj, tl, p: Dict[str, Any],
                     f"({fmt}); restoring {original_fc.get('format')}/{original_fc.get('codec')} "
                     "failed, so the next render job would inherit it."
                 )
-        # Still not a full restore — GetRenderSettings does not exist, so the
-        # other settings cannot be read back. The mark range can: put the user's
-        # own range back when they had one, and fall back to the whole timeline
-        # when they did not, so the range is never left pinned to the captured
-        # frame for the next render job to inherit.
+        # The mark range: put the user's own range back when they had one, and
+        # fall back to the whole timeline when they did not, so the range is
+        # never left pinned to the captured frame for the next render job to
+        # inherit.
         # (original_marks is already in SetRenderSettings' absolute space — see
         # the offset above.)
         #
@@ -15270,6 +15327,7 @@ def _playhead_frame_render(proj, tl, p: Dict[str, Any],
         # rejecting the WHOLE payload (measured on Studio 19.1.3.7: False, and a
         # job added afterwards still carried MarkIn == MarkOut == the captured
         # frame). So the range was never put back, and the False was discarded.
+        # One setting per payload, each return checked.
         try:
             if original_marks:
                 restored_marks = {
@@ -15298,21 +15356,28 @@ def _playhead_frame_render(proj, tl, p: Dict[str, Any],
                     "restoring it failed, so the next render job would render one "
                     "frame. Set the range again before rendering."
                 )
-        # Best effort, and expected to be refused on 19.1.3.7 (see above): where
-        # a build does accept it, the capture's name stops being inherited.
+        # The output folder, when there was one to read. Without this the
+        # user's next render job inherits a temporary folder that the cleanup
+        # just below removes.
+        if range_pinned and original_target:
+            try:
+                target_restored = bool(proj.SetRenderSettings({"TargetDir": original_target}))
+                target_exc = None
+            except Exception as exc:
+                target_restored, target_exc = False, exc
+            if not target_restored:
+                logger.warning(
+                    "frame capture could not restore the render output folder to %s: %s",
+                    original_target, target_exc or "SetRenderSettings returned False",
+                )
+                teardown.append(
+                    "The render output folder was left on the capture's temporary "
+                    f"folder; restoring {original_target!r} failed. Set it again with "
+                    "render(action='set_settings', params={'settings': {'TargetDir': ...}})."
+                )
+        _discard_still_staging(folder)
         try:
-            proj.SetRenderSettings({"CustomName": ""})
-        except Exception:
-            pass
-        try:
-            for f in os.listdir(folder):
-                if f.startswith(name):
-                    try:
-                        os.remove(os.path.join(folder, f))
-                    except OSError:
-                        pass
-            if not os.listdir(folder):
-                os.rmdir(folder)
+            os.rmdir(base)  # only ever succeeds when nothing else is using it
         except OSError:
             pass
         if not _restore_playhead(tl, original_tc, what="the render capture"):
@@ -26709,13 +26774,13 @@ def timeline_frame(action: str, params: Optional[Dict[str, Any]] = None) -> Any:
     Choosing a quality — the trade-off is accuracy against side effects:
 
       'frame'/'preview'  Frame-exact. Renders one frame, so it changes
-                   project-level render settings. Render mode, format, codec
-                   and the mark range are restored. TargetDir and CustomName
-                   cannot be read back (there is no GetRenderSettings), so they
-                   are NOT restored: they stay on the capture's temporary folder
-                   and name, and capabilities() lists them under
-                   render_settings_restorable. Set your own before the next
-                   render. Refuses while another render is running.
+                   project-level render settings, and puts them back: render
+                   mode, format, codec, mark range and output folder
+                   (TargetDir). The file name (CustomName) is never touched.
+                   One exception: a project that has never had an output
+                   folder has none to put back, and Resolve cannot clear one,
+                   so it is left on the capture's temporary folder. Refuses
+                   while another render is running.
       'thumbnail'  Changes nothing and returns instantly, but it is NOT frame
                    accurate: GetCurrentClipThumbnailImage returns the clip's
                    thumbnail, identical for every frame of that clip (measured
@@ -26751,16 +26816,21 @@ def timeline_frame(action: str, params: Optional[Dict[str, Any]] = None) -> Any:
             "ffmpeg": bool(shutil.which("ffmpeg")),
             "max_width_supported": bool(shutil.which("ffmpeg")),
             "current_page": current_page,
-            # What the render route ('frame'/'preview') puts back afterwards.
-            # False means left on the capture's own value, because Resolve
-            # offers no way to read the original: there is no GetRenderSettings.
+            # What the render route ('frame'/'preview') leaves as it found it.
+            # TargetDir is read off a throwaway render job and written back;
+            # CustomName is never written. The one gap is a project with no
+            # TargetDir yet: there is none to read and Resolve cannot clear it.
             "render_settings_restorable": {
                 "render_mode": True,
                 "format_codec": True,
                 "mark_range": True,
-                "TargetDir": False,
-                "CustomName": False,
+                "TargetDir": True,
+                "CustomName": True,
             },
+            "render_settings_caveat": (
+                "A project that has never had a render TargetDir is left with the "
+                "capture's temporary folder as its TargetDir."
+            ),
         }
         _, tl, err = _get_tl()
         if err:

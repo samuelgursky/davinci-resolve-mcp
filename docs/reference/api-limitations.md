@@ -12,7 +12,7 @@ that none exists).
 
 **Verified on:** DaVinci Resolve Studio 21.0.2
 
-**Totals:** 41 missing capabilities, 56 bugs / unreliable behaviors.
+**Totals:** 42 missing capabilities, 56 bugs / unreliable behaviors.
 
 The authoritative source is the runtime-queryable `api_truth` ledger
 (`resolve_control api_truth "<query>"`); this document is generated from
@@ -254,6 +254,15 @@ equivalent, blocking full automation.
 - **Behavior:** Some render formats expose NO codecs at all, and the call then rejects every codec value — the empty string, the format id itself, and any plausible name ('Linear PCM'). Which formats are affected varies by build: 'wav' and 'gif' on Studio 19.1.3.7; 'braw', 'mts' and 'wav' on 21.0.4.5 (gif gained codecs, BRAW and MTS lost them). 'wav' is affected on both, so there is no documented way to select it through this API and an audio-only WAV deliverable is not expressible in scripting.
 - **Workaround / current handling:** Check GetRenderCodecs(format) first; when it is empty, treat the format as unreachable through this API rather than guessing a codec value. Render audio-only via ExportVideo=False on a format that does expose codecs, or drive it from a saved render preset.
 - **Tags:** render, deliver, audio, unsupported
+
+### Project.AddRenderJob (the only readback for render settings)
+
+- **Object:** `Project`
+- **Signature:** `() -> str`
+- **Behavior:** There is no GetRenderSettings, but a queued job carries the settings it inherited. Measured 2026-09-30 on Studio 19.1.3.7: after AddRenderJob, the matching GetRenderJobList entry reports TargetDir, OutputFilename (the custom name, or the timeline name when none was ever set, plus the format's extension), MarkIn/MarkOut, VideoFormat/VideoCodec, RenderMode and PresetName, and DeleteRenderJob removes it. The round trip took about 150 ms and switches Resolve to the Deliver page. Queuing two identical jobs, or a job whose output file already exists, raised no dialog and returned distinct ids. Limits: AddRenderJob returns '' when no TargetDir has ever been set, and also in Individual-clips mode on a generator-only timeline, so neither state can be read this way. Once set, TargetDir cannot be cleared — SetRenderSettings returns False for '' and for None — though a TargetDir that does not exist is accepted. CustomName has no direct readback: it is only visible folded into OutputFilename.
+- **Workaround / current handling:** To preserve a user's output folder across work that has to change it: in single-clip mode, queue a job, read TargetDir off its entry, delete the job, and write TargetDir back afterwards. Leave CustomName alone wherever possible — it can be neither read nor cleared; render into a private folder and take the file that appears instead of naming it.
+- **Reference:** [issue #270](https://github.com/samuelgursky/davinci-resolve-mcp/issues/270)
+- **Tags:** render, deliver, readback, unsupported
 
 ### TimelineItem.SetCDL (write-only — no GetCDL anywhere)
 
@@ -703,7 +712,7 @@ values, or automation-hostile modal prompts.
 - **Object:** `Project`
 - **Signature:** `({settings}) -> bool`
 - **Behavior:** SetRenderSettings returns False for {'CustomName': ''} and for {'CustomName': None}, and when that key rides in a larger payload the WHOLE payload is rejected, not just the name. Measured 2026-09-30 on Studio 19.1.3.7: with the render range pinned to one frame, {SelectAllFrames: True, MarkIn: start, MarkOut: end, CustomName: ''} returned False and a job added afterwards still carried MarkIn == MarkOut == the pinned frame; the same payload without CustomName returned True and the job carried the whole timeline. A single space IS accepted, and becomes the file name. So a custom name, once set, cannot be cleared through this API, and there is no GetRenderSettings to read the previous one back from.
-- **Workaround / current handling:** Never send an empty CustomName, and never bundle a best-effort key with keys that matter: send the range in its own payload and check its return. To see what a job will inherit, AddRenderJob, read MarkIn/MarkOut/TargetDir/OutputFilename off GetRenderJobList, then DeleteRenderJob.
+- **Workaround / current handling:** Never send an empty CustomName, and never bundle a best-effort key with keys that matter: send each setting in its own payload and check its return. Better, do not write CustomName at all when the name is not yours to keep. To see what a job will inherit, AddRenderJob, read MarkIn/MarkOut/TargetDir/OutputFilename off GetRenderJobList, then DeleteRenderJob.
 - **Reference:** [issue #270](https://github.com/samuelgursky/davinci-resolve-mcp/issues/270)
 - **Tags:** render, deliver, silent-failure, unreliable-return
 

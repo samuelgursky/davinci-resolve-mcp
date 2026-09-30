@@ -101,11 +101,6 @@ ALLOWED: dict[tuple[str, str, str], str] = {
 
     # --- teardown ----------------------------------------------------------
     ("server.py", "_playhead_frame_render", "DeleteRenderJob"): TEARDOWN,
-    ("server.py", "_playhead_frame_render", "SetRenderSettings"): (
-        TEARDOWN + "; this is only the best-effort CustomName clear, which "
-        "19.1.3.7 refuses outright and there is no GetRenderSettings to restore "
-        "it from. The render-range restore beside it IS checked and reported"
-    ),
     ("server.py", "_playhead_frame_full", "DeleteStills"): TEARDOWN,
     ("server.py", "render", "StopRendering"): (
         "the API returns None; the caller polls IsRenderingInProgress"

@@ -2,6 +2,66 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.8.24 — a frame capture leaves the render output folder and file name alone
+
+### Fixed
+
+- **`timeline_frame` capture left the project's render output folder and file
+  name on its own temporary values.** The render route (`quality="frame"`,
+  `"preview"`, `"full"`) wrote `TargetDir` and `CustomName` and put neither
+  back, because there is no `GetRenderSettings` to read them from. The user's
+  next render job inherited a temporary folder the capture had already deleted
+  and a name like `capture-<timestamp>`. v4.8.23 documented this; this release
+  fixes it.
+  - **Output folder (`TargetDir`).** A queued render job carries the settings it
+    inherited, so the capture queues a throwaway job, reads `TargetDir` off its
+    `GetRenderJobList` entry, deletes the job, and writes the folder back
+    afterwards. A folder that is not put back, or a throwaway job that cannot
+    be removed, is reported in the capture's `warnings` block.
+  - **File name (`CustomName`).** It is no longer written at all. It can be
+    neither read back nor cleared (an empty one is refused), so the capture
+    renders under whatever name the project already produces, into a private
+    folder of its own, and takes the one file that appears there.
+  - Live on Studio 19.1.3.7, with a `.mov` format, an output folder and a custom
+    name set: a job queued after each of 15 captures inherited the same folder,
+    file name, range and format as one queued before, and the render queue was
+    left empty.
+- **One gap remains, and it is stated rather than hidden.** A project that has
+  never had an output folder has none to read (`AddRenderJob` returns `''`),
+  and Resolve cannot clear one once set, so such a project is left with the
+  capture's temporary folder as its `TargetDir`. `timeline_frame capabilities`
+  reports this as `render_settings_caveat`.
+- The captured frame can no longer be confused with, or delete, another file in
+  the shared capture folder. Each capture renders into its own subfolder; the
+  shared one (`~/Documents/resolve-stills` on macOS) is only removed when empty.
+
+### Changed
+
+- `timeline_frame capabilities`: `render_settings_restorable.TargetDir` and
+  `.CustomName` are now `true`, and `render_settings_caveat` is new.
+- A render capture takes about 0.2 s longer (measured: roughly 1.3 s against
+  1.1 s), which is the throwaway job used to read the output folder.
+
+### Documentation
+
+- `api_truth` gains `Project.AddRenderJob (the only readback for render
+  settings)`, measured on Studio 19.1.3.7: what a job entry exposes, that
+  `TargetDir` cannot be cleared, when `AddRenderJob` returns `''`, and that
+  duplicate jobs and existing output files raise no dialog.
+  `docs/reference/api-limitations.md` is regenerated.
+
+### Tests
+
+- `tests/test_playhead_frame_capture.py`: the render fake now models the job
+  queue as the readback it is. `CaptureOutputSettingsTest` covers the folder
+  coming back, the name never being written, a project with no output folder, a
+  same-named file already in the shared folder, the read happening in
+  single-clip mode before anything changes, and both failure reports. Six of
+  its ten tests fail against v4.8.23.
+- `tests/live_frame_capture_page_restore_validation.py` now gives the disposable
+  project a user's render settings and compares what a job inherits before and
+  after every capture, including one from Individual-clips mode.
+
 ## What's New in v4.8.23 — a frame capture no longer leaves Resolve on the Deliver page
 
 ### Fixed

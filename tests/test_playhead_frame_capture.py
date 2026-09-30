@@ -10,6 +10,8 @@ import asyncio
 import base64
 import json
 import os
+import shutil
+import tempfile
 import unittest
 from unittest import mock
 
@@ -270,19 +272,31 @@ def _restored_range(calls):
     return [c for c in calls if "MarkIn" in c][-1]
 
 
+USER_TARGET = "/Volumes/Deliveries/reel one"
+
+
 class _RenderCapture:
     """Drives quality='frame' against a fake project that renders one file.
 
     The fake behaves the way Studio 19.1.3.7 was measured to (2026-09-30):
-    GetCurrentRenderMode — a getter — switches Resolve to the Deliver page, and
-    a SetRenderSettings payload carrying an empty CustomName is refused WHOLE,
-    range included. `proj.render_range` is the range Resolve would actually
-    hold, which is what the next render job inherits.
+
+    - GetCurrentRenderMode — a getter — switches Resolve to the Deliver page.
+    - A SetRenderSettings payload carrying an empty CustomName, or an empty
+      TargetDir, is refused WHOLE: nothing in it is applied.
+    - There is no GetRenderSettings. A queued job is the readback: its
+      GetRenderJobList entry carries the TargetDir, file name and range it
+      inherited. With no TargetDir set, AddRenderJob returns ''.
+    - A render writes `<custom name, or the timeline name><frame>.<ext>`.
+
+    `proj.render_state` is what Resolve would actually hold afterwards, which
+    is what the user's next render job inherits.
     """
 
-    def _capture(self, params, rendering=False, job="job-1", status="Complete",
+    def _capture(self, params, rendering=False, status="Complete",
                  write=True, ffmpeg="/usr/bin/ffmpeg", marks=None, mode=1, mode_switch=True,
-                 resolve=None, range_restore_ok=True):
+                 resolve=None, range_restore_ok=True, user_target=USER_TARGET,
+                 user_name="userA", target_restore_ok=True, job_delete_ok=True,
+                 existing=None):
         """Returns (result, project mock, list of SetRenderSettings payloads)."""
         resolve = resolve or _FakeResolve(page="color")
         tl = _fake_timeline(resolve)
@@ -290,7 +304,9 @@ class _RenderCapture:
         tl.GetEndFrame.return_value = 86544
         tl.GetMarkInOut.return_value = marks if marks is not None else {}
         proj = mock.Mock()
-        proj.render_range = None
+        state = {"TargetDir": user_target, "CustomName": user_name, "range": None,
+                 "jobs": {}, "queued": 0}
+        proj.render_state = state
         proj.IsRenderingInProgress.side_effect = [rendering, False]
 
         def _mode():
@@ -302,46 +318,74 @@ class _RenderCapture:
         proj.GetCurrentRenderFormatAndCodec.return_value = {"format": "mov", "codec": "H.264"}
         proj.GetRenderCodecs.return_value = {"JPEG": "YUV420_8"}
         proj.SetCurrentRenderFormatAndCodec.return_value = True
-        proj.SetRenderSettings.return_value = True
-        proj.AddRenderJob.return_value = job
-        proj.StartRendering.return_value = True
         proj.GetRenderJobStatus.return_value = (
             status if isinstance(status, dict) else {"JobStatus": status}
         )
 
         calls = []
-        target = {}
 
         def _settings(payload):
             calls.append(dict(payload))
-            if payload.get("CustomName") == "":
+            if payload.get("CustomName") == "" or ("TargetDir" in payload and not payload["TargetDir"]):
                 return False  # refused whole: nothing below is applied
-            if payload.get("CustomName"):
-                target["dir"] = payload["TargetDir"]
-                target["name"] = payload["CustomName"]
-            elif "MarkIn" in payload and not range_restore_ok:
+            if "MarkIn" in payload and "TargetDir" not in payload and not range_restore_ok:
                 return False
+            if set(payload) == {"TargetDir"} and not target_restore_ok:
+                return False
+            for key in ("TargetDir", "CustomName"):
+                if key in payload:
+                    state[key] = payload[key]
             if "MarkIn" in payload:
-                proj.render_range = (payload["SelectAllFrames"], payload["MarkIn"],
-                                     payload["MarkOut"])
+                state["range"] = (payload["SelectAllFrames"], payload["MarkIn"], payload["MarkOut"])
             return True
+
+        def _add_job():
+            resolve.page = "deliver"
+            if not state["TargetDir"]:
+                return ""
+            state["queued"] += 1
+            job_id = f"job-{state['queued']}"
+            state["jobs"][job_id] = {
+                "JobId": job_id,
+                "TargetDir": state["TargetDir"],
+                "OutputFilename": f"{state['CustomName'] or 'TL'}.mov",
+            }
+            return job_id
+
+        def _delete_job(job_id):
+            if not job_delete_ok:
+                return False
+            return state["jobs"].pop(job_id, None) is not None
 
         def _start(jobs, interactive=False, **kwargs):
             # Rendering pulls Resolve onto the Deliver page, whatever page the
             # caller was on.
             resolve.page = "deliver"
-            # Resolve writes the file during the render, and appends the frame
-            # number to CustomName.
-            if write and target:
-                os.makedirs(target["dir"], exist_ok=True)
-                with open(os.path.join(target["dir"], f"{target['name']}_00086424.jpg"), "wb") as fh:
+            # Resolve writes the file during the render, named by the project:
+            # the custom name or the timeline name, then the frame number.
+            if write:
+                folder = state["jobs"][jobs[0]]["TargetDir"]
+                os.makedirs(folder, exist_ok=True)
+                with open(os.path.join(folder, f"{state['CustomName'] or 'TL'}00086424.jpg"), "wb") as fh:
                     fh.write(b"\xff\xd8rendered")
             return True
 
         proj.SetRenderSettings.side_effect = _settings
+        proj.AddRenderJob.side_effect = _add_job
+        proj.GetRenderJobList.side_effect = lambda: [dict(j) for j in state["jobs"].values()]
+        proj.DeleteRenderJob.side_effect = _delete_job
         proj.StartRendering.side_effect = _start
+        # The shared capture folder, kept off the real ~/Documents.
+        base = os.path.join(tempfile.mkdtemp(prefix="capture-test-"), "resolve-frame-captures")
+        self.addCleanup(shutil.rmtree, os.path.dirname(base), True)
+        self.capture_base = base
+        for filename in existing or ():
+            os.makedirs(base, exist_ok=True)
+            with open(os.path.join(base, filename), "wb") as fh:
+                fh.write(b"someone else's file")
         with mock.patch.object(s, "get_resolve", return_value=resolve), \
              mock.patch.object(s, "_get_tl", return_value=(proj, tl, None)), \
+             mock.patch.object(s, "_resolve_safe_dir", return_value=base), \
              mock.patch.object(s.shutil, "which", return_value=ffmpeg), \
              mock.patch.object(s, "_ffmpeg_scale_to_bytes", return_value=(b"\xff\xd8scaled", None)), \
              mock.patch.object(page_lock.time, "sleep"):
@@ -355,7 +399,7 @@ class CaptureRenderTest(_RenderCapture, unittest.TestCase):
     def test_render_is_the_default_quality(self):
         out, proj, _ = self._capture({})
         self.assertIsInstance(out, Image)
-        proj.AddRenderJob.assert_called_once()
+        proj.StartRendering.assert_called_once()
 
     def test_renders_a_single_frame_range(self):
         out, _, calls = self._capture({"frame": 86424})
@@ -368,7 +412,10 @@ class CaptureRenderTest(_RenderCapture, unittest.TestCase):
     def test_render_job_is_deleted_afterwards(self):
         out, proj, _ = self._capture({})
         self.assertIsInstance(out, Image)
-        proj.DeleteRenderJob.assert_called_once_with("job-1")
+        # Two were queued — the output-folder readback and the capture itself —
+        # and neither is left in the user's render queue.
+        self.assertEqual(proj.render_state["queued"], 2)
+        self.assertEqual(proj.render_state["jobs"], {})
 
     def test_render_format_is_restored(self):
         out, proj, _ = self._capture({})
@@ -417,7 +464,7 @@ class CaptureRenderTest(_RenderCapture, unittest.TestCase):
         # pinned to the captured frame and the next render job inherited it.
         out, proj, _ = self._capture({"frame": 86424})
         self.assertIsInstance(out, Image)
-        self.assertEqual(proj.render_range, (True, 86400, 86544))
+        self.assertEqual(proj.render_state["range"], (True, 86400, 86544))
 
     def test_an_existing_mark_range_is_restored(self):
         out, _, calls = self._capture(
@@ -498,13 +545,13 @@ class CaptureRenderTest(_RenderCapture, unittest.TestCase):
         # the clip thumbnail — it must still render, just bounded.
         out, proj, _ = self._capture({"quality": "preview"})
         self.assertIsInstance(out, Image)
-        proj.AddRenderJob.assert_called_once()
+        proj.StartRendering.assert_called_once()
         self.assertEqual(out.data, b"\xff\xd8scaled")
 
     def test_full_alias_maps_to_the_render_route(self):
         out, proj, _ = self._capture({"quality": "full"})
         self.assertIsInstance(out, Image)
-        proj.AddRenderJob.assert_called_once()
+        proj.StartRendering.assert_called_once()
 
 
 class CaptureRenderPageRestoreTest(_RenderCapture, unittest.TestCase):
@@ -598,6 +645,99 @@ class CaptureRenderPageRestoreTest(_RenderCapture, unittest.TestCase):
         self.assertIn("open_page", json.loads(blocks[1].text)["warnings"][0])
 
 
+class CaptureOutputSettingsTest(_RenderCapture, unittest.TestCase):
+    """The project's output folder and file name survive a capture.
+
+    Until v4.8.24 the capture wrote TargetDir and CustomName and put neither
+    back: there is no GetRenderSettings, and an empty CustomName is refused. So
+    the user's next render job inherited a temporary folder (already deleted)
+    and a name like capture-1790784198. Now the folder is read off a throwaway
+    render job and written back, and the name is never written at all.
+    """
+
+    def test_the_output_folder_is_put_back(self):
+        out, proj, _ = self._capture({"frame": 86424})
+        self.assertIsInstance(out, Image)
+        self.assertEqual(proj.render_state["TargetDir"], USER_TARGET)
+
+    def test_the_file_name_is_never_written(self):
+        out, proj, calls = self._capture({"frame": 86424})
+        self.assertIsInstance(out, Image)
+        self.assertEqual([c for c in calls if "CustomName" in c], [])
+        self.assertEqual(proj.render_state["CustomName"], "userA")
+
+    def test_the_frame_is_found_under_the_projects_own_naming(self):
+        # Custom name, or the timeline name when there is none: either way the
+        # file is not named by the capture, and it is still the one returned.
+        for user_name in ("userA", None):
+            with self.subTest(user_name=user_name):
+                out, _, _ = self._capture({"frame": 86424}, user_name=user_name)
+                self.assertIsInstance(out, Image)
+                self.assertEqual(out.data, b"\xff\xd8rendered")
+
+    def test_the_render_goes_to_a_folder_of_the_captures_own(self):
+        out, _, calls = self._capture({"frame": 86424})
+        self.assertIsInstance(out, Image)
+        staging = calls[0]["TargetDir"]
+        self.assertEqual(os.path.dirname(staging), self.capture_base)
+        self.assertTrue(os.path.basename(staging).startswith(s.STILL_STAGING_PREFIX))
+        # ...and nothing of it is left behind, the shared parent included.
+        self.assertFalse(os.path.exists(staging))
+        self.assertFalse(os.path.exists(self.capture_base))
+
+    def test_a_same_named_file_in_the_shared_folder_is_not_touched(self):
+        # The render is named by the project now, so a file of that name can
+        # already be sitting in the shared folder. It is neither returned as
+        # the frame nor deleted.
+        out, _, _ = self._capture({"frame": 86424}, existing=["userA00086424.jpg"])
+        self.assertIsInstance(out, Image)
+        self.assertEqual(out.data, b"\xff\xd8rendered")
+        with open(os.path.join(self.capture_base, "userA00086424.jpg"), "rb") as fh:
+            self.assertEqual(fh.read(), b"someone else's file")
+
+    def test_the_folder_is_read_in_single_clip_mode_before_anything_changes(self):
+        out, proj, calls = self._capture({"frame": 86424}, mode=0)
+        self.assertIsInstance(out, Image)
+        order = [c[0] for c in proj.method_calls]
+        readback = order.index("AddRenderJob")
+        self.assertLess(order.index("SetCurrentRenderMode"), readback)
+        self.assertLess(readback, order.index("SetCurrentRenderFormatAndCodec"))
+        self.assertLess(readback, order.index("SetRenderSettings"))
+        self.assertEqual(proj.render_state["TargetDir"], USER_TARGET)
+
+    def test_a_project_with_no_output_folder_still_captures(self):
+        # AddRenderJob returns '' there, so there is nothing to read and
+        # nothing to put back. That is not a failed restore.
+        out, proj, calls = self._capture({"frame": 86424}, user_target=None)
+        self.assertIsInstance(out, Image)
+        self.assertEqual([c for c in calls if set(c) == {"TargetDir"}], [])
+        self.assertEqual(proj.render_state["jobs"], {})
+
+    def test_an_output_folder_that_is_not_put_back_is_reported(self):
+        with mock.patch.object(s.logger, "warning"):
+            out, proj, _ = self._capture({"frame": 86424}, target_restore_ok=False)
+        self.assertIsInstance(out, list)
+        self.assertIsInstance(out[0], Image)
+        self.assertEqual(len(out[1]["warnings"]), 1)
+        self.assertIn("output folder", out[1]["warnings"][0])
+        self.assertIn(USER_TARGET, out[1]["warnings"][0])
+
+    def test_a_readback_job_that_cannot_be_removed_is_reported(self):
+        with mock.patch.object(s.logger, "warning"):
+            out, proj, _ = self._capture({"frame": 86424}, job_delete_ok=False)
+        self.assertIsInstance(out, list)
+        self.assertIn("job-1", out[1]["warnings"][0])
+        self.assertIn("render queue", out[1]["warnings"][0])
+
+    def test_an_early_refusal_does_not_rewrite_the_output_folder(self):
+        # Refused before the capture's settings went in: TargetDir is still the
+        # user's, so writing it "back" would be a write with nothing behind it.
+        out, proj, calls = self._capture({"frame": 86424}, mode=0, mode_switch=False)
+        self.assertEqual(out["error"]["code"], "RENDER_MODE_REFUSED")
+        self.assertEqual([c for c in calls if "TargetDir" in c], [])
+        self.assertEqual(proj.render_state["TargetDir"], USER_TARGET)
+
+
 class CaptureTeardownReportTest(_RenderCapture, unittest.TestCase):
     """Every restore the render route already detected as failed is reported."""
 
@@ -652,7 +792,7 @@ class CaptureTeardownReportTest(_RenderCapture, unittest.TestCase):
         self.assertIsInstance(out[0], Image)
         self.assertIn("render range", out[1]["warnings"][0])
         self.assertIn("86424", out[1]["warnings"][0])
-        self.assertEqual(proj.render_range, (False, 86424, 86424))
+        self.assertEqual(proj.render_state["range"], (False, 86424, 86424))
 
     def test_teardown_is_empty_for_a_clean_capture(self):
         out, _, _ = self._capture({})
@@ -677,11 +817,14 @@ class ToolSurfaceTest(unittest.TestCase):
         # TargetDir/CustomName reset be readable without opening the source.
         with mock.patch.object(s, "get_resolve", return_value=_FakeResolve(page="edit")), \
              mock.patch.object(s, "_get_tl", return_value=(None, None, {"error": "no timeline"})):
-            restorable = s.timeline_frame("capabilities")["render_settings_restorable"]
-        self.assertFalse(restorable["TargetDir"])
-        self.assertFalse(restorable["CustomName"])
-        self.assertTrue(restorable["format_codec"])
-        self.assertTrue(restorable["mark_range"])
+            out = s.timeline_frame("capabilities")
+        restorable = out["render_settings_restorable"]
+        self.assertEqual(set(restorable.values()), {True})
+        self.assertEqual(
+            set(restorable),
+            {"render_mode", "format_codec", "mark_range", "TargetDir", "CustomName"},
+        )
+        self.assertIn("never had a render TargetDir", out["render_settings_caveat"])
 
     def test_legacy_get_thumbnail_image_still_returns_an_image(self):
         resolve = _FakeResolve(page="edit")

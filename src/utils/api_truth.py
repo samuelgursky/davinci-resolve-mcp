@@ -2702,15 +2702,52 @@ API_TRUTH: List[Dict[str, Any]] = [
                    "set, cannot be cleared through this API, and there is no "
                    "GetRenderSettings to read the previous one back from.",
         "recommended": "Never send an empty CustomName, and never bundle a "
-                       "best-effort key with keys that matter: send the range in "
-                       "its own payload and check its return. To see what a job "
-                       "will inherit, AddRenderJob, read MarkIn/MarkOut/TargetDir/"
-                       "OutputFilename off GetRenderJobList, then DeleteRenderJob.",
+                       "best-effort key with keys that matter: send each setting "
+                       "in its own payload and check its return. Better, do not "
+                       "write CustomName at all when the name is not yours to "
+                       "keep. To see what a job will inherit, AddRenderJob, read "
+                       "MarkIn/MarkOut/TargetDir/OutputFilename off "
+                       "GetRenderJobList, then DeleteRenderJob.",
         "tags": ["render", "deliver", "silent-failure", "unreliable-return"],
         "submit": "bug",
         "issue": 270,
         "verified_on": "DaVinci Resolve Studio 19.1.3.7",
         "mitigation": ["_playhead_frame_render"],
+    },
+    {
+        "symbol": "Project.AddRenderJob (the only readback for render settings)",
+        "object": "Project",
+        "signature": "() -> str",
+        "reality": "There is no GetRenderSettings, but a queued job carries the "
+                   "settings it inherited. Measured 2026-09-30 on Studio 19.1.3.7: "
+                   "after AddRenderJob, the matching GetRenderJobList entry "
+                   "reports TargetDir, OutputFilename (the custom name, or the "
+                   "timeline name when none was ever set, plus the format's "
+                   "extension), MarkIn/MarkOut, VideoFormat/VideoCodec, "
+                   "RenderMode and PresetName, and DeleteRenderJob removes it. "
+                   "The round trip took about 150 ms and switches Resolve to the "
+                   "Deliver page. Queuing two identical jobs, or a job whose "
+                   "output file already exists, raised no dialog and returned "
+                   "distinct ids. Limits: AddRenderJob returns '' when no "
+                   "TargetDir has ever been set, and also in Individual-clips "
+                   "mode on a generator-only timeline, so neither state can be "
+                   "read this way. Once set, TargetDir cannot be cleared — "
+                   "SetRenderSettings returns False for '' and for None — though "
+                   "a TargetDir that does not exist is accepted. CustomName has "
+                   "no direct readback: it is only visible folded into "
+                   "OutputFilename.",
+        "recommended": "To preserve a user's output folder across work that has "
+                       "to change it: in single-clip mode, queue a job, read "
+                       "TargetDir off its entry, delete the job, and write "
+                       "TargetDir back afterwards. Leave CustomName alone "
+                       "wherever possible — it can be neither read nor cleared; "
+                       "render into a private folder and take the file that "
+                       "appears instead of naming it.",
+        "tags": ["render", "deliver", "readback", "unsupported"],
+        "submit": "missing",
+        "issue": 270,
+        "verified_on": "DaVinci Resolve Studio 19.1.3.7",
+        "mitigation": ["_render_target_dir", "_playhead_frame_render"],
     },
     {
         "symbol": "ProjectManager.SaveProject",
