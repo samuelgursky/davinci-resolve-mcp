@@ -166,7 +166,8 @@ function resolveRunning() {
 const LOADED_PROJECT_PY = String.raw`
 import json, os, sys
 api = os.environ.get('RESOLVE_SCRIPT_API') or {
-    'win32': os.path.join(os.environ.get('PROGRAMDATA', ''), 'Blackmagic Design', 'DaVinci Resolve', 'Support', 'Developer', 'Scripting'),
+    # MCP stdio clients pass a reduced env (no PROGRAMDATA on Windows).
+    'win32': os.path.join(os.environ.get('PROGRAMDATA') or os.environ.get('SYSTEMDRIVE', 'C:') + os.sep + 'ProgramData', 'Blackmagic Design', 'DaVinci Resolve', 'Support', 'Developer', 'Scripting'),
     'darwin': '/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting',
 }.get(sys.platform, '/opt/resolve/Developer/Scripting')
 lib = os.environ.get('RESOLVE_SCRIPT_LIB') or {
