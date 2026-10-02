@@ -1,5 +1,10 @@
 # Audio / Fairlight Kernel
 
+For caption text, per-word timing, additions/deletions and animated subtitle
+presets, use advanced `project_db` after saving and fully quitting Resolve.
+See [subtitle-track editing](../guides/subtitle-track-editing.md). The basic
+`set_subtitle_style` action does not edit animated Fusion presets.
+
 The Audio / Fairlight kernel expands `timeline` into a safer audio-state,
 mapping, voice isolation, auto-sync, transcription, subtitle, and Fairlight
 boundary layer.

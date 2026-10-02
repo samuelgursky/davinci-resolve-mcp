@@ -19,6 +19,7 @@ import {
   PROJECT_LIBRARY_ROOT,
   LITE_DB_ROOT,
   DB_ROOTS,
+  projectLibraryRoots,
   findProjectDb,
   resolveDbPath,
 } from '../server/db-patch.mjs';
@@ -26,16 +27,29 @@ import {
 test('every library root is searched, Studio layouts first', () => {
   // Both Studio layouts are real: older installs use "Resolve Disk Database",
   // stock modern installs use "Resolve Project Library" (issue #169).
-  assert.deepEqual(DB_ROOTS, [DISK_DB_ROOT, PROJECT_LIBRARY_ROOT, LITE_DB_ROOT]);
-  assert.match(PROJECT_LIBRARY_ROOT, /Application Support\/Blackmagic Design\/DaVinci Resolve\/Resolve Project Library\/Resolve Projects$/);
+  assert.deepEqual(DB_ROOTS, projectLibraryRoots());
+  assert.deepEqual(projectLibraryRoots('darwin'), [DISK_DB_ROOT, PROJECT_LIBRARY_ROOT, LITE_DB_ROOT]);
+  assert.match(PROJECT_LIBRARY_ROOT.replaceAll('\\', '/'), /Application Support\/Blackmagic Design\/DaVinci Resolve\/Resolve Project Library\/Resolve Projects$/);
 });
 
 test('the free-edition root points inside the App Store sandbox container', () => {
   // Pinned because it is not derivable: the container id and the "Resolve
   // Project Library" folder name both differ from the Studio layout.
-  assert.match(LITE_DB_ROOT, /Library\/Containers\/com\.blackmagic-design\.DaVinciResolveLite\/Data\//);
-  assert.match(LITE_DB_ROOT, /Resolve Project Library\/Resolve Projects$/);
+  assert.match(LITE_DB_ROOT.replaceAll('\\', '/'), /Library\/Containers\/com\.blackmagic-design\.DaVinciResolveLite\/Data\//);
+  assert.match(LITE_DB_ROOT.replaceAll('\\', '/'), /Resolve Project Library\/Resolve Projects$/);
   assert.ok(!LITE_DB_ROOT.includes('Resolve Disk Database'), 'must not reuse the Studio root name');
+});
+
+test('Windows uses APPDATA/Support; Linux uses the local share library', () => {
+  assert.deepEqual(projectLibraryRoots('win32', 'C:\\Users\\Test', { APPDATA: 'D:\\Roaming' }), [
+    'D:\\Roaming\\Blackmagic Design\\DaVinci Resolve\\Support\\Resolve Project Library\\Resolve Projects',
+    'D:\\Roaming\\Blackmagic Design\\DaVinci Resolve\\Support\\Resolve Disk Database\\Resolve Projects',
+  ]);
+  assert.match(projectLibraryRoots('win32', 'C:\\Users\\Test', {})[0], /AppData\\Roaming/);
+  assert.deepEqual(projectLibraryRoots('linux', '/home/test', {}), [
+    '/home/test/.local/share/DaVinciResolve/Resolve Project Library/Resolve Projects',
+    '/home/test/.local/share/DaVinciResolve/Resolve Disk Database/Resolve Projects',
+  ]);
 });
 
 test('findProjectDb locates a project under an arbitrary root', () => {

@@ -1666,18 +1666,30 @@ API_TRUTH: List[Dict[str, Any]] = [
     {
         "symbol": "Per-subtitle text content and timing editing",
         "object": "TimelineItem (subtitle track)",
-        "reality": "TimelineItem on a subtitle track exposes only 21 standard "
-                   "transform/composite properties (Pan, Tilt, ZoomX, Opacity, "
-                   "Crop, etc.). There are no methods to get or set subtitle "
-                   "text (GetText/SetText), start time, end time, or duration "
-                   "for individual subtitle items. Subtitles created via "
-                   "CreateSubtitlesFromAudio or imported via the Resolve UI "
-                   "cannot have their content or timing read or modified "
-                   "programmatically. Verified via dir() and GetProperty() on "
-                   "Resolve 21.0.0.48.",
-        "recommended": "No workaround exists — subtitle text and timing are "
-                       "completely inaccessible from the scripting API. Must "
-                       "be edited in the Resolve UI.",
+        "reality": "GetName, GetStart and GetEnd read caption names and bounds, "
+                   "and Timeline.DeleteClips can delete captions. There are no "
+                   "public methods to set caption text or per-word timings. "
+                   "Read-only live probe on Studio 21.1.0.17 (Windows, 2026-10-02): "
+                   "GetType=generator, GetProperty returned an empty dict, "
+                   "GetFusionCompCount=0, and dir() exposed no caption/text "
+                   "methods; the supplied reproduction also reports false "
+                   "GetProperty/SetProperty results. A subtitle SetProperty "
+                   "request must be refused before timeline auto-archiving. "
+                   "In the supplied 21.1 reproduction, UI text edits leave Name "
+                   "stale and move original AI words/times to protobuf f18/19/20; "
+                   "current f14/15/16 may contain invalid intervals. Whether "
+                   "a later save re-times them is not established here.",
+        "recommended": "Use advanced project_db list_captions / write_captions / "
+                       "check_captions on a local SQLite project with Resolve "
+                       "fully quit. Current text comes from f14, not stale Name. "
+                       "f15/16 and f19/20 use 60 ticks/sec; f21 is the original "
+                       "caption frame anchor. The tool returns timeline-frame "
+                       "times rebased to the item's current Start. Writes need "
+                       "explicit word times, preserve unknown fields, reject "
+                       "gaps/zero durations and re-index Items atomically, with "
+                       "backup and readback. This is an unsupported DB workaround; "
+                       "render/reopen validation of the implementation remains "
+                       "required before release.",
         "tags": ["missing-method", "subtitle", "text", "timing"],
         "submit": "missing",
     },
@@ -1687,8 +1699,8 @@ API_TRUTH: List[Dict[str, Any]] = [
         "reality": "There is no API method to set or query subtitle font "
                    "family, font size, text color, background color, outline, "
                    "shadow, position, alignment, or to apply/query subtitle "
-                   "style presets. TimelineItem.GetProperty() on subtitle "
-                   "items returns only transform/composite keys. "
+                   "style presets. Older probes returned only transform/composite "
+                   "keys; a read-only Studio 21.1.0.17 probe returned an empty dict. "
                    "Timeline.GetSetting() and Project.GetSetting() return "
                    "None for all probed subtitle-style keys (e.g. "
                    "'subtitleFontName', 'subtitleFontSize', "
@@ -1713,7 +1725,19 @@ API_TRUTH: List[Dict[str, Any]] = [
                        "blob (a freshly added subtitle track has none until it "
                        "is styled once in the UI). Burn-in overlays via Fusion "
                        "titles remain a visual alternative but do not produce "
-                       "subtitle tracks.",
+                       "subtitle tracks. Animated Word Highlight is DIFFERENT: "
+                       "list_subtitle_styles may report styled:false while an "
+                       "animation is present. Sm2TiItem_Sm2TiTrack links a "
+                       "Sm2TiVideoClip holder via FusionCompHolderItems to a "
+                       "Sm2TiCompositionTable. The supplied Studio 21.1.0.17 "
+                       "reproduction verified cloning these three rows; local "
+                       "read-only inspection corroborated the format. Use "
+                       "list_subtitle_presets / copy_subtitle_preset, or "
+                       "set_subtitle_preset for named Word Highlight inputs "
+                       "inside the nested zlib tool section. These new actions "
+                       "check that Resolve is fully quit BEFORE writing. "
+                       "Holder Duration is preserved; its rendering semantics "
+                       "and per-caption preset layouts remain unverified.",
         "tags": ["missing-method", "subtitle", "style", "preset"],
         "submit": "missing",
     },
@@ -1726,12 +1750,16 @@ API_TRUTH: List[Dict[str, Any]] = [
                    "provider (e.g. whisper-cli, Google Speech, AWS Transcribe). "
                    "The language selection via resolve.AUTO_CAPTION_LANGUAGE_* "
                    "is the only customization; the engine itself cannot be "
-                   "changed. Furthermore, there is no API method to import an "
-                   "SRT file into a subtitle track programmatically — "
-                   "File -> Import -> Subtitle is UI-only.",
-        "recommended": "No workaround exists for provider selection or SRT "
-                       "import. External transcripts must be converted to SRT "
-                       "and imported through the Resolve UI.",
+                   "changed. There is no dedicated subtitle import method. "
+                   "However, MediaPool.ImportMedia(srt) + AppendToTimeline was "
+                   "reported working on Studio 21.0.4.5 (issue #169). Whether "
+                   "that route carries word timing for animated presets on "
+                   "21.1 has not been verified; SRT contains only cue timing.",
+        "recommended": "Use Resolve's engine for CreateSubtitlesFromAudio. "
+                       "For external SRT, test ImportMedia + AppendToTimeline "
+                       "on the exact installed build or import through the UI. "
+                       "Use project_db write_captions for explicit word timings "
+                       "with Resolve fully quit; do not assume SRT supplies them.",
         "tags": ["missing-method", "subtitle", "transcription",
                  "speech-recognition", "asr"],
         "submit": "missing",

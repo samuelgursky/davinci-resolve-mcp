@@ -19,6 +19,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 
 import { projectDbTool } from '../server/tools/project_db.mjs';
+import { loadSqlite } from '../server/db-patch.mjs';
 
 const require = createRequire(import.meta.url);
 const style = require('../vendor/drp-format/subtitle-style.js');
@@ -192,7 +193,7 @@ test('zstd 0x81 payloads decode, and re-encode as uncompressed 0x80', async () =
 
 function makeDb(dbPath, tracks) {
   let Database;
-  try { Database = require('better-sqlite3'); } catch { return null; }
+  try { Database = loadSqlite(); } catch { return null; }
   const db = new Database(dbPath);
   db.exec(`
     CREATE TABLE Sm2TiTrack (Sm2TiTrack_id TEXT PRIMARY KEY, Type INTEGER, Sequence TEXT, FieldsBlob BLOB);
