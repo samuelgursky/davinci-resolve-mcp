@@ -2,6 +2,32 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.8.27 — Linux exports no longer redirected away from /tmp-named folders
+
+### Fixed
+
+- **On Linux, an output folder whose name merely began with `/tmp` or
+  `/var/tmp` was silently replaced.** `_resolve_safe_dir` tested
+  `path.startswith("/tmp")`, which is also true of `/tmpdata`, `/tmpfiles`,
+  `/tmp-scratch` and `/var/tmpdata`. Each was treated as a temp directory and
+  swapped for `~/Documents/resolve-stills`, and
+  `gallery_stills(grab_and_export)` then reported that folder as if it were the
+  one asked for. The same helper picks the output folder for `encrypt_dctl` and
+  the granular `save_project` export fallback. The Linux branch now compares by
+  path segment, as the macOS branch already did; `/tmp`, `/tmp/…`, `/var/tmp`
+  and `/var/tmp/…` still redirect. Both copies of the helper (`src/server.py`
+  and `src/granular/common.py`) are fixed. Thanks to @Dev-next-gen (#271).
+
+### Tests
+
+- `tests/test_granular_safe_dir.py` gains a Linux class covering both copies:
+  real temp paths still redirect, sibling names are left alone.
+
+### Validation
+
+- Path classification only, decided before any Resolve call; no Resolve
+  behavior changed. Live test not required.
+
 ## What's New in v4.8.26 — two dead layout-preset helpers removed
 
 ### Removed
