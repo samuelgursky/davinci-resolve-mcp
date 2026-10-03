@@ -1421,7 +1421,13 @@ def _resolve_safe_dir(path):
         # silently fails into both (live-verified 2026-07-03), same as /var/folders.
         _is_sandbox = path.startswith(("/var/", "/private/var/", "/tmp/", "/private/tmp/")) or path in ("/tmp", "/private/tmp")
     elif platform.system() == "Linux":
-        _is_sandbox = path.startswith("/tmp") or path.startswith("/var/tmp")
+        # By segment, not by character prefix: `startswith("/tmp")` also matched a
+        # sibling of /tmp whose name merely begins with it — /tmpfiles,
+        # /tmp-scratch, /var/tmpdata — so an export the caller aimed at one of
+        # those was redirected away from it. The Darwin branch already compares
+        # this way, and `/tmpfiles/out` is one of the paths
+        # tests/test_granular_safe_dir.py asserts is left alone.
+        _is_sandbox = path.startswith(("/tmp/", "/var/tmp/")) or path in ("/tmp", "/var/tmp")
     elif platform.system() == "Windows":
         # Check if path is under the system temp directory (e.g. AppData\Local\Temp)
         try:

@@ -377,7 +377,10 @@ def _resolve_safe_dir(path):
         # silently into both, same as /var/folders (matches src/server.py).
         _is_sandbox = path.startswith(("/var/", "/private/var/", "/tmp/", "/private/tmp/")) or path in ("/tmp", "/private/tmp")
     elif platform.system() == "Linux":
-        _is_sandbox = path.startswith("/tmp") or path.startswith("/var/tmp")
+        # By segment, not by character prefix (matches src/server.py): a sibling
+        # of /tmp whose name merely begins with it — /tmpfiles, /tmp-scratch,
+        # /var/tmpdata — cleared `startswith("/tmp")` and was redirected.
+        _is_sandbox = path.startswith(("/tmp/", "/var/tmp/")) or path in ("/tmp", "/var/tmp")
     elif platform.system() == "Windows":
         try:
             _is_sandbox = os.path.commonpath([os.path.abspath(path), os.path.abspath(system_temp)]) == os.path.abspath(system_temp)
