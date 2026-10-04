@@ -14738,6 +14738,7 @@ def _launch_claude_code_terminal() -> Dict[str, Any]:
     try:
         check = subprocess.run(
             ["osascript", "-e", 'application "iTerm" is running'],
+            stdin=subprocess.DEVNULL,
             capture_output=True, text=True, encoding="utf-8", errors="replace",
             timeout=8,
         )
@@ -14762,6 +14763,7 @@ def _launch_claude_code_terminal() -> Dict[str, Any]:
     try:
         proc = subprocess.run(
             ["osascript", "-e", script],
+            stdin=subprocess.DEVNULL,
             capture_output=True, text=True, encoding="utf-8", errors="replace",
             timeout=15,
         )
@@ -14794,6 +14796,7 @@ def _native_directory_picker(initial: Optional[str] = None) -> Dict[str, Any]:
             import subprocess
             proc = subprocess.run(
                 ["osascript", "-e", script],
+                stdin=subprocess.DEVNULL,
                 capture_output=True, text=True, encoding="utf-8", errors="replace",
                 timeout=120,
             )

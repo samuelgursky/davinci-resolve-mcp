@@ -2489,6 +2489,7 @@ def _kill_process_tree(pid: int) -> None:
         if os.name == "nt":
             subprocess.run(
                 ["taskkill", "/F", "/T", "/PID", str(pid)],
+                stdin=subprocess.DEVNULL,
                 capture_output=True,
                 check=False,
             )
@@ -2535,6 +2536,11 @@ def _run_command(
     try:
         proc = subprocess.Popen(
             args,
+            # Never the server's stdin: under stdio that is the JSON-RPC stream,
+            # and ffmpeg reads it as keyboard commands. The "c" in "jsonrpc"
+            # opens ffmpeg's command prompt, which then blocks waiting for a
+            # newline while eating protocol bytes (#272).
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             env=env,
@@ -3473,7 +3479,7 @@ def _raw_frame(path: str, time_seconds: float, width: int = 96, height: int = 54
         "-",
     ]
     try:
-        proc = subprocess.run(args, capture_output=True, timeout=180, check=False)
+        proc = subprocess.run(args, stdin=subprocess.DEVNULL, capture_output=True, timeout=180, check=False)
     except (subprocess.TimeoutExpired, OSError):
         return None
     expected = width * height * 3

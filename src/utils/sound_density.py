@@ -221,7 +221,7 @@ def measure_track_levels(
         if duration_seconds:
             cmd[4:4] = ["-t", str(duration_seconds)]
         try:
-            proc = subprocess.run(cmd, capture_output=True, timeout=120)
+            proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, timeout=120)
         except (subprocess.SubprocessError, OSError) as exc:
             return {"success": False, "error": f"decode failed for {name}: {exc}"}
         if proc.returncode != 0 or not proc.stdout:

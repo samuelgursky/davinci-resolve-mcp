@@ -32,6 +32,7 @@ def _run_app_command(
     try:
         result = subprocess.run(
             cmd,
+            stdin=subprocess.DEVNULL,
             check=False,
             capture_output=True,
             text=True,
@@ -258,11 +259,11 @@ def restart_resolve_app(resolve_obj, wait_seconds: int = 5) -> bool:
         logger.info("Attempting to start Resolve")
         
         if platform.system().lower() == 'darwin':
-            subprocess.Popen(['open', resolve_path])
+            subprocess.Popen(['open', resolve_path], stdin=subprocess.DEVNULL)
         elif platform.system().lower() == 'windows':
-            subprocess.Popen([resolve_path])
+            subprocess.Popen([resolve_path], stdin=subprocess.DEVNULL)
         elif platform.system().lower() == 'linux':
-            subprocess.Popen([resolve_path])
+            subprocess.Popen([resolve_path], stdin=subprocess.DEVNULL)
         
         return True
     except Exception as e:

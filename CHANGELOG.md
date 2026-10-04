@@ -2,6 +2,51 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.8.28 — ffmpeg can no longer hang on the protocol stream; a cancelled call no longer kills the server
+
+### Fixed
+
+- **ffmpeg could hang indefinitely while reading the server's stdin.** Every
+  ffmpeg/ffprobe analysis pass (`edit_engine plan_silence_ripple`, media
+  analysis, sync detection, sound density and the rest) ran through a
+  runner that let the child inherit the server's stdin. Over stdio that is
+  the JSON-RPC stream. ffmpeg polls stdin for keyboard commands; the `c` in
+  `"jsonrpc"` opens its interactive command prompt, which then waits for a
+  newline while consuming the protocol bytes it reads. Measured with ffmpeg
+  9.0.2: a partial frame arriving mid-pass hung a silencedetect run until it
+  was killed, and the same run with `stdin=subprocess.DEVNULL` finished
+  normally. The runner, and all 29 other call sites under `src/` that spawned
+  a child without `stdin=`, now pass `stdin=subprocess.DEVNULL`. Reported on
+  Windows with the free 21.0.2 bridge (#272); the mechanism was reproduced on
+  macOS, and the Windows build was not available to test.
+- **A tool call cancelled by the client could take the whole session down.**
+  Tool bodies run in a worker thread, and the wait for that thread is
+  shielded from cancellation. When the client cancelled (for example after
+  its own timeout) and the body finished later, its result came back as if
+  nothing had happened. The SDK then tried to answer a request it had already
+  answered "cancelled", and its `Request already responded to` assertion
+  closed the connection. The pending cancellation is now raised once the
+  body returns, which the SDK treats as the cancellation it already
+  acknowledged. The body still runs to completion, so Resolve is never left
+  half-mutated; only its result is discarded.
+
+### Tests
+
+- `tests/test_subprocess_stdin_discipline.py` (new) fails the suite on any
+  `subprocess.run/Popen/call/check_call/check_output` under `src/` that does
+  not pass `stdin=` or `input=`, in any import spelling. With the fix
+  reverted it names all 30 sites (the runner plus the 29 others).
+- `tests/test_threaded_tool_dispatch.py` gains an end-to-end case over the
+  real SDK's in-memory transport: it cancels a call mid-body, lets the body
+  finish, and requires the next call to succeed. With the fix reverted, it
+  fails with the reported `AssertionError`.
+
+### Validation
+
+- No Resolve scripting call changed. Both mechanisms were reproduced before
+  the fix and confirmed fixed after it, on macOS with ffmpeg 9.0.2 and
+  mcp 1.30.0. Not tested on Windows.
+
 ## What's New in v4.8.27 — Linux exports no longer redirected away from /tmp-named folders
 
 ### Fixed

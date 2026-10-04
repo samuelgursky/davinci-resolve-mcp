@@ -208,7 +208,7 @@ def measure_frame_levels(media_path: str, at_seconds: float = 0.0) -> Dict[str, 
         "-vf", f"scale={width}:{height}", "-f", "rawvideo", "-pix_fmt", "rgb24", "-",
     ]
     try:
-        proc = subprocess.run(cmd, capture_output=True, timeout=30)
+        proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, timeout=30)
     except (subprocess.SubprocessError, OSError) as exc:
         return {"success": False, "error": f"frame extraction failed: {exc}"}
     expected = width * height * 3

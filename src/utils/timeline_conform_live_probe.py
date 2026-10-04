@@ -54,7 +54,7 @@ def _record_tool_result(
 
 
 def _run_ffmpeg(args: list[str]) -> None:
-    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", *args], check=True)
+    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", *args], stdin=subprocess.DEVNULL, check=True)
 
 
 def _make_synthetic_video(work_dir: Path, name: str, source: str, frequency: int) -> Path:

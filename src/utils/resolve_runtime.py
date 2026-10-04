@@ -72,7 +72,7 @@ def _run_ps(columns: str) -> Optional[List[str]]:
     """
     try:
         out = subprocess.run(
-            ["ps", "-Awwo", columns], capture_output=True, text=True,
+            ["ps", "-Awwo", columns], stdin=subprocess.DEVNULL, capture_output=True, text=True,
             encoding="utf-8", errors="replace", timeout=10, check=False,
         )
     except Exception:  # pragma: no cover - defensive; an unknown answer is None
@@ -211,7 +211,7 @@ def _process_table() -> Optional[List[Dict[str, Optional[str]]]]:
         for reader, parse in WINDOWS_PROCESS_READERS:
             try:
                 out = subprocess.run(
-                    reader, capture_output=True, text=True, encoding="utf-8",
+                    reader, stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8",
                     errors="replace", timeout=10, check=False,
                 )
             except Exception:

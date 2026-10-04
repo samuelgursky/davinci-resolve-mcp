@@ -170,7 +170,7 @@ def _decode_frame(
         "-f", "rawvideo", "-",
     ]
     try:
-        proc = subprocess.run(args, capture_output=True, timeout=120, check=False)
+        proc = subprocess.run(args, stdin=subprocess.DEVNULL, capture_output=True, timeout=120, check=False)
     except (subprocess.TimeoutExpired, OSError) as exc:
         logger.debug("frame decode failed for %s: %s", path, exc)
         return None
@@ -189,7 +189,7 @@ def _probe_color_transfer(path: str) -> Optional[str]:
         "-show_entries", "stream=color_transfer", "-of", "default=nw=1:nk=1", path,
     ]
     try:
-        proc = subprocess.run(args, capture_output=True, text=True, encoding="utf-8",
+        proc = subprocess.run(args, stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8",
                               errors="replace", timeout=30, check=False)
     except (subprocess.TimeoutExpired, OSError):
         return None

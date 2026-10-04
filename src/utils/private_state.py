@@ -36,6 +36,7 @@ def _restrict_windows_acl(path: str) -> None:
     try:
         subprocess.run(
             ["icacls", path, "/inheritance:r", "/grant:r", f"{user}:F"],
+            stdin=subprocess.DEVNULL,
             capture_output=True, timeout=5, check=False,
         )
     except (OSError, subprocess.TimeoutExpired):

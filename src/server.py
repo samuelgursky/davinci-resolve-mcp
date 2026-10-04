@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 377-tool granular server instead
 """
 
-VERSION = "4.8.27"
+VERSION = "4.8.28"
 
 import base64
 import os
@@ -1919,7 +1919,8 @@ def _activate_resolve_window() -> Dict[str, Any]:
             proc = subprocess.run(
                 ["osascript", "-e", 'tell application "DaVinci Resolve" to activate'],
                 capture_output=True, text=True, encoding="utf-8", errors="replace",
-                timeout=5, stdin=subprocess.DEVNULL,
+                timeout=5,
+                stdin=subprocess.DEVNULL,
             )
             return {
                 "activated": proc.returncode == 0,
@@ -1933,7 +1934,8 @@ def _activate_resolve_window() -> Dict[str, Any]:
                  "$s = New-Object -ComObject WScript.Shell; "
                  "$null = $s.AppActivate('DaVinci Resolve')"],
                 capture_output=True, text=True, encoding="utf-8", errors="replace",
-                timeout=5, stdin=subprocess.DEVNULL,
+                timeout=5,
+                stdin=subprocess.DEVNULL,
             )
             return {
                 "activated": proc.returncode == 0,
@@ -1946,7 +1948,8 @@ def _activate_resolve_window() -> Dict[str, Any]:
             proc = subprocess.run(
                 ["wmctrl", "-a", "DaVinci Resolve"],
                 capture_output=True, text=True, encoding="utf-8", errors="replace",
-                timeout=5, stdin=subprocess.DEVNULL,
+                timeout=5,
+                stdin=subprocess.DEVNULL,
             )
             return {
                 "activated": proc.returncode == 0,
@@ -1957,7 +1960,8 @@ def _activate_resolve_window() -> Dict[str, Any]:
             proc = subprocess.run(
                 ["xdotool", "search", "--name", "DaVinci Resolve", "windowactivate"],
                 capture_output=True, text=True, encoding="utf-8", errors="replace",
-                timeout=5, stdin=subprocess.DEVNULL,
+                timeout=5,
+                stdin=subprocess.DEVNULL,
             )
             return {
                 "activated": proc.returncode == 0,
@@ -1989,7 +1993,8 @@ def _send_resolve_keystroke_go_to_mark_in() -> Dict[str, Any]:
             proc = subprocess.run(
                 ["osascript", "-e", script],
                 capture_output=True, text=True, encoding="utf-8", errors="replace",
-                timeout=5, stdin=subprocess.DEVNULL,
+                timeout=5,
+                stdin=subprocess.DEVNULL,
             )
             return {
                 "sent": proc.returncode == 0,
@@ -2005,7 +2010,8 @@ def _send_resolve_keystroke_go_to_mark_in() -> Dict[str, Any]:
                  "Start-Sleep -Milliseconds 150; "
                  "[System.Windows.Forms.SendKeys]::SendWait('+i')"],
                 capture_output=True, text=True, encoding="utf-8", errors="replace",
-                timeout=5, stdin=subprocess.DEVNULL,
+                timeout=5,
+                stdin=subprocess.DEVNULL,
             )
             return {
                 "sent": proc.returncode == 0,
@@ -2019,7 +2025,8 @@ def _send_resolve_keystroke_go_to_mark_in() -> Dict[str, Any]:
             proc = subprocess.run(
                 ["xdotool", "search", "--name", "DaVinci Resolve", "key", "--window", "%@", "shift+i"],
                 capture_output=True, text=True, encoding="utf-8", errors="replace",
-                timeout=5, stdin=subprocess.DEVNULL,
+                timeout=5,
+                stdin=subprocess.DEVNULL,
             )
             return {"sent": proc.returncode == 0, "platform": "linux", "tool": "xdotool", "shortcut": "Shift+I"}
         return {"sent": False, "platform": sys.platform, "note": "no key-send tool found"}
@@ -13887,7 +13894,8 @@ def _ffprobe_media_summary(path: str) -> Optional[Dict[str, Any]]:
              "format=duration,size:stream=codec_type,codec_name",
              "-of", "json", path],
             capture_output=True, encoding="utf-8", errors="replace",
-            timeout=20, stdin=subprocess.DEVNULL,
+            timeout=20,
+            stdin=subprocess.DEVNULL,
         )
     except Exception:
         return None
@@ -14848,7 +14856,7 @@ def _ffmpeg_scale_to_bytes(src_path: str, max_width: Optional[int], out_format: 
             # -2 keeps the height even (required by some encoders) and preserves AR.
             args += ["-vf", f"scale='min({int(max_width)},iw)':-2:flags=lanczos"]
         args += ["-frames:v", "1", tmp_out]
-        proc = subprocess.run(args, capture_output=True, timeout=120)
+        proc = subprocess.run(args, stdin=subprocess.DEVNULL, capture_output=True, timeout=120)
         if proc.returncode != 0:
             return None, (proc.stderr.decode("utf-8", "replace").strip() or "ffmpeg failed")[:400]
         with open(tmp_out, "rb") as handle:
@@ -33363,14 +33371,16 @@ def _install_threaded_tool_dispatch(fastmcp) -> int:
     to a worker thread keeps the event loop servicing the transport. Bodies are
     serialized on _bridge_lock so the single-threaded Resolve bridge is never
     entered concurrently. A body that outlives a client cancellation runs to
-    completion (the bridge is never left half-mutated) still holding the lock.
+    completion (the bridge is never left half-mutated) still holding the lock,
+    and its result is then discarded rather than sent.
 
     Couples to mcp SDK private attrs (ToolManager._tools, Tool.fn /
-    Tool.is_async; verified on mcp 1.27). Best-effort: if that shape changes,
-    leave the tools as-is, falling back to the current inline behavior.
+    Tool.is_async; verified on mcp 1.27 and 1.30). Best-effort: if that shape
+    changes, leave the tools as-is, falling back to the current inline behavior.
     """
     import functools
     import anyio
+    from anyio.lowlevel import checkpoint_if_cancelled
 
     manager = getattr(fastmcp, "_tool_manager", None)
     tools = getattr(manager, "_tools", None)
@@ -33383,7 +33393,18 @@ def _install_threaded_tool_dispatch(fastmcp) -> int:
             def call():
                 with _bridge_lock:
                     return fn(**kwargs)
-            return await anyio.to_thread.run_sync(call)
+            try:
+                return await anyio.to_thread.run_sync(call)
+            finally:
+                # run_sync shields its wait, so a client cancellation that lands
+                # while the body runs is not raised there: the result comes back
+                # as if nothing happened, the SDK tries to answer a request it
+                # already answered "cancelled", and its "Request already
+                # responded to" assert takes the whole session down (#272).
+                # Raise the pending cancellation instead — the SDK expects it
+                # and suppresses the duplicate response. Also covers a body
+                # that raised after the cancel.
+                await checkpoint_if_cancelled()
         return run_off_thread
 
     wrapped = 0

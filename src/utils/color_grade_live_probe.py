@@ -91,7 +91,7 @@ def _call_confirmed(tool, action: str, params: Dict[str, Any]) -> Dict[str, Any]
 
 
 def _run_ffmpeg(args: list[str]) -> None:
-    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", *args], check=True)
+    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", *args], stdin=subprocess.DEVNULL, check=True)
 
 
 def _make_synthetic_video(work_dir: Path) -> Path:

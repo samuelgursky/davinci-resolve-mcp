@@ -219,6 +219,7 @@ def _process_name(pid: int) -> str:
 
         out = subprocess.run(
             ["ps", "-p", str(pid), "-o", "comm="],
+            stdin=subprocess.DEVNULL,
             capture_output=True, text=True, encoding="utf-8", errors="replace",
             timeout=5, check=False,
         )

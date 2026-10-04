@@ -160,7 +160,7 @@ def sync_event_install_guidance(capabilities: Optional[Dict[str, Any]] = None) -
 
 def _run_json(args: List[str], timeout: int) -> Tuple[int, Dict[str, Any], str]:
     try:
-        proc = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
+        proc = subprocess.run(args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
     except subprocess.TimeoutExpired:
         return 124, {}, f"Command timed out after {timeout}s"
     except OSError as exc:
@@ -397,7 +397,7 @@ def _decode_audio_window(
         "-",
     ])
     try:
-        proc = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
+        proc = subprocess.run(args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
     except subprocess.TimeoutExpired:
         return None, f"ffmpeg audio decode timed out after {timeout}s"
     except OSError as exc:

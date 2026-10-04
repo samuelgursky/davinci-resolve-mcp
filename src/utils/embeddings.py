@@ -358,7 +358,7 @@ def _extract_audio_window(file_path: str, start_seconds: float, duration_seconds
         "-f", "f32le", "-",
     ]
     try:
-        proc = subprocess.run(command, capture_output=True, timeout=120, check=False)
+        proc = subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True, timeout=120, check=False)
     except (OSError, subprocess.TimeoutExpired):
         return None
     if proc.returncode != 0 or not proc.stdout:

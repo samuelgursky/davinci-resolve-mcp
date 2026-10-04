@@ -50,6 +50,64 @@ class ThreadedToolDispatchTest(unittest.TestCase):
         self.assertEqual(result["value"], 42)
         self.assertNotEqual(result["thread"], main_thread)  # ran off the event-loop thread
 
+    def test_cancel_during_body_does_not_kill_the_session(self):
+        # #272: the client cancels while the body is still in its worker
+        # thread, and the body finishes afterwards. run_sync shields its wait,
+        # so without a cancellation checkpoint the result came back normally,
+        # the SDK answered the request a second time, and its "Request already
+        # responded to" assert took the whole session down. Driven through the
+        # real SDK over the in-memory transport, not the fakes above.
+        from mcp import types
+        from mcp.server.fastmcp import FastMCP
+        from mcp.shared.exceptions import McpError
+        from mcp.shared.memory import create_connected_server_and_client_session
+
+        app = FastMCP("cancel-probe")
+        release = threading.Event()
+
+        @app.tool()
+        def slow() -> str:
+            release.wait(5)
+            return "slow done"
+
+        @app.tool()
+        def quick() -> str:
+            return "quick done"
+
+        _install_threaded_tool_dispatch(app)
+        outcome = {}
+
+        async def scenario():
+            async with create_connected_server_and_client_session(
+                app._mcp_server, raise_exceptions=False
+            ) as client:
+                async with anyio.create_task_group() as tg:
+                    async def call_slow():
+                        try:
+                            await client.call_tool("slow", {})
+                            outcome["slow"] = "returned"
+                        except McpError as exc:
+                            outcome["slow"] = exc.error.message
+
+                    tg.start_soon(call_slow)
+                    await anyio.sleep(0.3)
+                    # id 0 was initialize, so the slow call is request 1.
+                    await client.send_notification(types.ClientNotification(
+                        types.CancelledNotification(params=types.CancelledNotificationParams(
+                            requestId=1, reason="client timeout"))))
+                    await anyio.sleep(0.2)
+                    release.set()  # the body finishes AFTER the cancellation
+                with anyio.fail_after(5):
+                    result = await client.call_tool("quick", {})
+                outcome["quick"] = result.content[0].text
+
+        try:
+            anyio.run(scenario)
+        finally:
+            release.set()
+        self.assertEqual(outcome.get("slow"), "Request cancelled")
+        self.assertEqual(outcome.get("quick"), "quick done")  # session still serving
+
     def test_missing_tool_manager_is_a_noop(self):
         self.assertEqual(_install_threaded_tool_dispatch(object()), 0)
 

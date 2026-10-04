@@ -164,6 +164,7 @@ def _make_synthetic_media(work_dir: Path) -> Path:
             "-y",
             str(media_path),
         ],
+        stdin=subprocess.DEVNULL,
         check=True,
     )
     return media_path
