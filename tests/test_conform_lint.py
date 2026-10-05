@@ -68,6 +68,46 @@ class RelinkBlockerTests(unittest.TestCase):
         self.assertIn("OFFLINE_MEDIA", codes(out))
 
 
+class DuplicateUsageTests(unittest.TestCase):
+    """Reuse is legitimate; the value is knowing about all of it, not some of it."""
+
+    @staticmethod
+    def _reuse_pairs(out):
+        for finding in out["findings"]:
+            if finding["code"] == "DUPLICATE_USAGE":
+                return {(row["first"], row["second"]) for row in finding["items"]}
+        return set()
+
+    def test_two_adjacent_pulls_from_one_source_do_not_overlap(self) -> None:
+        """Two separate shots out of one clip are two shots, not a dupe."""
+        out = cl.lint_timeline(snapshot([
+            item(item_name="TAKE 1", source_start_frame=0, timeline_start_frame=0, timeline_end_frame=100),
+            item(item_name="TAKE 2", source_start_frame=500, timeline_start_frame=100, timeline_end_frame=200),
+        ]))
+        self.assertNotIn("DUPLICATE_USAGE", codes(out))
+
+    def test_every_callback_inside_one_long_pull_is_reported(self) -> None:
+        """A montage callback lifted from inside a long take is reuse, and so is the next one.
+
+        Sorted by source in-point the long pull comes first and the callbacks
+        follow it, so comparing only neighbouring pulls measured the second
+        callback against the first — which it does not overlap — and the report
+        named one reuse out of two.
+        """
+        out = cl.lint_timeline(snapshot([
+            item(item_name="INTERVIEW", source_start_frame=0,
+                 timeline_start_frame=0, timeline_end_frame=5000),
+            item(item_name="CALLBACK 1", source_start_frame=100,
+                 timeline_start_frame=6000, timeline_end_frame=6100),
+            item(item_name="CALLBACK 2", source_start_frame=300,
+                 timeline_start_frame=7000, timeline_end_frame=7100),
+        ]))
+        self.assertEqual(
+            self._reuse_pairs(out),
+            {("INTERVIEW", "CALLBACK 1"), ("INTERVIEW", "CALLBACK 2")},
+        )
+
+
 class InterchangeTests(unittest.TestCase):
     def test_scale_to_frame_size_is_flagged(self) -> None:
         """Its sizing data does not reach Resolve at all — every shot redone by hand."""
