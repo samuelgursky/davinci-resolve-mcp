@@ -2,6 +2,38 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.8.29 — optional granular arguments accept an explicit null
+
+### Fixed
+
+- **Sixteen optional arguments on nine granular tools rejected `null`.**
+  They were annotated `str` / `float` / `bool` / `int` with a `None`
+  default, so the generated schema advertised `"default": null` on a field
+  whose type excluded null. Clients that fill every optional argument with
+  its advertised default sent `null`, and the call failed argument
+  validation before the tool ran. Affected: `create_project`
+  (`media_location_path`), `set_color_space_tool` (`gamma`),
+  `import_layout_preset_tool` and `import_user_preferences_preset`
+  (`preset_name`), `set_timeline_item_composite` (`composite_mode`,
+  `opacity`), `set_timeline_item_retime` (`speed`, `process`),
+  `set_timeline_item_stabilization` (`enabled`, `method`, `strength`),
+  `set_timeline_item_audio` (`volume`, `pan`, `eq_enabled`) and
+  `modify_keyframe` (`new_value`, `new_frame`). They are now `Optional[T]`;
+  callers that omit them see no change. Only the granular server (`--full`)
+  was affected. Contributed by @vishalhabib99 (#274).
+
+### Tests
+
+- `tests/test_tool_schema_null_defaults.py` (new) lists every tool on the
+  compound and granular servers offline and fails on any argument whose
+  default is null but whose schema rejects null. On v4.8.28 it names all
+  sixteen.
+
+### Validation
+
+- Schema-only change; no Resolve scripting call changed, so no live run was
+  required.
+
 ## What's New in v4.8.28 — ffmpeg can no longer hang on the protocol stream; a cancelled call no longer kills the server
 
 ### Fixed
