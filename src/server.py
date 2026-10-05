@@ -13530,6 +13530,98 @@ def _safe_import_media(mp, p: Dict[str, Any]):
         _restore_current_folder(mp, previous)
 
 
+def _import_bounded_media(mp, ms, p: Dict[str, Any]):
+    """Create one bounded Media Pool item through MediaStorage.
+
+    Resolve's AddItemListToMediaPool itemInfo form is the public scripting API
+    for this operation. ``start_frame`` and ``end_frame`` are passed through
+    unchanged as Resolve's ``startFrame`` and ``endFrame`` values; this wrapper
+    does not infer or compensate for end-frame inclusivity. It imports into the
+    *current* folder, so this helper deliberately scopes and restores that UI
+    state around the one API call.
+    """
+    source_path = p.get("source_path")
+    if not isinstance(source_path, str) or not source_path:
+        return _err("source_path must be a non-empty string", category="invalid_input")
+    if not os.path.isabs(source_path):
+        return _err("source_path must be an absolute path", category="invalid_input")
+    path_err = _path_error(source_path, must_be_file=True)
+    if path_err:
+        return _err(path_err, category="invalid_input")
+
+    frames = {}
+    for key in ("start_frame", "end_frame"):
+        value = p.get(key)
+        if isinstance(value, bool) or not isinstance(value, int):
+            return _err(f"{key} must be an integer", category="invalid_input")
+        frames[key] = value
+    if frames["start_frame"] < 0:
+        return _err("start_frame must be greater than or equal to 0", category="invalid_input")
+    if frames["end_frame"] < frames["start_frame"]:
+        return _err("end_frame must be greater than or equal to start_frame", category="invalid_input")
+
+    destination_folder = p.get("destination_folder")
+    if not isinstance(destination_folder, str) or not destination_folder:
+        return _err("destination_folder must be a non-empty Media Pool folder path", category="invalid_input")
+    if not _navigate_folder(mp, destination_folder):
+        return _err(f"Target folder not found: {destination_folder}",
+                    code="FOLDER_NOT_FOUND", category="invalid_input",
+                    remediation=_FOLDER_ID_REMEDIATION)
+
+    name = p.get("name")
+    if not isinstance(name, str) or not name.strip():
+        return _err("name must be a non-empty string", category="invalid_input")
+
+    previous, folder_err = _set_current_folder_temporarily(mp, destination_folder)
+    if folder_err:
+        return folder_err
+    try:
+        item_info = {
+            "media": source_path,
+            "startFrame": frames["start_frame"],
+            "endFrame": frames["end_frame"],
+        }
+        try:
+            items = ms.AddItemListToMediaPool([item_info])
+        except Exception as exc:
+            return _err(f"AddItemListToMediaPool failed: {exc}")
+        if not isinstance(items, list) or len(items) != 1:
+            return _err(
+                "Bounded import must return exactly one MediaPoolItem",
+                code="BOUNDED_IMPORT_ITEM_COUNT_MISMATCH",
+                category="resolve_api_failed",
+                state={"returned_item_count": len(items) if isinstance(items, list) else None},
+            )
+        item = items[0]
+        try:
+            renamed = bool(item.SetName(name))
+        except Exception as exc:
+            return _err(f"Failed to rename bounded MediaPoolItem: {exc}")
+        if not renamed:
+            return _err("Failed to rename bounded MediaPoolItem")
+
+        properties, _ = _safe_clip_call(item, "GetClipProperty", "")
+        range_property_keys = (
+            "File Path", "FPS", "Frames", "Duration", "Start TC", "End TC",
+            "Sub Clip", "SubClip", "Is Sub Clip", "IsSubClip", "Is Subclip",
+        )
+        bounded_import_properties = {
+            key: properties[key]
+            for key in range_property_keys
+            if isinstance(properties, dict) and properties.get(key) not in (None, "")
+        }
+        return _ok(
+            source_path=source_path,
+            start_frame=frames["start_frame"],
+            end_frame=frames["end_frame"],
+            destination_folder=destination_folder,
+            item=_media_pool_item_summary(item),
+            bounded_import_properties=bounded_import_properties,
+        )
+    finally:
+        _restore_current_folder(mp, previous)
+
+
 def _safe_import_sequence(mp, p: Dict[str, Any]):
     pattern = p.get("FilePath") or p.get("file_path") or p.get("pattern")
     if not pattern:
@@ -21438,6 +21530,14 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
         — image sequences: params.clip_infos is a list of
           {FilePath, StartIndex, EndIndex} dicts (PascalCase keys per Resolve docs).
           Example: [{"FilePath": "frame_%03d.dpx", "StartIndex": 1, "EndIndex": 100}]
+      import_bounded_media(source_path, start_frame, end_frame, destination_folder, name)
+        -> {success, source_path, start_frame, end_frame, destination_folder, item,
+            bounded_import_properties}
+        — creates one bounded Media Pool item through
+          MediaStorage.AddItemListToMediaPool([{media, startFrame, endFrame}]).
+          start_frame/end_frame pass through unchanged as raw Resolve API values;
+          observed range semantics are reported from the created item properties.
+          destination_folder must already exist; the previous current folder is restored.
       delete_clips(clip_ids) -> {success}
         DESTRUCTIVE. Removes clips from the Media Pool (does not touch source files).
         An id matching no clip fails the whole call (CLIP_NOT_FOUND) rather than
@@ -21752,6 +21852,14 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
                 return _err("Provide paths (simple) or clip_infos (image sequences)")
             result = mp.ImportMedia(paths)
         return {"imported": len(result) if result else 0}
+    elif action == "import_bounded_media":
+        # _get_mp() returns the ProjectManager as its first value, not the
+        # Resolve application object. MediaStorage belongs to Resolve.
+        resolve = get_resolve()
+        ms = resolve.GetMediaStorage() if resolve else None
+        if not ms:
+            return _err("Failed to get MediaStorage")
+        return _import_bounded_media(mp, ms, p)
     elif action == "delete_clips":
         clips, clips_err = _clips_from_ids(root, p["clip_ids"], verb="deleted")
         if clips_err:
@@ -21887,7 +21995,7 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
         return _copy_clip_annotations(root, p)
     elif action == "media_pool_boundary_report":
         return _media_pool_boundary_report(mp, p)
-    return _unknown(action, ["create_multicam_clip","get_root_folder","get_current_folder","set_current_folder","add_subfolder","delete_folders","move_folders","refresh","create_timeline","create_timeline_from_clips","import_timeline","delete_timelines","append_to_timeline","import_media","delete_clips","move_clips","relink","unlink","export_metadata","get_unique_id","create_stereo_clip","auto_sync_audio","get_selected","set_selected","get_clip_mattes","get_timeline_mattes","delete_clip_mattes","import_folder",*_MEDIA_POOL_KERNEL_ACTIONS])
+    return _unknown(action, ["create_multicam_clip","get_root_folder","get_current_folder","set_current_folder","add_subfolder","delete_folders","move_folders","refresh","create_timeline","create_timeline_from_clips","import_timeline","delete_timelines","append_to_timeline","import_media","import_bounded_media","delete_clips","move_clips","relink","unlink","export_metadata","get_unique_id","create_stereo_clip","auto_sync_audio","get_selected","set_selected","get_clip_mattes","get_timeline_mattes","delete_clip_mattes","import_folder",*_MEDIA_POOL_KERNEL_ACTIONS])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

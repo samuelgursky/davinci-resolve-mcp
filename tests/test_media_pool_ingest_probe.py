@@ -3,6 +3,7 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
+import src.server as server
 from src.server import (
     _check_proxy_media_compatibility,
     _copy_clip_annotations,
@@ -19,6 +20,7 @@ from src.server import (
     _normalize_metadata,
     _probe_clip_properties,
     _safe_import_sequence,
+    _import_bounded_media,
     _get_clip_marks,
     _set_clip_marks,
 )
@@ -58,6 +60,10 @@ class MediaPoolItemStub:
 
     def GetUniqueId(self):
         return self.unique_id
+
+    def SetName(self, name):
+        self.name = name
+        return True
 
     def GetMediaId(self):
         return f"media-{self.unique_id}"
@@ -277,6 +283,159 @@ class MediaPoolIngestProbeTest(unittest.TestCase):
 
         self.assertIn("error", result)
         self.assertIn("Missing sequence frames", (result["error"].get("message","") if isinstance(result["error"], dict) else result["error"]))
+
+    def test_import_bounded_media_targets_restores_and_returns_item(self):
+        class BoundedMediaPoolStub(MediaPoolStub):
+            def __init__(self):
+                super().__init__()
+                self.destination = self.root.subfolders[0]
+                self.current = self.root
+                self.set_current_calls = []
+
+            def GetCurrentFolder(self):
+                return self.current
+
+            def SetCurrentFolder(self, folder):
+                self.set_current_calls.append(folder)
+                self.current = folder
+                return True
+
+        class MediaStorageStub:
+            def __init__(self, item):
+                self.item = item
+                self.calls = []
+
+            def AddItemListToMediaPool(self, item_infos):
+                self.calls.append(item_infos)
+                return [self.item]
+
+        mp = BoundedMediaPoolStub()
+        item = MediaPoolItemStub()
+        storage = MediaStorageStub(item)
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "source.mov"
+            source.write_bytes(b"media")
+            result = _import_bounded_media(mp, storage, {
+                "source_path": str(source),
+                "start_frame": 12,
+                "end_frame": 48,
+                "destination_folder": "Master/Ingest",
+                "name": "Selected range",
+            })
+
+        self.assertTrue(result["success"])
+        self.assertEqual(storage.calls, [[{
+            "media": str(source), "startFrame": 12, "endFrame": 48,
+        }]])
+        self.assertEqual(item.GetName(), "Selected range")
+        self.assertEqual(mp.GetCurrentFolder(), mp.root)
+        self.assertEqual(mp.set_current_calls, [mp.destination, mp.root])
+        self.assertEqual(result["item"]["id"], "clip-1")
+        self.assertEqual(result["bounded_import_properties"]["Frames"], "120")
+
+    def test_import_bounded_media_rejects_invalid_input_without_resolve_call(self):
+        class StorageStub:
+            def __init__(self):
+                self.called = False
+
+            def AddItemListToMediaPool(self, item_infos):
+                self.called = True
+                return []
+
+        storage = StorageStub()
+        result = _import_bounded_media(MediaPoolStub(), storage, {
+            "source_path": "relative.mov",
+            "start_frame": 0,
+            "end_frame": 1,
+            "destination_folder": "Master/Ingest",
+            "name": "Selected range",
+        })
+
+        self.assertIn("error", result)
+        self.assertFalse(storage.called)
+
+    def test_import_bounded_media_restores_folder_when_import_fails(self):
+        class BoundedMediaPoolStub(MediaPoolStub):
+            def __init__(self):
+                super().__init__()
+                self.destination = self.root.subfolders[0]
+                self.current = self.root
+
+            def GetCurrentFolder(self):
+                return self.current
+
+            def SetCurrentFolder(self, folder):
+                self.current = folder
+                return True
+
+        class MediaStorageStub:
+            def AddItemListToMediaPool(self, item_infos):
+                return []
+
+        mp = BoundedMediaPoolStub()
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "source.mov"
+            source.write_bytes(b"media")
+            result = _import_bounded_media(mp, MediaStorageStub(), {
+                "source_path": str(source),
+                "start_frame": 0,
+                "end_frame": 1,
+                "destination_folder": "Master/Ingest",
+                "name": "Selected range",
+            })
+
+        self.assertIn("error", result)
+        self.assertEqual(mp.GetCurrentFolder(), mp.root)
+
+    def test_media_pool_bounded_import_gets_storage_from_resolve_not_project_manager(self):
+        class BoundedMediaPoolStub(MediaPoolStub):
+            def __init__(self):
+                super().__init__()
+                self.destination = self.root.subfolders[0]
+                self.current = self.root
+
+            def GetCurrentFolder(self):
+                return self.current
+
+            def SetCurrentFolder(self, folder):
+                self.current = folder
+                return True
+
+        class MediaStorageStub:
+            def __init__(self, item):
+                self.item = item
+
+            def AddItemListToMediaPool(self, item_infos):
+                return [self.item]
+
+        class ResolveStub:
+            def __init__(self, storage):
+                self.storage = storage
+
+            def GetMediaStorage(self):
+                return self.storage
+
+        class ProjectManagerStub:
+            GetMediaStorage = None
+
+        mp = BoundedMediaPoolStub()
+        item = MediaPoolItemStub()
+        resolve = ResolveStub(MediaStorageStub(item))
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "source.mov"
+            source.write_bytes(b"media")
+            with patch("src.server._get_mp", return_value=(ProjectManagerStub(), object(), mp, None)), \
+                 patch("src.server.get_resolve", return_value=resolve):
+                result = server.media_pool.__wrapped__.__wrapped__("import_bounded_media", {
+                    "source_path": str(source),
+                    "start_frame": 0,
+                    "end_frame": 300,
+                    "destination_folder": "Master/Ingest",
+                    "name": "TEST_SUBCLIP_001",
+                })
+
+        self.assertTrue(result["success"])
+        self.assertEqual(item.GetName(), "TEST_SUBCLIP_001")
 
     def test_normalize_metadata_dry_run_reports_target_keys(self):
         result = _normalize_metadata(

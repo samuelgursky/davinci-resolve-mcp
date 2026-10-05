@@ -2194,6 +2194,19 @@ media_pool(action="safe_import_sequence", params={
   "end_index": 1048,
   "target_folder": "Master/Plates"
 })
+media_pool(action="import_bounded_media", params={
+  "source_path": "/absolute/path/source.mov",
+  "start_frame": 100,
+  "end_frame": 240,
+  "destination_folder": "Master/Selects",
+  "name": "Selected range"
+})
+# start_frame/end_frame are raw Resolve startFrame/endFrame values. The MCP does
+# not add or subtract a frame; inspect bounded_import_properties after creation.
+# Live-verified on DaVinci Resolve Studio 21.1.1 Build 10: this itemInfo form
+# created a native subclip, and endFrame was inclusive (0–300 reported 301
+# frames). Treat that as an observed configuration-specific result, not a
+# guarantee for every Resolve version or media type.
 media_pool(action="media_pool_boundary_report", params={"selected": True, "depth": 2})
 # Positioned append (MediaPool.AppendToTimeline([{clipInfo}, ...])) — e.g. rebuild a subtitle row after delete_clips
 media_pool(action="append_to_timeline", params={"clip_infos": [
