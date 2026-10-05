@@ -123,6 +123,7 @@ DESTRUCTIVE_ACTIONS_BY_TOOL: Dict[str, FrozenSet[str]] = {
         "setup_multicam_timeline",
         "create_multicam_clip",
         "create_stereo_clip",
+        "import_bounded_media",
         "auto_sync_audio",
         "set_clip_marks",
         "clear_clip_marks",

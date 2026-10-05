@@ -387,6 +387,44 @@ class MediaPoolIngestProbeTest(unittest.TestCase):
         self.assertIn("error", result)
         self.assertEqual(mp.GetCurrentFolder(), mp.root)
 
+    def test_import_bounded_media_reports_orphan_when_rename_fails(self):
+        class BoundedMediaPoolStub(MediaPoolStub):
+            def __init__(self):
+                super().__init__()
+                self.destination = self.root.subfolders[0]
+                self.current = self.root
+
+            def GetCurrentFolder(self):
+                return self.current
+
+            def SetCurrentFolder(self, folder):
+                self.current = folder
+                return True
+
+        class RenameFailureItem(MediaPoolItemStub):
+            def SetName(self, name):
+                return False
+
+        class MediaStorageStub:
+            def AddItemListToMediaPool(self, item_infos):
+                return [RenameFailureItem()]
+
+        mp = BoundedMediaPoolStub()
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "source.mov"
+            source.write_bytes(b"media")
+            result = _import_bounded_media(mp, MediaStorageStub(), {
+                "source_path": str(source),
+                "start_frame": 0,
+                "end_frame": 1,
+                "destination_folder": "Master/Ingest",
+                "name": "Selected range",
+            })
+
+        self.assertIn("exists with Resolve's default name", result["error"]["message"])
+        self.assertEqual(result["error"]["state"]["item"]["id"], "clip-1")
+        self.assertEqual(mp.GetCurrentFolder(), mp.root)
+
     def test_media_pool_bounded_import_gets_storage_from_resolve_not_project_manager(self):
         class BoundedMediaPoolStub(MediaPoolStub):
             def __init__(self):
@@ -426,7 +464,7 @@ class MediaPoolIngestProbeTest(unittest.TestCase):
             source.write_bytes(b"media")
             with patch("src.server._get_mp", return_value=(ProjectManagerStub(), object(), mp, None)), \
                  patch("src.server.get_resolve", return_value=resolve):
-                result = server.media_pool.__wrapped__.__wrapped__("import_bounded_media", {
+                result = server.media_pool("import_bounded_media", {
                     "source_path": str(source),
                     "start_frame": 0,
                     "end_frame": 300,

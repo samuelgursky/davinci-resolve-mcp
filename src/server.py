@@ -13534,11 +13534,13 @@ def _import_bounded_media(mp, ms, p: Dict[str, Any]):
     """Create one bounded Media Pool item through MediaStorage.
 
     Resolve's AddItemListToMediaPool itemInfo form is the public scripting API
-    for this operation. ``start_frame`` and ``end_frame`` are passed through
-    unchanged as Resolve's ``startFrame`` and ``endFrame`` values; this wrapper
-    does not infer or compensate for end-frame inclusivity. It imports into the
-    *current* folder, so this helper deliberately scopes and restores that UI
-    state around the one API call.
+    for this operation. ``media_storage.import_to_pool(item_infos)`` passes its
+    ``{media, startFrame, endFrame}`` maps straight through; this wrapper adds
+    destination-folder scoping, naming, and created-item readback. ``start_frame``
+    and ``end_frame`` are passed unchanged as Resolve's ``startFrame`` and
+    ``endFrame`` values; this wrapper does not infer or compensate for end-frame
+    inclusivity. It imports into the *current* folder, so this helper deliberately
+    scopes and restores that UI state around the one API call.
     """
     source_path = p.get("source_path")
     if not isinstance(source_path, str) or not source_path:
@@ -13596,9 +13598,15 @@ def _import_bounded_media(mp, ms, p: Dict[str, Any]):
         try:
             renamed = bool(item.SetName(name))
         except Exception as exc:
-            return _err(f"Failed to rename bounded MediaPoolItem: {exc}")
+            return _err(
+                f"Failed to rename bounded MediaPoolItem: {exc}; the item exists with Resolve's default name",
+                state={"item": _media_pool_item_summary(item)},
+            )
         if not renamed:
-            return _err("Failed to rename bounded MediaPoolItem")
+            return _err(
+                "Failed to rename bounded MediaPoolItem; the item exists with Resolve's default name",
+                state={"item": _media_pool_item_summary(item)},
+            )
 
         properties, _ = _safe_clip_call(item, "GetClipProperty", "")
         range_property_keys = (
