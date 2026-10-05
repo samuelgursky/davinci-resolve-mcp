@@ -358,8 +358,8 @@ def set_timeline_item_crop(timeline_item_id: str,
 @mcp.tool()
 @granular_destructive_op()
 def set_timeline_item_composite(timeline_item_id: str, 
-                               composite_mode: str = None, 
-                               opacity: float = None) -> str:
+                               composite_mode: Optional[str] = None, 
+                               opacity: Optional[float] = None) -> str:
     """Set composite properties for a timeline item.
     
     Args:
@@ -446,8 +446,8 @@ def set_timeline_item_composite(timeline_item_id: str,
 @mcp.tool()
 @granular_destructive_op()
 def set_timeline_item_retime(timeline_item_id: str, 
-                            speed: float = None, 
-                            process: str = None) -> str:
+                            speed: Optional[float] = None, 
+                            process: Optional[str] = None) -> str:
     """Set retiming properties for a timeline item.
     
     Args:
@@ -525,9 +525,9 @@ def set_timeline_item_retime(timeline_item_id: str,
 @mcp.tool()
 @granular_destructive_op()
 def set_timeline_item_stabilization(timeline_item_id: str, 
-                                   enabled: bool = None, 
-                                   method: str = None,
-                                   strength: float = None) -> str:
+                                   enabled: Optional[bool] = None, 
+                                   method: Optional[str] = None,
+                                   strength: Optional[float] = None) -> str:
     """Set stabilization properties for a timeline item.
     
     Args:
@@ -617,9 +617,9 @@ def set_timeline_item_stabilization(timeline_item_id: str,
 @mcp.tool()
 @granular_destructive_op()
 def set_timeline_item_audio(timeline_item_id: str, 
-                           volume: float = None, 
-                           pan: float = None,
-                           eq_enabled: bool = None) -> str:
+                           volume: Optional[float] = None, 
+                           pan: Optional[float] = None,
+                           eq_enabled: Optional[bool] = None) -> str:
     """Set audio properties for a timeline item.
     
     Args:
@@ -947,7 +947,7 @@ def add_keyframe(timeline_item_id: str, property_name: str, frame: int, value: f
 
 
 @mcp.tool()
-def modify_keyframe(timeline_item_id: str, property_name: str, frame: int, new_value: float = None, new_frame: int = None) -> str:
+def modify_keyframe(timeline_item_id: str, property_name: str, frame: int, new_value: Optional[float] = None, new_frame: Optional[int] = None) -> str:
     """Modify an existing keyframe by changing its value or frame position.
     
     Args:
