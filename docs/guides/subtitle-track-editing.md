@@ -25,15 +25,11 @@ There are two independent kinds of subtitle styling:
 3. Save and **fully quit Resolve before writing**. New subtitle write actions
    require `iConfirmProjectClosed:true` and independently inspect running
    processes. Closing only the project is insufficient. Failure to inspect
-   processes also refuses the write.
-   **Opt-in alternative:** `allowWhileRunningIfNotLoaded:true` accepts a
-   running Resolve only when its scripting API reports a *different* loaded
-   project than the target (Resolve oversaves only the loaded project). The
-   write is refused if the target is loaded or the loaded project cannot be
-   read. Experimental: confirm the first use by loading, rendering, saving and
-   reloading the target.
-4. Apply the edits, then relaunch Resolve (or, with the opt-in, load the
-   target project) and inspect/render the result.
+   processes also refuses the write. Loading a *different* project is not
+   enough either: measured on Studio 19.1.3.7, a project loaded earlier in the
+   session is served from memory when it is loaded again, so a disk write to
+   it is not shown, and saving after editing the same rows overwrites it.
+4. Apply the edits, then relaunch Resolve and inspect/render the result.
 
 Each new subtitle write creates a unique `Project.db.subtitle-<time>-<uuid>.bak`
 SQLite snapshot, including committed WAL pages. Edits and readback verification
@@ -60,7 +56,8 @@ names require disambiguation in Resolve before editing.
 
 SQLite uses `better-sqlite3` when its native binding loads, otherwise
 [`node:sqlite`](https://nodejs.org/docs/latest-v24.x/api/sqlite.html) on a suitable
-Node runtime (22.13+ recommended; tested here on 24.14.1). Zstd reads use native
+Node runtime (22.16+ or 23.8+, which provide `node:sqlite` `backup()`; tested on
+24.14.1 and 22.22.3). Zstd reads use native
 `node:zlib` when available and otherwise `fzstd`. Caption writes emit the raw
 `0x80` envelope, avoiding a native compression dependency.
 

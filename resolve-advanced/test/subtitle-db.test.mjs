@@ -190,7 +190,8 @@ test('running Resolve and unavailable process inspection both refuse before back
   assert.throws(() => requireResolveQuit({ iConfirmProjectClosed: true }), /Cannot verify/);
 });
 test('built-in sqlite backend has readonly blobs and transaction rollback; snapshots include WAL', async (t) => {
-  try { require('node:sqlite'); } catch { t.skip('node:sqlite unavailable on this Node; native backend tested above'); return; }
+  let builtin; try { builtin = require('node:sqlite'); } catch { builtin = null; }
+  if (typeof builtin?.backup !== 'function') { t.skip('node:sqlite with backup() needs Node 22.16+ / 23.8+; native backend tested above'); return; }
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sqlite-fallback-test-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const filename = path.join(dir, 'Project.db'), db = new BuiltinSqlite(filename);
   db.exec('PRAGMA journal_mode=WAL; CREATE TABLE x (b BLOB)'); db.prepare('INSERT INTO x VALUES (?)').run(Buffer.from('one'));
@@ -201,22 +202,16 @@ test('built-in sqlite backend has readonly blobs and transaction rollback; snaps
   assert.throws(() => read.exec('DELETE FROM x'), /readonly|read-only/i);
   read.close(); db.close();
 });
-test('allowWhileRunningIfNotLoaded writes only when scripting reports a different loaded project', async (t) => {
-  const filename = fixture(t), bytes = fs.readFileSync(filename), target = path.basename(path.dirname(filename));
+test('a running Resolve refuses the write even when another project is loaded', async (t) => {
+  // Measured on Studio 19.1.3.7: a project loaded earlier in the session is
+  // served from memory when reloaded, so a disk write to it is not seen and a
+  // later save of the edited rows overwrites it. Only a full quit is safe.
+  const filename = fixture(t), bytes = fs.readFileSync(filename);
   const running = process.platform === 'win32' ? '"Resolve.exe","123"\n' : '/opt/resolve/bin/resolve\n';
-  let loaded = { status: 0, stdout: JSON.stringify({ project: target.toUpperCase() }) + '\n' };
-  t.mock.method(childProcess, 'spawnSync', (cmd) => /tasklist|^ps$/.test(cmd) ? { status: 0, stdout: running } : loaded);
-  const args = { delete: ['a'], iConfirmProjectClosed: true, allowWhileRunningIfNotLoaded: true };
-  await assert.rejects(() => call(filename, 'write_captions', args), /is loaded in Resolve/);
-  loaded = { status: 1, stdout: '' };
-  await assert.rejects(() => call(filename, 'write_captions', args), /cannot be read through scripting/);
-  await assert.rejects(() => call(filename, 'write_captions', { ...args, allowWhileRunningIfNotLoaded: false }), /QUIT Resolve/);
-  await assert.rejects(() => call(filename, 'write_captions', { ...args, iConfirmProjectClosed: false }), /iConfirmProjectClosed/);
+  t.mock.method(childProcess, 'spawnSync', () => ({ status: 0, stdout: running }));
+  await assert.rejects(() => call(filename, 'write_captions',
+    { delete: ['a'], iConfirmProjectClosed: true, allowWhileRunningIfNotLoaded: true }), /unrecognized_keys[^]*allowWhileRunningIfNotLoaded/);
+  await assert.rejects(() => call(filename, 'write_captions', { delete: ['a'], iConfirmProjectClosed: true }), /QUIT Resolve/);
   assert.deepEqual(fs.readFileSync(filename), bytes);
   assert.deepEqual(fs.readdirSync(path.dirname(filename)), ['Project.db']);
-  loaded = { status: 0, stdout: 'banner\n{"project":"some-other-project"}\n' };
-  const done = await call(filename, 'write_captions', args);
-  assert.equal(done.loadedProject, 'some-other-project');
-  assert.equal(done.reopenRequired, false);
-  assert.ok(fs.existsSync(done.backup));
 });

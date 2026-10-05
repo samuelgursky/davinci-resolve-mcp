@@ -112,7 +112,7 @@ export const projectDbTool = {
     'list_captions(projectName|projectDb, timeline, track?) returns text, start/end and words plus originalWords; ' +
     'write_captions(same selectors, add:[{text,start,end,words:[{text,start,end}]}]?, replace:[{id,text,start,end,words}]?, delete:[id]?, templateCaptionId?) edits/adds/deletes in one transaction; all times are absolute timeline frames, end exclusive, caption frames integers, word frames may be fractional; ' +
     'check_captions(same selectors, maxCharacters?:24) flags timing gaps/zero lengths/overflow heuristics. Subtitle track defaults to 1. ' +
-    'New subtitle writes require Resolve fully QUIT and iConfirmProjectClosed:true, or allowWhileRunningIfNotLoaded:true to write while Resolve runs with a DIFFERENT project loaded (checked through scripting; refused if the target is loaded or the check fails); dryRun:true previews without writing. Unique SQLite snapshot backup, schema guards, atomic transaction and readback. Readback is not render verification. Uses better-sqlite3 or node:sqlite (22.13+); automatic Windows/macOS/Linux library discovery.',
+    'New subtitle writes require Resolve fully QUIT (checked through the process list) and iConfirmProjectClosed:true; dryRun:true previews without writing. Unique SQLite snapshot backup, schema guards, atomic transaction and readback. Readback is not render verification. Uses better-sqlite3 or node:sqlite (Node 22.16+ / 23.8+); automatic Windows/macOS/Linux library discovery.',
   async handler({ action, args }) {
     if (Object.hasOwn(subtitleSchemas, action)) return subtitleDbAction(action, args, resolveDbPath);
     if (action === 'list_folders') {

@@ -2,15 +2,14 @@
 import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { z } from 'zod';
-import { openGuarded, requireNotLoaded, snapshotBackup } from './db-patch.mjs';
+import { openGuarded, requireResolveQuit, snapshotBackup } from './db-patch.mjs';
 const require = createRequire(import.meta.url);
 const { decodeCaption, encodeCaption, checkCaptions } = require('../vendor/drp-format/subtitle-captions.js');
 const { decodePreset, setPresetInputs } = require('../vendor/drp-format/subtitle-preset.js');
 
 const target = { projectDb: z.string().optional(), projectName: z.string().optional() };
 const track = { timeline: z.string(), track: z.number().int().min(1).default(1) };
-const write = { dryRun: z.boolean().default(false), iConfirmProjectClosed: z.boolean().optional(),
-  allowWhileRunningIfNotLoaded: z.boolean().default(false) };
+const write = { dryRun: z.boolean().default(false), iConfirmProjectClosed: z.boolean().optional() };
 const frame = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const word = z.object({ text: z.string().min(1), start: z.number().nonnegative(), end: z.number().nonnegative() }).strict();
 const caption = { text: z.string().min(1), start: frame, end: frame, words: z.array(word).min(1) };
@@ -273,16 +272,14 @@ export async function subtitleDbAction(action, args, resolveDbPath) {
     const preview = action === 'write_captions' ? captionEdit(db, p, false) : presetEdit(db, p, false, source);
     if (p.dryRun) return { ...preview, dryRun: true, backup: null, verified: false };
   } finally { db.close(); }
-  requireNotLoaded(p, dbPath);
+  requireResolveQuit(p);
   const backup = await snapshotBackup(dbPath);
-  const loadedProject = requireNotLoaded(p, dbPath); // Recheck after the asynchronous snapshot.
+  requireResolveQuit(p); // Recheck after the asynchronous snapshot.
   const writable = openGuarded(dbPath, { writable: true });
   try {
     const result = writable.transaction(() => action === 'write_captions'
       ? captionEdit(writable, p, true) : presetEdit(writable, p, true, source))();
     return { ...result, dryRun: false, backup, verified: true, validation: 'database_readback_only',
-      ...(loadedProject ? { resolveRunning: true, loadedProject, reopenRequired: false,
-        note: 'Written while Resolve kept another project loaded; load this project in Resolve to see the change.' }
-        : { reopenRequired: true }) };
+      reopenRequired: true };
   } finally { writable.close(); }
 }

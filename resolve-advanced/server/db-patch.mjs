@@ -14,7 +14,6 @@ import path from 'node:path';
 import os from 'node:os';
 import childProcess from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
@@ -111,8 +110,13 @@ export function loadSqlite() {
     probe.close();
     return Database;
   } catch (nativeError) {
-    try { require('node:sqlite'); } catch {
-      throw new Error(`${nativeError.message} Alternatively use Node with node:sqlite (22.13+).`);
+    // DatabaseSync shipped in 22.13, but snapshotBackup needs sqlite.backup(),
+    // added in 22.16 (23.8 on the 23 line). Without it a write would fail only
+    // after opening the database, with "backup is not a function".
+    let builtin;
+    try { builtin = require('node:sqlite'); } catch { builtin = null; }
+    if (typeof builtin?.backup !== 'function') {
+      throw new Error(`${nativeError.message} Alternatively use Node 22.16+ (or 23.8+), whose node:sqlite provides backup().`);
     }
     return BuiltinSqlite;
   }
@@ -159,72 +163,6 @@ function resolveRunning() {
   return result.stdout.split(/\r?\n/).some((line) => win
     ? /^"Resolve\.exe",/i.test(line.trim())
     : /(^|\/)resolve(?:\.exe)?$/i.test(line.trim()));
-}
-
-// Asks the running Resolve which project is loaded. Same module/DLL bootstrap
-// as src/server.py; RESOLVE_SCRIPT_API / RESOLVE_SCRIPT_LIB override defaults.
-const LOADED_PROJECT_PY = String.raw`
-import json, os, sys
-api = os.environ.get('RESOLVE_SCRIPT_API') or {
-    # MCP stdio clients pass a reduced env (no PROGRAMDATA on Windows).
-    'win32': os.path.join(os.environ.get('PROGRAMDATA') or os.environ.get('SYSTEMDRIVE', 'C:') + os.sep + 'ProgramData', 'Blackmagic Design', 'DaVinci Resolve', 'Support', 'Developer', 'Scripting'),
-    'darwin': '/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting',
-}.get(sys.platform, '/opt/resolve/Developer/Scripting')
-lib = os.environ.get('RESOLVE_SCRIPT_LIB') or {
-    'win32': os.path.join(os.environ.get('PROGRAMFILES', r'C:\Program Files'), 'Blackmagic Design', 'DaVinci Resolve', 'fusionscript.dll'),
-    'darwin': '/Applications/DaVinci Resolve/DaVinci Resolve.app/Contents/Libraries/Fusion/fusionscript.so',
-}.get(sys.platform, '/opt/resolve/libs/Fusion/fusionscript.so')
-os.environ.setdefault('RESOLVE_SCRIPT_LIB', lib)
-sys.path.append(os.path.join(api, 'Modules'))
-if sys.platform == 'win32' and os.path.isdir(os.path.dirname(lib)):
-    os.environ.setdefault('PYTHONHOME', sys.base_prefix)
-    os.environ['PATH'] = os.path.dirname(lib) + os.pathsep + os.environ.get('PATH', '')
-    os.add_dll_directory(os.path.dirname(lib))
-import DaVinciResolveScript as dvr
-resolve = dvr.scriptapp('Resolve')
-project = resolve and resolve.GetProjectManager().GetCurrentProject()
-if not project: sys.exit(3)
-print(json.dumps({'project': project.GetName()}))
-`;
-
-/** Python used for the probe: RESOLVE_PYTHON, else the repo venv, else PATH. */
-function resolvePython() {
-  if (process.env.RESOLVE_PYTHON) return process.env.RESOLVE_PYTHON;
-  const venv = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'venv',
-    process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python');
-  return fs.existsSync(venv) ? venv : (process.platform === 'win32' ? 'python' : 'python3');
-}
-
-/** Name of the project loaded in the running Resolve; throws when scripting cannot say. */
-export function loadedResolveProject() {
-  const result = childProcess.spawnSync(resolvePython(), ['-c', LOADED_PROJECT_PY],
-    { encoding: 'utf8', timeout: 20000, windowsHide: true, env: { ...process.env, PYTHONUTF8: '1' } });
-  if (result.error || result.status !== 0) {
-    throw new Error('Resolve is running but its loaded project cannot be read through scripting; refusing database write. Quit Resolve instead.');
-  }
-  try { return JSON.parse(result.stdout.trim().split(/\r?\n/).pop()).project; }
-  catch { throw new Error('Unreadable answer from Resolve scripting; refusing database write.'); }
-}
-
-/**
- * Opt-in relaxation of requireResolveQuit. Resolve only oversaves the project it
- * has loaded, so with allowWhileRunningIfNotLoaded:true a running Resolve is
- * accepted when scripting reports a DIFFERENT loaded project than the folder
- * owning dbPath. Fails closed when the loaded project cannot be read.
- * Returns the loaded project name, or null when Resolve is quit.
- */
-export function requireNotLoaded(opts, dbPath) {
-  requireClosed(opts);
-  if (!resolveRunning()) return null;
-  if (!opts.allowWhileRunningIfNotLoaded) {
-    throw new Error('Fully QUIT Resolve before subtitle database writes (Resolve is running). ' +
-      'To write a project that is NOT loaded in Resolve, pass allowWhileRunningIfNotLoaded:true.');
-  }
-  const loaded = loadedResolveProject(), target = path.basename(path.dirname(dbPath));
-  if (!loaded || loaded.toLowerCase() === target.toLowerCase()) {
-    throw new Error(`Project "${target}" is loaded in Resolve; load another project (or quit Resolve) before writing it.`);
-  }
-  return loaded;
 }
 
 /** SQLite snapshot includes committed WAL pages; never overwrite an older backup. */
