@@ -262,7 +262,7 @@ def export_layout_preset_tool(preset_name: str, export_path: str) -> Dict[str, A
 
 
 @mcp.tool()
-def import_layout_preset_tool(import_path: str, preset_name: str = None) -> Dict[str, Any]:
+def import_layout_preset_tool(import_path: str, preset_name: Optional[str] = None) -> Dict[str, Any]:
     """Import a layout preset from a file.
 
     Calls Resolve.ImportLayoutPreset() to import a preset from disk.
@@ -701,7 +701,7 @@ def delete_user_preferences_preset(preset_name: str) -> Dict[str, Any]:
 
 
 @mcp.tool()
-def import_user_preferences_preset(import_path: str, preset_name: str = None) -> Dict[str, Any]:
+def import_user_preferences_preset(import_path: str, preset_name: Optional[str] = None) -> Dict[str, Any]:
     """Import a user-preferences preset from a file (Resolve 21.0.4+).
 
     The imported preset is NOT auto-loaded; it takes its name from the file

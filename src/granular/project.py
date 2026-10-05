@@ -140,7 +140,7 @@ def open_project(name: str) -> str:
 
 
 @mcp.tool()
-def create_project(name: str, media_location_path: str = None) -> str:
+def create_project(name: str, media_location_path: Optional[str] = None) -> str:
     """Create a new project with the given name.
     
     Args:
@@ -728,7 +728,7 @@ def set_color_science_mode_tool(mode: str) -> str:
 
 @mcp.tool()
 @granular_destructive_op()
-def set_color_space_tool(color_space: str, gamma: str = None) -> str:
+def set_color_space_tool(color_space: str, gamma: Optional[str] = None) -> str:
     """Set timeline color space and gamma.
     
     Args:
