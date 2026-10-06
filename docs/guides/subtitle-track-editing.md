@@ -167,17 +167,24 @@ the caption encoding and Word Highlight's nested zlib inputs. Synthetic tests
 exercise both codecs, cloning, transactional rollback, frame-rate arithmetic,
 guard refusal, backup readback and preservation of unrelated tracks.
 
-The writer has **not yet passed the complete automated render acceptance**.
-The initial opt-in Windows harness `tests/live_subtitle_roundtrip.py` run on
-Studio 21.1.0.17 generated twenty synthetic captions. Preset/control edits,
-corrected text, caption addition/deletion and subsequent save survived reopening,
-but all 403 expected caption frames were black in the BurnIn render.
+On 2026-10-06, a synthetic-only caption edit → full quit → database write →
+relaunch → BurnIn render acceptance passed on Studio 21.1.0.17 / Windows.
+Seven generated captions were edited through the actual `project_db` handler:
+six replacements, one deletion and one addition, with explicit word boundaries.
+A fresh native Word Highlight preset was created in the disposable project;
+no personal project or media was used as a preset reference.
 
-The failed render prompted a codec regression fix: adding absent controls after
-a final input without a trailing comma produced invalid Lua. The writer now
-prepends comma-terminated inputs, and a regression fixture covers the missing
-separator. A fresh synthetic-only reopen and BurnIn render is required to verify
-the fix; earlier manual viewer checks do not establish every-frame correctness.
+The 21-second 1080×1920 / 30 fps render contained 630 frames. All 420 caption
+frames contained text, all seven word transitions matched the written timings,
+and no caption pixels touched the frame edges or appeared in the gaps. The
+rendered text was visually inspected for all seven captions in both highlight
+states. Resolve's live text/bounds and saved word timing readback also matched.
+See the [acceptance report and frames](../testing/subtitle-acceptance-2026-10-06/README.md).
+
+The earlier failed synthetic render prompted a codec regression fix: inserting
+absent controls after a final input without a trailing comma produced invalid
+Lua. The writer now prepends comma-terminated inputs, and a regression fixture
+covers the missing separator. The new acceptance run exercises this path.
 
 That live run also exposed Resolve's association constraints: DbIndex must be
 nonnegative and its composite primary key uses ON CONFLICT REPLACE. The writer
@@ -185,7 +192,7 @@ now rebuilds only the selected track's Items vector within the transaction,
 avoiding both rejected temporary indices and lost neighbours during reordering.
 The regression fixture includes those constraints.
 
-Before releasing it, use a disposable project and synthetic speech/media:
+To repeat acceptance, use a disposable project and synthetic speech/media:
 generate subtitles, apply Word Highlight with explicit colours, correct two
 captions, add one and delete one, reopen Resolve, then render with
 `ExportSubtitle:true, SubtitleFormat:"BurnIn"`. Inspect rendered frames across
