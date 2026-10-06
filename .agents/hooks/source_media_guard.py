@@ -26,6 +26,7 @@ import os
 import re
 import shlex
 import sys
+import tempfile
 from pathlib import Path
 from typing import List, Sequence
 
@@ -110,7 +111,12 @@ def is_scratch(path: str, destructive: bool = False) -> bool:
     parts = components(path)
 
     configured = os.environ.get("RESOLVE_MCP_SCRATCH", "")
-    roots = SCRATCH_ROOTS + ((normalize(configured).lower(),) if configured else ())
+    # Normalized like the path, so separators and drive letters line up on Windows,
+    # where the platform temp dir is `%TEMP%` rather than any of SCRATCH_ROOTS.
+    roots = tuple(
+        normalize(root).lower()
+        for root in SCRATCH_ROOTS + (tempfile.gettempdir(),) + ((configured,) if configured else ())
+    )
     if any(resolved == root or resolved.startswith(root.rstrip(os.sep) + os.sep) for root in roots):
         return True
 

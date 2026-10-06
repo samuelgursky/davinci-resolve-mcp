@@ -17,8 +17,10 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
 import sys
+import tempfile
 import unittest
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -85,6 +87,11 @@ class FfmpegOutputTests(unittest.TestCase):
 
     def test_writing_into_a_scratch_root_still_passes(self) -> None:
         self.assertEqual(verdict("ffmpeg -i master.mp4 /tmp/out.mp4"), "allow")
+
+    def test_writing_into_the_platform_temp_dir_passes(self) -> None:
+        """On Windows the system temp dir is `%TEMP%`, not `/tmp`; it is scratch too."""
+        out = shlex.quote(os.path.join(tempfile.gettempdir(), "out.mp4").replace(os.sep, "/"))
+        self.assertEqual(verdict(f"ffmpeg -i master.mp4 {out}"), "allow")
 
     def test_reading_is_not_writing(self) -> None:
         """`ffmpeg -i x.mp4` with no output operand prints stream info and exits;
