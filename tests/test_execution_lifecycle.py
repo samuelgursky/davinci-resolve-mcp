@@ -52,6 +52,12 @@ class TestExecutionLifecycle(unittest.TestCase):
         self.assertEqual(assessment.level, RiskLevel.MEDIUM)
         self.assertFalse(assessment.destructive)
 
+    def test_classify_operation_risk_bounded_media_import(self):
+        assessment = classify_operation_risk("media_pool", "import_bounded_media", {})
+        self.assertTrue(assessment.recognised)
+        self.assertTrue(assessment.destructive)
+        self.assertEqual(assessment.level, RiskLevel.LOW)
+
     def test_pipeline_before_hook_allows_execution(self):
         hook = MagicMock(spec=LifecycleHook)
         hook.name = "mock_hook"

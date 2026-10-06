@@ -236,6 +236,8 @@ class RiskClassificationHook(LifecycleHook):
         ("media_pool", "create_timeline"),
         ("media_pool", "create_timeline_from_clips"),
         ("media_pool", "create_stereo_clip"),
+        # Adds one bounded item; the source and existing pool contents remain intact.
+        ("media_pool", "import_bounded_media"),
         # Per-item display properties: set them back and the item is as it was.
         ("timeline_item", "set_clip_enabled"),
         ("timeline_item", "set_name"),
