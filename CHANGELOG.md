@@ -2,6 +2,52 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.9.0 — bounded Media Pool import
+
+### Added
+
+- **`media_pool(action="import_bounded_media")`** creates one bounded Media
+  Pool item from a source file through
+  `MediaStorage.AddItemListToMediaPool([{media, startFrame, endFrame}])`.
+  Params: `source_path` (absolute, must exist), `start_frame`, `end_frame`,
+  `destination_folder` (must already exist) and `name`. The import lands in
+  the destination folder, which is made current only for the one call; the
+  previous current folder is restored afterwards, including when the import
+  fails. The result carries the item summary and the range properties
+  Resolve reports for it (`bounded_import_properties`). `start_frame` and
+  `end_frame` are passed through unchanged; the wrapper does not adjust for
+  end-frame inclusivity. If the rename fails after Resolve has created the
+  item, the error says the item exists under Resolve's default name and
+  returns its id in `state`, so it can be renamed or deleted rather than
+  imported twice. `media_storage.import_to_pool(item_infos)` remains the
+  raw passthrough. Contributed by @dmourati (#275).
+- Contributor-validated on Studio 21.1.1 Build 10: this itemInfo form created
+  a native subclip, and `endFrame` was inclusive (0–300 gave 301 frames).
+  That is one tested configuration, not a guarantee for other builds or
+  media types; not measured on this project's 19.1.3.7 machine.
+
+### Safety
+
+- The action is registered as a write (`destructive_hook`) and rated LOW
+  (`execution_lifecycle`): it only adds an item, and neither the source nor
+  existing pool contents change. Safe mode, the dry-run refusal and the
+  operation log now see it. `docs/reference/readwrite-symmetry.md`
+  regenerated.
+
+### Tests
+
+- `tests/test_media_pool_ingest_probe.py`: input validation never reaches
+  Resolve, the folder is restored on success and failure, `MediaStorage`
+  comes from the Resolve object rather than the project manager, and a
+  failed rename reports the created item.
+- `tests/test_execution_lifecycle.py`: the action classifies as a
+  recognised, destructive, LOW-risk write.
+
+### Validation
+
+- Offline suite green. The live result above is the contributor's, on
+  Studio 21.1.1 Build 10.
+
 ## What's New in v4.8.30 — conform_lint reports every reuse of one source
 
 ### Fixed
