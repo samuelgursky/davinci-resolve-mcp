@@ -2,6 +2,35 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.8.30 — conform_lint reports every reuse of one source
+
+### Fixed
+
+- **`editorial(action="conform_lint")` reported only the first reuse when
+  several pulls came from inside one long pull.** `check_duplicate_usage`
+  sorted each source's pulls by in-point and compared each one only with the
+  pull just before it. A long take followed by short callbacks lifted from
+  inside it therefore compared the second callback against the first, which
+  it does not overlap, and the reuse of the long take went unreported from
+  then on. An interview used at 0–5000 with callbacks at 100–200 and 300–400
+  reported one reuse instead of two. Each pull is now compared with the
+  earlier pull that reaches furthest, so every pull that overlaps any earlier
+  pull is flagged. Where out-points already increase that is the previous
+  pull, so ordinary material is reported exactly as before; adjacent pulls
+  are still two shots, not a duplicate. Contributed by @Dev-next-gen (#276).
+
+### Tests
+
+- `tests/test_conform_lint.py` gains `DuplicateUsageTests`, the check's first
+  tests: adjacent pulls stay unreported, and every callback inside one long
+  pull is reported. The second fails on v4.8.29 with the
+  `INTERVIEW`/`CALLBACK 2` pair missing.
+
+### Validation
+
+- `lint_timeline` is a pure function over a timeline snapshot; no Resolve
+  scripting call changed, so no live run was required.
+
 ## What's New in v4.8.29 — optional granular arguments accept an explicit null
 
 ### Fixed
