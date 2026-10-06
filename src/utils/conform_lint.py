@@ -337,7 +337,17 @@ def check_duplicate_usage(items: Sequence[Mapping[str, Any]]) -> List[Dict[str, 
                 length = int(entry["timeline_end_frame"]) - int(entry["timeline_start_frame"])
             spans.append((start, start + max(0, length), _name(entry)))
         spans.sort()
-        for (a_start, a_end, a_name), (b_start, b_end, b_name) in zip(spans, spans[1:]):
+        # Each pull is compared against the furthest-reaching EARLIER pull, not
+        # against its immediate predecessor. Sorted by source in-point, one long
+        # pull is followed by every short callback lifted from inside it, so
+        # `spans[i - 1]` is the previous CALLBACK — which the next callback need
+        # not overlap — and the reuse of the long pull went unreported from the
+        # second callback onward. Where the out-points already increase the
+        # furthest pull *is* the predecessor, so ordinary material is unchanged.
+        furthest = spans[0]
+        for current in spans[1:]:
+            b_start, b_end, b_name = current
+            a_start, a_end, a_name = furthest
             if b_start < a_end:
                 dupes.append({
                     "source": str(ref),
@@ -345,6 +355,8 @@ def check_duplicate_usage(items: Sequence[Mapping[str, Any]]) -> List[Dict[str, 
                     "second": b_name,
                     "overlap_frames": min(a_end, b_end) - b_start,
                 })
+            if b_end > a_end:
+                furthest = current
     if not dupes:
         return []
     return [_finding(
