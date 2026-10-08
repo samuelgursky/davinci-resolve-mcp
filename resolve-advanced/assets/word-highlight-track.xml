@@ -1,0 +1,61 @@
+<!-- Native Word Highlight holder exported from synthetic-only Studio 21.1.0.17 QA.
+Reference defaults: Segoe UI Black, size .055, centered, white text, yellow highlight, black outline .1.
+No camera media, captions, or source file references. -->
+<FusionCompHolderItems>
+     <Element>
+      <Sm2TiVideoClip DbId="da968cfd-afab-4644-bbdc-31331d38d9fa">
+       <FieldsBlob>00000002000000608128b52ffd2064b50200a4040a500a4c220e576f726420486967686c696768744a3754656d706c617465732f456469742f5469746c65732f53756274416e696d617465642fa8010020011210000600000000ffffffff0300b88173250f142b50</FieldsBlob>
+       <PrettyType>Fusion Title</PrettyType>
+       <Name>Fusion Title</Name>
+       <Start>0</Start>
+       <Duration>150</Duration>
+       <LinkedItemSync/>
+       <WasDisbanded>false</WasDisbanded>
+       <MarkersBA/>
+       <UiMemento>0</UiMemento>
+       <Flags>0</Flags>
+       <PriorityIndex>0</PriorityIndex>
+       <EffectFiltersBA/>
+       <ImportExportMetadataBA/>
+       <RenderTextEnabled>true</RenderTextEnabled>
+       <RenderTextGanged>true</RenderTextGanged>
+       <RenderTextPrefixed>true</RenderTextPrefixed>
+       <CompositionTable>
+        <Sm2TiCompositionTable DbId="4cee3865-d4c1-4ed8-b11e-4bbad98d8b15">
+         <FieldsBlob>000000010000000100000016004c006100730074004d006f006400540069006d00650000000400000000044635b41d</FieldsBlob>
+         <DbSavedTime>0</DbSavedTime>
+         <CompositionBA>00000b66789c6d527b3894e91b7e49b4947388952f3937c60ca506439a715a31e31895c38cf9986166bed9996f54444a2122ad638a1c7248a5edb02544892d2572e830151b514a4a54684a7bcde8b7d7ee75fddebf9efb7e9efb39be00001900801c004011440004080117a000005900165c4b010e84012ea0010e80a56100005d400208e0001e408000b0000a5800015c0001bcd42b9148c219800568c00330c066c00202696625f0e32d6466001a40014d8a0150ec27211c1e2260a12c840bc54324219f0f73517f16078688100e03f9c25c06ccf7a571a32444bc845a47801230901b1ba1d3d8ffc7f1238507192242eb31903bcb072242285f0863202a9bb68b4e8b8809e0316828ec85307e14f143613e8cfcc09134b600c64081305f20e98908199269812c6e040bf28505083b1686fc5021838540d6782c1e8bc3e270f8f58618c88f160b332842942744050b59dd6136c31f41d83f209925a0d1d9f0bfa9cd4844cc7f086749624a64a40046ff37be40c891c8fe9961a10489cde24934f10b130b508443a6a13429e3efe245ddececef12265d81a13fcce1b169282cb07261b0502b7f16ca8605567e423aba603973591c1a0a33acb6207c06e4ce8a62b259514cd45092d9954fe3c0ffd4a1f2e1c80520399ad4f0e0a2309f1681b26217ae40e5233b77492dbf089ab46b3c462295a869287341ed455b10ff70488bb8227c0e4d32743cb485c5409912256e83748b926e2490608dc3406e421603f6a5a12c444261d7fffb6dc040649887325d856c3644846c7e402a1f8e65c13bfec5fcb76b1b6917015c01c2476186b48585cfe5c295a0855f95205d34c2e1f16181401ab5708e04606007c0ce27a3dbb60986ebd51d9d5cdafbb8cb7364d563734edd21412b5a454627938e6eee1ad2ac0c97a95bd2619ce11559f375c6afe1713e47247ffee8b65093cbfd0fab9b6b1a1fdc635f5f771c6f57a5b9fe86f918be41595e869eed276f5b7a7745b358a5720d4ff1a56a6a8d72c37876df03c288eaf17dcbea0fec3637a8a341dfe7afd86e3a2e667c68feecc4538c8eb8a4881b31dbed74b4ad5b61e531278a897649b769cef96ebca2694ecf97bde3b76c86cf416e830cdf4556cf2b95b1dfdad5c519c6061fac743c4a950e05a64de6cff556165e28499ac809bf67d5786d2bb148cf920635b3fbfdfa49c97185d430d5d9a423a626564eb33aa636573aab3b5f855d3767463eb4d388785d96757ef7adc74b8b05fb5a7f4f56f381a6cc2993c1deaec8dc9c387d6e6515e537b283515f32e8d2542922ae1af979fca7788edf9dd7d784cfdfe20f3b157693dade47287e0b3dfd2ac0f895657a74b0a6314ba9dfa82a5aebf5dd83deb131276cb689d90f261b63cf93472fe7f9dbe7ee4a0b296b51f3e63c2b8f3caf7d36fad383ecba4cc29c5677888380dc845f363ce769e4ed7c449f81d2b0fc032f1daaae4e139bd70a13994e2e05c9eb6e393a6b4dace53ce91959acd87b3150ff35a1cce4db86d02f17dd6ea4110c54a25b267d15a6783f197660a612c5faec2454635087a85422361ac9eecc3ea99983de8b64aa16be3b15f8e8261d37d710a87085b74aa13197e77a3e3b667fdc635ef0b72c6bab3341f5af2fe1a609bad953956e372a72dc65e50cd44e07e92dc6c67c3fa0f3a183be5fd66c11e500fb09562784bcb3e733f2dcc24b90f592975999c16c4366de583e49c94971a4fa86fb7ef1910f17361896e65f5cfc3e7d2deaac6b784ed49e5baa284aaf287143da87bd90ca5717f25692d27239554b9b7ee5f5fe32698f9dd56f727d37c95934dfb9787ea982e7583a727b9e629a3cdda2555ae4603bef1e9e559cf541dd7ac38bb44cb22c496b5bd060e10d510545eb0f87c6568df103dbf5afce37a50b494da658ea1647e707986d1fb69ad629b7a95c75d25b157aea91bf1cf35af4926c51add2a6dcf60272feddba1c8543ef4d2cd4360dc6569fa3c9ce7c56c81fec9669b8e87489b7bb11ba35b3dc94b9fa86e5ef6ac5e5ef9b2f79bf52cacfbc303bf028d37a7eead9eb492125cbbbac58c7dd7766aa3d557cc6f159574a9179dba0631a51bbadcb314d5f9b3c6d3172e8f8f6e2dab79363c209eaf68d03de471a9e1760ecd1d01d9e4f638c8388516706bb82f4a3ce74750579ec6a5b8637afce35b330579958c40f53363cfd73976aadabaf62693abe6bc9af96d59de542e1ed9e5ae1ba5372e1e7a8c74fadcfbbbe2195517127f0c2d7956522b3db2220d7167e4f98e9d17f35a17cf09e6292ae489eeae3ba66cf548fdf894e967f7c41b71ecf737990a7d1663753058e8be59d8fa25fb6c8c97aef350b1a18160651ebb54915c609861d41dbed9f32ca8fd15f6ab4c5689ace42273e723cedc92507fc17134adf9d6d9f2e6fa53a9c4eb7cd9fcbacf77bd4eed4405d1257e8b8d12148a0241493079644141c9189f979bc7f1d616a45ba46f1b3c4a53d0af25bc616c16b6e0b6d8c308cf0fdb8a20ff864a3e37e976b4bfb0ef429d6b6b24232895823aa716e2b2b78c84c9ea21d32adb049bd66308be2f126e8765eff5e2d176b2557ce7e2dcdbd87bf6d958d5c3d1e9e67b244f7fbe9076415dd89cb46b3fb7566a254bfc7ebf3f7bceb1e69e6decf19ad205526def97a2e7752df91303dafb5b25583ed925549dd9fbf26047ff6e8fd02b5a54a87597607b115eed5a5c1bb2c9aca062ee81e84975394ee5a9464d2379f1ffa9368aee761efc20fdb5cde9bfe4216e9653eba61ffc1cd2ef79038aba18aa092c8bfbfa12ef96645f2cd3f3b0cde5c3cbc8a9e62ae698bb50ddfdd53acacf6515e2e2356332ac65f61cbb7632dae7d35cdcbfff08a11de7f9f551517e269a671e2537775b9d07e5e7d444fffdbb1a7f373fed6752dbece6f8f66389e5d59fb60b4844cb4f037c186be2f7c3b5f3bf1bab568b8658fc07e42234babd76dcdbe294eba55ddd034531edf4b0cc4e7e61edb1a37f2c414efe3c04fc127fcd653c51a9d8dbc1697bd2ed1d9ca2ee2d0c6e3726d9798cbf564e81bc31217c7d476f8766e1f6a30b65fe16555d2c3b6d47a875de5633d943b3c63b048856f64ab2ebef757e239ce2a528645a3e7daf8dda5dd072d6cde2a3ebc9e9454433256ce7c236e7b3b7ff2ccc126052322a622bbbe835aab7a7403bd743ce5aff4394bd169479288febbe5eabb45bc5c8bd0658d7d7a76adcda941cca2cb1c844e8888081e4b2f8ead16a5f4970d26dd170da8976dd1bae272baa3eacb2b0bf94a8e113eabe66c804ec3fa80f8ba7ce611db5accf3bc933d18dfaddef2c566e87cb42133efe0f57a2a32e5736a483d2f349592f1382fa92f5594d67ef699070efbdd7568a06b66c7a7524297855fe57e8f9044dc3620aa510b50bdac3d7ea577aaeb6541865ec7ba17d5de326838c56ec551bdde97f6a9d72a0c1cdfbaa484cb135fc8ce5194783bfc9e9a50f5afdd71be7b2975f097dbf61667d4d8cf0c0f618c4f7a95fd7a9f49d875618fb7fad354c58b1d911f1b1217df320f0ac60d50717adcf8127153c01f9cbab146f19f1399d011ff3b01ae5e37aff08d99d5e202a7ad3b99092f26b3df9d0dd4dd1b3c18571d7dd8e9f3e8c6097c0ede3df14654ccab19af83cf077b0b06038093cc77c2e70a6c5c1d3caf557858efab88db1c11cbe8c82c72f28a5edb795219b9ea4dff6a38ac5d97a7d37277a7cd27f58100e5048bda967bb37bcc435677a72efa5471642c78cc714ec6f5c4ce31d1c3fb5c9d96ae35cc33ef3f7be6ec0b1cedf17973cbc4eaf968d87705dffabfdaff06a9c0e250</CompositionBA>
+         <ActiveCompositionIdx>0</ActiveCompositionIdx>
+        </Sm2TiCompositionTable>
+       </CompositionTable>
+       <In/>
+       <MixedFrameRateAlignment>0</MixedFrameRateAlignment>
+       <MediaStartTime>0</MediaStartTime>
+       <MediaFilePath/>
+       <MediaReelNumber/>
+       <MediaFrameRate>0000000000003e400000000000000000</MediaFrameRate>
+       <MediaTimemapBA>024013ddddddddddde</MediaTimemapBA>
+       <LastChangedTime>0</LastChangedTime>
+       <LastRenderedTime>0</LastRenderedTime>
+       <IsMarkedForCaching>false</IsMarkedForCaching>
+       <IsForceConformed>true</IsForceConformed>
+       <MatchConflictState>0</MatchConflictState>
+       <UseOppositeSrcForLeftEye>false</UseOppositeSrcForLeftEye>
+       <UseOppositeSrcForRightEye>false</UseOppositeSrcForRightEye>
+       <RenderCacheBA/>
+       <CurrentSelectorIdx>0</CurrentSelectorIdx>
+       <IsPreConformed>false</IsPreConformed>
+       <PreConformMediaExtents>00000100000030c20000010000003042</PreConformMediaExtents>
+       <MediaMetadata/>
+       <Thumbnail>
+        <BtThumnail DbId="5c0603ae-eb1e-4c00-89f2-0faabf330e01">
+         <FieldsBlob/>
+         <ImgWidth>-1</ImgWidth>
+         <ImgHeight>-1</ImgHeight>
+         <Buffer/>
+        </BtThumnail>
+       </Thumbnail>
+       <ThumbnailDirtyFlag>true</ThumbnailDirtyFlag>
+      </Sm2TiVideoClip>
+     </Element>
+    </FusionCompHolderItems>

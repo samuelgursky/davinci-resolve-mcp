@@ -1,4 +1,4 @@
-/** Word Highlight's nested Fusion composition. Patch literal inputs only;
+/** Native subtitle templates' nested Fusion compositions. Patch literal inputs only;
  * never execute Lua or discard the surrounding keyed envelope/tool graph. */
 const zlib = require('node:zlib');
 const TEMPLATE = 'Templates/Edit/Titles/Subtitles/Animated/Word Highlight';
@@ -8,10 +8,13 @@ const INPUTS = {
   // using these persisted inputs. Writing the clones alone leaves its fill
   // at the template's default pale yellow (Green1=.92, Blue1=.52).
   textRed: 'Red1', textGreen: 'Green1', textBlue: 'Blue1', textAlpha: 'Alpha1',
+  textFillMode: 'Type1',
   highlightRed: 'HighlightColorRed', highlightGreen: 'HighlightColorGreen', highlightBlue: 'HighlightColorBlue',
   outlineRed: 'HOutlineR', outlineGreen: 'HOutlineG', outlineBlue: 'HOutlineB',
   outlineEnabled: 'HOutline', thickness: 'HOutlineThickness',
 };
+const COMMON_INPUTS = Object.fromEntries(Object.entries(INPUTS).filter(([key]) =>
+  ['font', 'fontStyle', 'size', 'position', 'textRed', 'textGreen', 'textBlue', 'textAlpha', 'textFillMode'].includes(key)));
 function unpack(blob) {
   const b = Buffer.from(blob);
   const outer = zlib.inflateSync(b.subarray(4), { maxOutputLength: 32 * 1024 * 1024 });
@@ -41,7 +44,7 @@ function mask(text) {
 }
 function table(text, pattern) {
   const masked = mask(text), matches = [...masked.matchAll(pattern)];
-  if (matches.length !== 1) throw new Error('unsupported/ambiguous Word Highlight tool layout');
+  if (matches.length !== 1) throw new Error('unsupported/ambiguous subtitle TextPlus tool layout');
   const open = masked.indexOf('{', matches[0].index);
   let depth = 1, close = open + 1;
   for (; close < masked.length && depth; close++) {
@@ -78,29 +81,44 @@ function inputRange(text, name) {
 }
 function decodePreset(blob) {
   const u = unpack(blob), values = {};
-  if (u.templateId === TEMPLATE) {
+  if (u.templateId.startsWith('Templates/Edit/Titles/Subtitles/')) {
     const range = inputTable(u.text), inputs = u.text.slice(range.start, range.end);
-    for (const [key, name] of Object.entries(INPUTS)) {
+    for (const [key, name] of Object.entries(u.templateId === TEMPLATE ? INPUTS : COMMON_INPUTS)) {
       const r = inputRange(inputs, name);
       if (!r) continue; // Missing inputs use Resolve's defaults; do not invent values.
       const body = inputs.slice(r.start, r.end), value = /^\s*Value\s*=\s*([\s\S]*?),?\s*$/.exec(body);
-      if (value) { try { values[key] = parseLiteral(value[1].replace(/,\s*$/, '')); } catch { /* animated/expression */ } }
+      if (value) { try {
+        const literal = parseLiteral(value[1].replace(/,\s*$/, ''));
+        values[key] = key === 'textFillMode' ? ({0:'solid',1:'image',2:'gradient'}[literal] ?? 'unsupported') : literal;
+      } catch { /* animated/expression */ } }
     }
+    // TextPlus's observed native Type1 default is solid (0). Unlike font or
+    // colour defaults, this enum is needed to distinguish dormant RGB inputs.
+    if (!inputRange(inputs,'Type1')) values.textFillMode = 'solid';
   }
-  return { templateId: u.templateId, inputs: values, parameterEditingSupported: u.templateId === TEMPLATE };
+  return { templateId: u.templateId, inputs: values,
+    parameterEditingSupported: u.templateId.startsWith('Templates/Edit/Titles/Subtitles/'),
+    editableInputs: Object.keys(u.templateId === TEMPLATE ? INPUTS
+      : u.templateId.startsWith('Templates/Edit/Titles/Subtitles/') ? COMMON_INPUTS : {}) };
 }
 function setPresetInputs(blob, changes) {
   const u = unpack(blob);
-  if (u.templateId !== TEMPLATE) throw new Error('parameter edits currently support Word Highlight only; clone other presets unchanged');
-  for (const key of Object.keys(changes)) if (!INPUTS[key]) throw new Error(`unknown preset input ${key}`);
+  if (!u.templateId.startsWith('Templates/Edit/Titles/Subtitles/')) throw new Error('not a subtitle template');
+  const mapping = u.templateId === TEMPLATE ? INPUTS : COMMON_INPUTS;
+  for (const key of Object.keys(changes)) if (!mapping[key]) throw new Error(`unknown or unsupported preset input ${key} for ${u.templateId}`);
+  if ('textFillMode' in changes && changes.textFillMode !== 'solid') throw new Error('textFillMode only supports explicit solid fill');
   const current = decodePreset(blob).inputs;
+  if (Object.keys(changes).some(key => ['textRed','textGreen','textBlue','textAlpha'].includes(key))
+      && current.textFillMode !== 'solid' && changes.textFillMode !== 'solid') {
+    throw new Error('Text fill is gradient/image/connected; RGB would be invisible. Supply textFillMode:"solid" explicitly to replace the fill mode');
+  }
   if (Object.entries(changes).every(([k, v]) => JSON.stringify(current[k]) === JSON.stringify(v))) return Buffer.from(blob);
   const range = inputTable(u.text);
   let inputs = u.text.slice(range.start, range.end);
   for (const [key, value] of Object.entries(changes)) {
     const name = INPUTS[key];
     if (!name) throw new Error(`unknown preset input ${key}`);
-    const r = inputRange(inputs, name), replacement = `${name} = Input { Value = ${literal(value)}, }, `;
+    const r = inputRange(inputs, name), replacement = `${name} = Input { Value = ${literal(key === 'textFillMode' ? 0 : value)}, }, `;
     if (r) {
       const body = inputs.slice(r.start, r.end);
       if (!/^\s*Value\s*=/.test(body) || /\b(?:Expression|SourceOp|Source)\s*=/.test(mask(body))) {

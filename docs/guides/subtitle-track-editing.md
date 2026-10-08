@@ -1,5 +1,80 @@
 # Subtitle tracks: captions and animated presets
 
+## Live effects: keep Resolve open
+
+For routine video changes, use the live server's
+`timeline_ai(action="set_subtitle_preset", params={...})`. Do not route subtitle
+effect changes to `project_db` or ask the user to quit/relaunch Resolve.
+
+```json
+{
+  "action":"set_subtitle_preset",
+  "params":{
+    "track":1, "preset":"Word Highlight",
+    "inputs":{
+      "font":"Segoe UI", "fontStyle":"Black", "size":0.065,
+      "position":[0.5,0.4], "textRed":1, "textGreen":1, "textBlue":1,
+      "highlightRed":1, "highlightGreen":1, "highlightBlue":0,
+      "outlineEnabled":1, "outlineRed":0, "outlineGreen":0,
+      "outlineBlue":0, "thickness":0.1
+    }
+  }
+}
+```
+
+This exports the current native DRT, edits only its subtitle Fusion holder,
+then imports and selects a new timeline revision. The original timeline and
+export remain recoverable. It never edits the open database, changes source
+media or requires an application restart. `dry_run:true` prepares the exported
+revision without importing it. Omit `preset` to incrementally adjust the
+current Word Highlight instead of replacing it. `preset_reference` can name
+another native DRT, with `reference_track` selecting its subtitle track.
+`revision_name` is optional and must be unique in the current project.
+
+`preset:"Word Highlight"` applies a bundled native holder exported from the
+synthetic Studio 21.1.0.17 acceptance project. Its reference settings are Segoe
+UI Black, size 0.055, centred position, white text, yellow highlight, black
+outline and thickness 0.1; these are reference settings, not claims about UI
+defaults. Explicit `inputs` override them. No reference footage is bundled.
+`preset:"Lollipop"` applies the bundled native Lollipop. Other installed subtitle
+presets are discovered from the local `Templates.drfx`, captured by the running
+Resolve as a native title in an isolated temporary timeline, then applied to the
+subtitle track through native interchange. The temporary capture is removed
+after restoring the original timeline; the original edit remains recoverable.
+No additional vendor template files are redistributed. Use
+`timeline_ai(action="list_title_presets")` to discover names, full template IDs
+and categories. Supply `templates_archive` for a nonstandard installation.
+Full IDs disambiguate names such as the ordinary and animated `Statement`.
+
+All subtitle templates with the inspected `Template = TextPlus` layout accept
+the common literal `font`, `fontStyle`, `size`, `position`, `textRed`, `textGreen`,
+`textBlue`, and `textAlpha` controls. Highlight and outline mappings remain
+specific to Word Highlight. Connected/animated controls, different layouts and
+unmapped effect controls are refused. Do not guess their meanings. The live
+matrix is documented in [title library automation](title-library-automation.md).
+An alternate `preset_reference` can copy another decodable native holder.
+For an unbundled installed preset, a mutation-free dry run needs an existing
+`preset_reference`: discovering its native definition otherwise needs a temporary
+live title. `dry_run` never creates that temporary timeline.
+
+For gradient/image text fills (observed in Grey with Shadow), solid RGB inputs
+are dormant. The writer refuses a colour edit that would only change those
+invisible values. Pass `inputs.textFillMode:"solid"` explicitly to replace the
+fill mode, then supply the desired text RGBA. The stored gradient is retained,
+and the original timeline/reference remains recoverable. Font, size and position
+edits can preserve the gradient by omitting text colour inputs. Readback reports
+the effective `textFillMode`; absent Type1 uses the observed TextPlus solid default.
+
+The handler checks live track counts, item names/bounds and Media Pool media IDs
+against the original, then re-exports the imported timeline through Resolve and
+verifies that it retained the preset controls before selecting the revision. A failed import/check
+restores the previous active timeline and reports the retained failed revision.
+Resolve re-export readback plus edit inventory is not render verification: inspect rendered
+frames at word boundaries and across caption gaps. Native DRT import was tested
+on Studio 21.1.0.17/Windows without quitting Resolve. Changing sequence IDs in
+only the sequence XML loses subtitle tracks; cross-entry references must remain
+intact. Resolve remaps timeline IDs itself on import.
+
 The advanced server's `project_db` tool edits saved local SQLite projects.
 The live server can generate subtitles with `timeline_ai.create_subtitles`,
 enumerate their items, read names/bounds and delete items. It cannot edit caption
@@ -15,7 +90,13 @@ There are two independent kinds of subtitle styling:
   holder and composition. `set_subtitle_preset` edits named Word Highlight
   controls inside its nested compressed tool section.
 
-## Required workflow
+## Offline database workflow (explicit maintenance only)
+
+The following full-quit requirement belongs to direct database writes, not
+live effect automation. Keep the guard: bypassing it can lose edits. Caption
+text/word-timing DB writes still use this offline workflow; for restart-free
+caption corrections use the live Resolve UI. A generic `SetProperty` refusal
+does not establish that all subtitle workflows require a restart.
 
 1. Generate captions in Resolve and save the project. Inspect it with
    `list_captions`, `list_subtitle_presets` and `check_captions`.
@@ -152,8 +233,9 @@ use `set_subtitle_preset` with target selectors and `inputs`.
 Colour channels are 0–1, `outlineEnabled` is 0 or 1, `size` is Fusion's
 normalised text size (not points), `position` is Fusion Center `[x,y]`, and
 `thickness` is the template's HOutlineThickness value. Parameter editing is
-restricted to the inspected Word Highlight template and literal Template
-TextPlus inputs. Connected/animated inputs and unsupported layouts are refused.
+based on common literal Template TextPlus inputs for subtitle templates;
+highlight and outline controls are specific to Word Highlight.
+Connected/animated inputs and unsupported layouts are refused.
 Missing input values in the listing mean Resolve/template defaults, not zero.
 Other supported composition envelopes can be cloned unchanged, but cannot have
 their parameter meanings guessed. Preset holder Duration is preserved from the
@@ -225,3 +307,28 @@ whether/when UI edits are retimed on save, and SRT import preserving word
 timings on 21.1. A previously reported ImportMedia(SRT)+AppendToTimeline route
 on 21.0.4.5 is not evidence that SRT carries word timings on another build.
 Repeat the probe and render test after Resolve updates.
+
+## Restart-free acceptance (2026-10-08)
+
+`tests/live_subtitle_preset_validation.py` exercised the actual Python
+`timeline_ai.set_subtitle_preset` dispatcher on Studio 21.1.0.17/Windows in the
+disposable synthetic QA project, without launching, quitting or reopening
+Resolve. It removed the animation holder from an exported synthetic timeline,
+imported that bare-caption timeline, then applied the bundled Word Highlight.
+The live action verified seven captions and the video/audio bounds/media IDs,
+and native re-export retained the requested white text and magenta highlight.
+
+Three full-resolution 1080x1920 Resolve-rendered frames were visually inspected:
+at 108200 the first word was magenta and the second white; at 108220 those
+colours swapped; frame 108180 in the caption gap was black. This proves those
+sampled frames, not every frame or other templates/builds. The harness restores
+the previous timeline, playhead and page. Earlier live runs also demonstrated
+incremental colour, size and position edits, followed by a random-colour change
+requested as a demonstration. Random colours are not the bundled defaults.
+
+A subsequent Lollipop test on the same running Studio session applied the
+effect through the native UI, then through the updated MCP action using the
+bundled reference. Resolve's re-export confirmed
+`Templates/Edit/Titles/Subtitles/Animated/Lollipop`; a rendered frame showed its
+native yellow text and orange outline. No application restart was needed.
+This Windows acceptance does not establish Mac compatibility; repeat it there.

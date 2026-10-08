@@ -6588,7 +6588,7 @@ HTML = r"""<!doctype html>
       setText('updateModalKicker', hasUpdate ? 'Update Available' : 'MCP Version');
       setText('updateModalTitle', hasUpdate ? `Update to ${latest}` : `DaVinci Resolve MCP ${current}`);
       if (hasUpdate) {
-        setText('updateModalBody', `You're on ${current}. ${latest} is the latest release. Run the command below in your shell to upgrade, then restart Resolve.`);
+        setText('updateModalBody', `You're on ${current}. ${latest} is the latest release. Run the command below in your shell to upgrade, then reload the MCP server. Resolve can stay open.`);
       } else if (status === 'up_to_date') {
         setText('updateModalBody', `You're on ${current}, the latest release. The dashboard checks for updates periodically.`);
       } else if (status === 'disabled') {
@@ -6634,7 +6634,7 @@ HTML = r"""<!doctype html>
           kicker: 'MCP Update',
           title: 'Apply the update now?',
           body: 'Runs git pull --ff-only against the MCP repository.',
-          detail: 'You’ll need to restart the MCP server (and DaVinci Resolve) for the new code to take effect.',
+          detail: 'Reload the MCP server for the new code to take effect. Resolve can stay open.',
           confirmLabel: 'Update Now',
         });
         if (!proceed) return;
@@ -6647,7 +6647,7 @@ HTML = r"""<!doctype html>
             if (result.changed) detail.push('Update applied.');
             else detail.push('Already up to date.');
             if (result.message) detail.push(result.message);
-            if (result.restart_required) detail.push('Restart the MCP server (and Resolve) to use the new code.');
+            if (result.restart_required) detail.push('Reload the MCP server to use the new code. Resolve can stay open.');
             setText('updateModalDetail', detail.join(' '));
             applyBtn.textContent = result.changed ? 'Restart Required' : 'Up to Date';
             applyBtn.disabled = true;

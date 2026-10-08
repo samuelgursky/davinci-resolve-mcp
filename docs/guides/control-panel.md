@@ -241,7 +241,7 @@ the browser):
   post-operation page behavior, and a read-only map of where files live.
 - **MCP Updates** — update policy (prompt / notify / auto / never), release
   channel (stable / beta / dev), check cadence, apply/rollback with update
-  history.
+  history. Reload the MCP server after a code update; Resolve can stay open.
 
 ## Chat ↔ panel state sharing
 

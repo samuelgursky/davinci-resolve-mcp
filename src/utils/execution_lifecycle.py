@@ -333,6 +333,7 @@ class RiskClassificationHook(LifecycleHook):
         ("media_pool", "setup_multicam_timeline"),
         # Analysis passes that write their results back onto the timeline.
         ("timeline_ai", "create_subtitles"),
+        ("timeline_ai", "set_subtitle_preset"),
         ("timeline_ai", "analyze_dolby_vision"),
         # Grade state that is replaced rather than removed. AddVersion also
         # switches the active version, so a later graph write lands on the new

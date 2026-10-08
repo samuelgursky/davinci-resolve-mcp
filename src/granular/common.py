@@ -53,6 +53,7 @@ from src.utils.render_ids import (
     render_format_id_from_formats,
 )
 from src.utils.resolve_connection import connect_resolve
+from src.utils import resolve_runtime
 from src.utils.resolve_probe import api_constant as _api_constant, has_method
 from src.utils.resolve_versions import availability, gates_unavailable_on
 from src.utils.project_properties import (
@@ -455,6 +456,11 @@ def get_resolve():
     resolve = None
     if _try_connect():
         return resolve
+    running = resolve_runtime.runtime_mode()["running"]
+    if running is not False:
+        logger.error("Resolve is already running or process inspection is unavailable; "
+                     "not launching another instance. Check scripting transport access.")
+        return None
     logger.info("Resolve not running, attempting to launch automatically...")
     _launch_resolve()
     return resolve
