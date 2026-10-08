@@ -115,8 +115,19 @@ def is_scratch(path: str, destructive: bool = False) -> bool:
     # where the platform temp dir is `%TEMP%` rather than any of SCRATCH_ROOTS.
     roots = tuple(
         normalize(root).lower()
-        for root in SCRATCH_ROOTS + (tempfile.gettempdir(),) + ((configured,) if configured else ())
+        for root in SCRATCH_ROOTS + ((configured,) if configured else ())
     )
+    if os.name == "nt":
+        temp_root = normalize(tempfile.gettempdir()).lower()
+        profile = normalize(os.path.expanduser("~")).lower()
+        # TEMP is an implicit exemption: never license a drive, profile or cwd.
+        if (
+            os.path.dirname(temp_root) != temp_root
+            and temp_root != normalize(os.getcwd()).lower()
+            and profile != temp_root
+            and not profile.startswith(temp_root.rstrip(os.sep) + os.sep)
+        ):
+            roots += (temp_root,)
     if any(resolved == root or resolved.startswith(root.rstrip(os.sep) + os.sep) for root in roots):
         return True
 
