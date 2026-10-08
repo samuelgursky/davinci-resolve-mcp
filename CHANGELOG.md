@@ -2,6 +2,91 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.9.2 — the source-media guard recognises Windows temp space
+
+### Fixed
+
+- **On Windows the source-media guard denied every write into temp space.**
+  `is_scratch()` compared the normalized path against `SCRATCH_ROOTS`
+  (`/tmp`, `/private/tmp`, `/var/folders`) without normalizing the roots, so
+  on Windows `/tmp/out.mp4` normalized to `c:\tmp\out.mp4` and never matched
+  `/tmp`; and Windows' real temp directory (`%TEMP%`) was not a root at all.
+  `ffmpeg … /tmp/out.mp4`, `rm /tmp/work/proxy.mp4` and writes under
+  `%TEMP%` were all refused. The roots are now normalized the same way as the
+  path, and on Windows `%TEMP%` is a scratch root. Found and fixed by
+  @AllastorV (#277).
+
+### Changed on landing
+
+- **The temp directory is trusted only on Windows, and only when narrow.**
+  `tempfile.gettempdir()` follows `TMPDIR` / `TEMP` / `TMP`, which are set
+  for reasons unrelated to this guard; in post they often point at the media
+  drive. Measured on macOS with the change as submitted: with `TMPDIR` set to
+  the home directory, `ffmpeg -y` overwrites and `rm` under `~/Movies` were
+  allowed, where v4.9.1 denied them. So the temp directory is added only on
+  Windows (on Linux and macOS the default temp dir is already under
+  `SCRATCH_ROOTS`), and it is refused when it is a drive or filesystem root,
+  the user profile or an ancestor of it, or the working directory, which
+  `gettempdir()` falls back to when nothing else is writable.
+
+### Tests
+
+- `tests/test_source_media_guard.py`: a write into the platform temp dir is
+  allowed; with `TMPDIR`/`TEMP`/`TMP` set to the home directory, an overwrite
+  and a delete there are still denied (both fail on the change as
+  submitted); and `platform_temp_root` refuses a filesystem root, the profile
+  and its ancestors, and the working directory, accepts a narrow temp folder
+  even on a media drive, and never trusts the variable off Windows.
+
+### Validation
+
+- Guard-only change; no Resolve scripting call changed. The Windows path
+  normalization was verified by the contributor on Windows 11; the
+  Windows-only branch is unit-tested here with injected values, since this
+  project has no Windows host.
+
+## What's New in v4.9.1 — a rejected audio level write now says why, and what to do instead
+
+### Changed
+
+- **`safe_set_audio_properties` and `timeline_item set_audio` explain a
+  refused Volume / Pan / EQ write.** Resolve's scripting API has no write path
+  for audio clip or track level — `SetProperty('Volume'/'Level'/'Gain')`
+  returned `False` when measured live on 21.0.0, and `'Pan'` is the *video* transform
+  key, so it returns `True` while the audio pan does not move. A caller who saw
+  `{"write": false}` (or a `Pan` that "succeeded" and changed nothing) had no
+  way to tell "bad value" from "this cannot be written from the API at all" —
+  and the second is a different task. Both actions now attach a
+  `known_limitation` block when a level or EQ write fails, and on every `Pan`
+  write (its success is the misleading case): the
+  `api_truth` ledger entry plus the concrete ways around it (bake the gain into
+  a rendered copy of the source with ffmpeg; or save the mix once as a
+  Fairlight preset and apply it per-timeline with
+  `project_settings apply_fairlight_preset`, on Resolve 20.2.2+ only; the
+  preset methods are absent on 19.x). `AudioSyncOffset` writes are
+  unaffected — they work, and are not flagged. The legacy granular
+  `set_timeline_item_audio` returns the same guidance as its failure string.
+  Contributed by @youssefm3208-jpg (#279).
+
+### Changed on landing
+
+- A `Volume` / `Level` / `Gain` / EQ write is flagged only when Resolve
+  refused it, so a build that honours the write is not told it is impossible.
+- The Fairlight-preset workaround names its Resolve 20.2.2 floor.
+
+### Tests
+
+- `tests/test_audio_fairlight_probe.py`: a refused Volume write carries the
+  ledger entry and workarounds; a Pan write is flagged even when it returns
+  True; `AudioSyncOffset` is not flagged; an honoured Volume write is not
+  flagged; the preset workaround states its version floor.
+
+### Validation
+
+- Response-shape change only; no Resolve scripting call changed, so no live
+  run was required. The Volume/Pan behaviour is the `api_truth` ledger's live
+  measurement on 21.0.0.
+
 ## What's New in v4.9.0 — bounded Media Pool import
 
 ### Added
