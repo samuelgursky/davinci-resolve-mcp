@@ -2,6 +2,27 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.9.1 — a rejected audio level write now says why, and what to do instead
+
+### Changed
+
+- **`safe_set_audio_properties` and `timeline_item set_audio` explain a
+  refused Volume / Pan / EQ write.** Resolve's scripting API has no write path
+  for audio clip or track level — `SetProperty('Volume'/'Level'/'Gain')`
+  returns `False` on every build measured, and `'Pan'` is the *video* transform
+  key, so it returns `True` while the audio pan does not move. A caller who saw
+  `{"write": false}` (or a `Pan` that "succeeded" and changed nothing) had no
+  way to tell "bad value" from "this cannot be written from the API at all" —
+  and the second is a different task. Both actions now attach a
+  `known_limitation` block whenever one of those keys is in play: the
+  `api_truth` ledger entry plus the concrete ways around it (bake the gain into
+  a rendered copy of the source with ffmpeg; or save the mix once as a
+  Fairlight preset and apply it per-timeline with
+  `project_settings apply_fairlight_preset`). `AudioSyncOffset` writes are
+  unaffected — they work, and are not flagged. The legacy granular
+  `set_timeline_item_audio` returns the same guidance as its failure string.
+
+
 ## What's New in v4.9.0 — bounded Media Pool import
 
 ### Added

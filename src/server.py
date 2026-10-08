@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 377-tool granular server instead
 """
 
-VERSION = "4.9.0"
+VERSION = "4.9.1"
 
 import base64
 import os
@@ -803,10 +803,13 @@ edits audio files with no Resolve open. Plan/measure offline, apply live.
 - Offline `audio`: split (silence/TC/intervals) / trim / convert (needs ffmpeg on
   PATH — GPL, not bundled). Align/loudness-measure not yet vendored.
 
-Timeline audio SetProperty (e.g. Volume) can return false for some item types;
-the public API exposes no Fairlight automation curves — use fairlight for bus
-structure only. The offline audio ops write NEW files to scratch, never over
-source (AGENTS.md).
+Timeline audio SetProperty for level/pan/EQ does not work — 'Volume'/'Gain'
+return false and 'Pan' writes the video transform, not the audio pan; the
+public API exposes no Fairlight faders or automation curves. safe_set_audio_properties
+and timeline_item set_audio return a `known_limitation` block pointing at the
+fix: bake the gain into a rendered copy of the source, or apply a saved
+Fairlight preset. Use fairlight for bus structure only. The offline audio ops
+write NEW files to scratch, never over source (AGENTS.md).
 
 Depth: docs/kernels/audio-fairlight-kernel.md."""
 
@@ -8807,7 +8810,7 @@ def _audio_capabilities():
         "partially_supported": {
             "voice_isolation": "Track/item voice isolation depends on Resolve version, license, page state, and audio content.",
             "transcription_subtitles": "Transcription and subtitle generation can be asynchronous and may require installed AI components.",
-            "audio_property_writes": "Some item types expose audio properties as read-only or reject writes despite returning readable values.",
+            "audio_property_writes": "Level/pan/EQ writes are not honoured: SetProperty('Volume'/'Gain') returns False and 'Pan' writes the video transform. AudioSyncOffset writes do work. safe_set_audio_properties returns a known_limitation block with the bake / Fairlight-preset workaround.",
             "auto_sync": "AutoSyncAudio depends on media content, channel layout, and selected sync settings.",
         },
         "unsupported": {
@@ -8899,6 +8902,53 @@ def _probe_audio_item(tl, p: Dict[str, Any]):
     return _timeline_item_audio_snapshot(item)
 
 
+_AUDIO_LEVEL_KEYS = {"Volume", "Level", "Gain", "AudioVolume", "Pan", "EQEnable", "EQEnabled"}
+
+
+def _audio_write_limitation(keys) -> Optional[Dict[str, Any]]:
+    """Guidance for an audio level/pan/EQ write that Resolve will not honour.
+
+    `SetProperty` on a TimelineItem covers the *video* transform only.
+    'Volume'/'Level'/'Gain' return False on every build measured, and 'Pan' is
+    the video-transform key — it returns True while the audio pan stays put. A
+    caller who sees `write: false` (or a Pan write that "succeeds" and changes
+    nothing) has hit a missing feature, not a bad value, and the way around it
+    is a different task: bake the gain into the media, or drive Fairlight.
+    """
+    hit = sorted({k for k in keys if k in _AUDIO_LEVEL_KEYS})
+    if not hit:
+        return None
+    entry = next(iter(lookup_api_truth("Fairlight audio levels")), None)
+    out = {
+        "keys": hit,
+        "reason": "no_api_write_path",
+        "explanation": (
+            "Resolve's scripting API cannot set audio clip or track level, pan, "
+            "EQ, or automation. SetProperty writes the video transform only: "
+            "'Volume'/'Level'/'Gain' return False, and 'Pan' is the video "
+            "transform key so it returns True while the audio pan is unchanged."
+        ),
+        "workarounds": [
+            "Bake the level into a rendered copy of the source (ffmpeg "
+            "volume=NdB, plus afade / atrim for fades and trims) and import "
+            "that — the level is then part of the file.",
+            "For a repeatable whole mix, save it once as a Fairlight preset in "
+            "the Resolve UI, then apply it per timeline with "
+            "project_settings apply_fairlight_preset "
+            "(names from resolve_control get_fairlight_presets).",
+            "Set individual faders / pan / EQ on the Fairlight page by hand.",
+        ],
+        "ledger_verified_on": _API_TRUTH_VERIFIED_ON,
+    }
+    if entry:
+        out["ledger"] = {
+            "symbol": entry.get("symbol"),
+            "reality": entry.get("reality"),
+            "recommended": entry.get("recommended"),
+        }
+    return out
+
+
 def _safe_set_audio_properties(tl, p: Dict[str, Any]):
     item, err = _audio_item_from_params(tl, p)
     if err:
@@ -8938,7 +8988,18 @@ def _safe_set_audio_properties(tl, p: Dict[str, Any]):
                 row["restore"] = False
                 row["restore_error"] = str(exc)
         results[key] = row
-    return {"success": all(row.get("write") for row in results.values()), "results": results}
+    success = all(row.get("write") for row in results.values())
+    out = {"success": success, "results": results}
+    # 'Volume' never writes and 'Pan' moves the video transform, not the audio
+    # pan — so a bare {"write": false} (or a Pan that "succeeds" inertly) leaves
+    # the caller guessing. Attach the ledger entry and the bake / preset route
+    # whenever one of those keys was in play.
+    limitation = _audio_write_limitation(
+        [k for k in properties if k in _AUDIO_LEVEL_KEYS]
+    )
+    if limitation:
+        out["known_limitation"] = limitation
+    return out
 
 
 def _voice_isolation_capabilities(tl, p: Dict[str, Any]):
@@ -26012,7 +26073,10 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
       audio_capabilities() -> {supported, partially_supported, unsupported}
       probe_audio_item(track_type?, track_index?, item_index?) -> {summary, audio_properties, source_audio_mapping}
       probe_audio_track(track_index?) -> {track_count, enabled, locked, sub_type, voice_isolation}
-      safe_set_audio_properties(properties, restore?, dry_run?, track_type?, track_index?, item_index?) -> {success, results}
+      safe_set_audio_properties(properties, restore?, dry_run?, track_type?, track_index?, item_index?) -> {success, results, known_limitation?}
+        — Volume/Pan/EQ writes are not honoured by Resolve's API; a request for
+          any of them returns `known_limitation` with the bake / Fairlight-preset
+          workaround. AudioSyncOffset writes do work.
       audio_mix_capability_report(...) -> {capabilities, mix_recommendations}
       voice_isolation_capabilities(track_index?, track_type?, item_index?) -> {timeline_track, item}
       audio_mapping_report(clip_ids?) -> {timeline_items, media_pool_items}
@@ -27091,7 +27155,10 @@ def timeline_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
       get_composite(...) -> {Opacity, CompositeMode}
       set_composite(Opacity?, CompositeMode?, ...) -> {success}
       get_audio(...) -> {Volume, Pan, AudioSyncOffset, ...}
-      set_audio(Volume?, Pan?, ...) -> {success}
+      set_audio(Volume?, Pan?, ...) -> {success, known_limitation?}
+        — Resolve ignores Volume/Pan/EQ writes on audio; those return a
+          `known_limitation` block (bake gain into the media, or apply a
+          Fairlight preset). AudioSyncOffset / AudioSyncOffsetIsManual do work.
       get_keyframes(property, ...) -> {property, count, keyframes}
       add_keyframe(property, frame, value, ...) -> {success}
       modify_keyframe(property, frame, new_value?, new_frame?, ...) -> {success}
@@ -27326,7 +27393,15 @@ def timeline_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
         for k, v in p.items():
             if k in valid:
                 results[k] = bool(item.SetProperty(k, v))
-        return _ok(**results) if results else _err(f"Specify one or more of: {', '.join(sorted(valid))}")
+        if not results:
+            return _err(f"Specify one or more of: {', '.join(sorted(valid))}")
+        out = _ok(**results)
+        # Volume/Pan writes go nowhere on audio (see _audio_write_limitation);
+        # AudioSyncOffset does work, so only flag when a level/pan key was asked.
+        limitation = _audio_write_limitation([k for k in results if k in _AUDIO_LEVEL_KEYS])
+        if limitation:
+            out["known_limitation"] = limitation
+        return out
 
     # ── Keyframes ──
     elif action == "get_keyframes":

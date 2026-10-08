@@ -716,7 +716,17 @@ def set_timeline_item_audio(timeline_item_id: str,
             
             return f"Successfully set {' and '.join(changes)} for timeline item '{timeline_item.GetName()}'"
         else:
-            return f"Failed to set some audio properties for timeline item '{timeline_item.GetName()}'"
+            return (
+                f"Failed to set audio properties for timeline item "
+                f"'{timeline_item.GetName()}'. Resolve's scripting API has no "
+                "write path for audio level, pan, or EQ — SetProperty covers "
+                "the video transform only, so 'Volume'/'Gain' return False and "
+                "'Pan' moves the video transform, not the audio pan. Work "
+                "around it by baking the gain into a rendered copy of the "
+                "source (ffmpeg volume=NdB) and importing that, or by saving a "
+                "Fairlight preset in the UI and applying it with "
+                "project_settings apply_fairlight_preset."
+            )
     except Exception as e:
         return f"Error setting timeline item audio properties: {str(e)}"
 
