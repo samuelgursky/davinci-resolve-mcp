@@ -8905,17 +8905,24 @@ def _probe_audio_item(tl, p: Dict[str, Any]):
 _AUDIO_LEVEL_KEYS = {"Volume", "Level", "Gain", "AudioVolume", "Pan", "EQEnable", "EQEnabled"}
 
 
-def _audio_write_limitation(keys) -> Optional[Dict[str, Any]]:
+def _audio_write_limitation(written: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Guidance for an audio level/pan/EQ write that Resolve will not honour.
 
+    `written` maps each requested key to whether SetProperty returned True.
     `SetProperty` on a TimelineItem covers the *video* transform only.
-    'Volume'/'Level'/'Gain' return False on every build measured, and 'Pan' is
-    the video-transform key — it returns True while the audio pan stays put. A
-    caller who sees `write: false` (or a Pan write that "succeeds" and changes
-    nothing) has hit a missing feature, not a bad value, and the way around it
-    is a different task: bake the gain into the media, or drive Fairlight.
+    'Volume'/'Level'/'Gain' returned False when measured live on 21.0.0, and
+    'Pan' is the video-transform key — it returns True while the audio pan
+    stays put. A caller who sees `write: false` (or a Pan write that
+    "succeeds" and changes nothing) has hit a missing feature, not a bad
+    value, and the way around it is a different task: bake the gain into the
+    media, or drive Fairlight. Level/EQ keys are flagged only when the write
+    failed, so a build that honours them is not contradicted; Pan is always
+    flagged, because its success is the misleading case.
     """
-    hit = sorted({k for k in keys if k in _AUDIO_LEVEL_KEYS})
+    hit = sorted({
+        k for k, ok in written.items()
+        if k in _AUDIO_LEVEL_KEYS and (k == "Pan" or not ok)
+    })
     if not hit:
         return None
     entry = next(iter(lookup_api_truth("Fairlight audio levels")), None)
@@ -8932,7 +8939,8 @@ def _audio_write_limitation(keys) -> Optional[Dict[str, Any]]:
             "Bake the level into a rendered copy of the source (ffmpeg "
             "volume=NdB, plus afade / atrim for fades and trims) and import "
             "that — the level is then part of the file.",
-            "For a repeatable whole mix, save it once as a Fairlight preset in "
+            "For a repeatable whole mix (Resolve 20.2.2+; the preset methods "
+            "do not exist on 19.x), save it once as a Fairlight preset in "
             "the Resolve UI, then apply it per timeline with "
             "project_settings apply_fairlight_preset "
             "(names from resolve_control get_fairlight_presets).",
@@ -8995,7 +9003,7 @@ def _safe_set_audio_properties(tl, p: Dict[str, Any]):
     # the caller guessing. Attach the ledger entry and the bake / preset route
     # whenever one of those keys was in play.
     limitation = _audio_write_limitation(
-        [k for k in properties if k in _AUDIO_LEVEL_KEYS]
+        {k: row.get("write") for k, row in results.items()}
     )
     if limitation:
         out["known_limitation"] = limitation
@@ -27398,7 +27406,7 @@ def timeline_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
         out = _ok(**results)
         # Volume/Pan writes go nowhere on audio (see _audio_write_limitation);
         # AudioSyncOffset does work, so only flag when a level/pan key was asked.
-        limitation = _audio_write_limitation([k for k in results if k in _AUDIO_LEVEL_KEYS])
+        limitation = _audio_write_limitation(results)
         if limitation:
             out["known_limitation"] = limitation
         return out

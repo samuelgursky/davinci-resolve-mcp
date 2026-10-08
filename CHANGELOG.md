@@ -9,19 +9,40 @@ Release history for the DaVinci Resolve MCP Server. The latest release is summar
 - **`safe_set_audio_properties` and `timeline_item set_audio` explain a
   refused Volume / Pan / EQ write.** Resolve's scripting API has no write path
   for audio clip or track level — `SetProperty('Volume'/'Level'/'Gain')`
-  returns `False` on every build measured, and `'Pan'` is the *video* transform
+  returned `False` when measured live on 21.0.0, and `'Pan'` is the *video* transform
   key, so it returns `True` while the audio pan does not move. A caller who saw
   `{"write": false}` (or a `Pan` that "succeeded" and changed nothing) had no
   way to tell "bad value" from "this cannot be written from the API at all" —
   and the second is a different task. Both actions now attach a
-  `known_limitation` block whenever one of those keys is in play: the
+  `known_limitation` block when a level or EQ write fails, and on every `Pan`
+  write (its success is the misleading case): the
   `api_truth` ledger entry plus the concrete ways around it (bake the gain into
   a rendered copy of the source with ffmpeg; or save the mix once as a
   Fairlight preset and apply it per-timeline with
-  `project_settings apply_fairlight_preset`). `AudioSyncOffset` writes are
+  `project_settings apply_fairlight_preset`, on Resolve 20.2.2+ only; the
+  preset methods are absent on 19.x). `AudioSyncOffset` writes are
   unaffected — they work, and are not flagged. The legacy granular
   `set_timeline_item_audio` returns the same guidance as its failure string.
+  Contributed by @youssefm3208-jpg (#279).
 
+### Changed on landing
+
+- A `Volume` / `Level` / `Gain` / EQ write is flagged only when Resolve
+  refused it, so a build that honours the write is not told it is impossible.
+- The Fairlight-preset workaround names its Resolve 20.2.2 floor.
+
+### Tests
+
+- `tests/test_audio_fairlight_probe.py`: a refused Volume write carries the
+  ledger entry and workarounds; a Pan write is flagged even when it returns
+  True; `AudioSyncOffset` is not flagged; an honoured Volume write is not
+  flagged; the preset workaround states its version floor.
+
+### Validation
+
+- Response-shape change only; no Resolve scripting call changed, so no live
+  run was required. The Volume/Pan behaviour is the `api_truth` ledger's live
+  measurement on 21.0.0.
 
 ## What's New in v4.9.0 — bounded Media Pool import
 

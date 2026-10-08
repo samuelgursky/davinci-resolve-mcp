@@ -723,9 +723,9 @@ def set_timeline_item_audio(timeline_item_id: str,
                 "the video transform only, so 'Volume'/'Gain' return False and "
                 "'Pan' moves the video transform, not the audio pan. Work "
                 "around it by baking the gain into a rendered copy of the "
-                "source (ffmpeg volume=NdB) and importing that, or by saving a "
-                "Fairlight preset in the UI and applying it with "
-                "project_settings apply_fairlight_preset."
+                "source (ffmpeg volume=NdB) and importing that, or (Resolve "
+                "20.2.2+) by saving a Fairlight preset in the UI and applying "
+                "it with project_settings apply_fairlight_preset."
             )
     except Exception as e:
         return f"Error setting timeline item audio properties: {str(e)}"

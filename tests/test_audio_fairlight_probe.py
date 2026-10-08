@@ -252,6 +252,30 @@ class AudioFairlightProbeTest(unittest.TestCase):
         self.assertTrue(result["success"])
         self.assertNotIn("known_limitation", result)
 
+    def test_an_honoured_volume_write_is_not_contradicted(self):
+        # Volume returned False when measured on 21.0.0. If a build honours it,
+        # the response must not claim the write is impossible.
+        timeline = TimelineStub()
+        result = _safe_set_audio_properties(
+            timeline, {"properties": {"Volume": -6}, "restore": False}
+        )
+
+        self.assertTrue(result["success"])
+        self.assertNotIn("known_limitation", result)
+
+    def test_preset_workaround_names_its_version_floor(self):
+        # The Fairlight preset methods are absent on 19.x (confirmed live on
+        # 19.1.3); pointing an older build at them without saying so misleads.
+        timeline = TimelineStub()
+        timeline.item.SetProperty = lambda key, value: False
+        lim = _safe_set_audio_properties(
+            timeline, {"properties": {"Volume": -6}, "restore": False}
+        )["known_limitation"]
+
+        preset = [w for w in lim["workarounds"] if "apply_fairlight_preset" in w]
+        self.assertEqual(len(preset), 1)
+        self.assertIn("20.2.2", preset[0])
+
 
 if __name__ == "__main__":
     unittest.main()
