@@ -472,11 +472,17 @@ export const drtTool = {
         // scan, subfolders are not). Inner format byte-verified against the
         // template harvest: protobuf{field2: keyedDict{"0": binId, ...},
         // field4: time-varint} in the [u32 2][u32 len][0x81][zstd] wrapper.
-        const { zstdRawFrame } = requireCjs('../../vendor/drp-format/timeline-markers-blob.js');
+        const { zstdRawFrame, lenDelim } = requireCjs('../../vendor/drp-format/timeline-markers-blob.js');
         const binIds = [...bins.values()].map((b) => b.id);
         const childDict = encodeKeyedDict({ hdr: 1, entries: binIds.map((id, i) => ({ key: String(i), type: 0x0a, subType: 0, value: id })) });
+        // field 2's length is a protobuf VARINT, not one raw byte: one bin's
+        // dict is 95 bytes and fits, two bins' is 182 and does not, so
+        // `[0x12, 182]` emitted a 0xb6 continuation byte that swallowed the
+        // dict's first byte and read as length 54 — the registry parsed back
+        // empty with neither bin in it. lenDelim() writes the same single byte
+        // for the one-bin case, so that blob is unchanged.
         const inner = Buffer.concat([
-          Buffer.from([0x12, childDict.length]), childDict,
+          lenDelim(2, childDict),
           Buffer.from([0x20]), Buffer.from('b6cba6a90d', 'hex'),
         ]);
         const frame = zstdRawFrame(inner);
