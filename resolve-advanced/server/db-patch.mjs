@@ -231,19 +231,22 @@ export function openGuarded(dbPath, { writable = false, table, column } = {}) {
   const Database = loadSqlite();
   if (!fs.existsSync(dbPath)) throw new Error(`Project.db not found: ${dbPath}`);
   const db = new Database(dbPath, { readonly: !writable });
-  if (table && column) {
-    // Quote the table identifier — Resolve tables like "ListMgt::LmVersion" contain "::" which is an
-    // illegal token unquoted (the PRAGMA would fail with "unrecognized token: :").
-    const cols = db
-      .prepare(`PRAGMA table_info("${String(table).replace(/"/g, '""')}")`)
-      .all()
-      .map((c) => c.name);
-    if (!cols.includes(column)) {
-      db.close();
-      throw new Error(`${table}.${column} not found — unsupported Project.db schema/version; refusing to patch.`);
+  try {
+    if (table && column) {
+      // Quote identifiers: Resolve table names can contain "::".
+      const cols = db
+        .prepare(`PRAGMA table_info("${String(table).replace(/"/g, '""')}")`)
+        .all()
+        .map((c) => c.name);
+      if (!cols.includes(column)) {
+        throw new Error(`${table}.${column} not found — unsupported Project.db schema/version; refusing to patch.`);
+      }
     }
+    return db;
+  } catch (error) {
+    db.close();
+    throw error;
   }
-  return db;
 }
 
 export function backup(dbPath) {

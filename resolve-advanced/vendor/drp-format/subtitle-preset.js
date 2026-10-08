@@ -4,7 +4,10 @@ const zlib = require('node:zlib');
 const TEMPLATE = 'Templates/Edit/Titles/Subtitles/Animated/Word Highlight';
 const INPUTS = {
   font: 'Font', fontStyle: 'Style', size: 'Size', position: 'Center',
-  textRed: 'Red1Clone', textGreen: 'Green1Clone', textBlue: 'Blue1Clone', textAlpha: 'Alpha1Clone',
+  // The macro exposes Clone controls, but TextPlus renders shading element 1
+  // using these persisted inputs. Writing the clones alone leaves its fill
+  // at the template's default pale yellow (Green1=.92, Blue1=.52).
+  textRed: 'Red1', textGreen: 'Green1', textBlue: 'Blue1', textAlpha: 'Alpha1',
   highlightRed: 'HighlightColorRed', highlightGreen: 'HighlightColorGreen', highlightBlue: 'HighlightColorBlue',
   outlineRed: 'HOutlineR', outlineGreen: 'HOutlineG', outlineBlue: 'HOutlineB',
   outlineEnabled: 'HOutline', thickness: 'HOutlineThickness',

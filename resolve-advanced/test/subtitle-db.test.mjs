@@ -6,7 +6,7 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import childProcess from 'node:child_process';
 import { createRequire } from 'node:module';
-import { BuiltinSqlite, loadSqlite, requireResolveQuit, snapshotBackup } from '../server/db-patch.mjs';
+import { BuiltinSqlite, loadSqlite, openGuarded, requireResolveQuit, snapshotBackup } from '../server/db-patch.mjs';
 import { projectDbTool } from '../server/tools/project_db.mjs';
 const require = createRequire(import.meta.url);
 const { field, decodeCaption, encodeCaption, checkCaptions } = require('../vendor/drp-format/subtitle-captions.js');
@@ -15,7 +15,7 @@ const { decodePreset, setPresetInputs, TEMPLATE } = require('../vendor/drp-forma
 const { encodeKeyedDict } = require('../vendor/drp-format/keyed-dict.js');
 
 function compBlob({ trailingSeparator = true } = {}) {
-  const inner = Buffer.from('{ Template = TextPlus { Inputs = { Font = Input { Value = "Inter", }, Center = Input { Value = { 0.5, 0.4 }, }, HOutlineThickness = Input { Value = 0.02, }, StyledText = Input { SourceOp = "Animation", Source = "Value", }' + (trailingSeparator ? ',' : '') + ' }, UserControls = { Font = { LINKS_Name = "Font", }, }, }, Other = TextPlus { Inputs = { Font = Input { Value = "Keep me", }, }, }, }\0');
+  const inner = Buffer.from('{ Template = TextPlus { Inputs = { Font = Input { Value = "Inter", }, Green1 = Input { Value = 0.92, }, Blue1 = Input { Value = 0.52, }, Center = Input { Value = { 0.5, 0.4 }, }, HOutlineThickness = Input { Value = 0.02, }, StyledText = Input { SourceOp = "Animation", Source = "Value", }' + (trailingSeparator ? ',' : '') + ' }, UserControls = { Font = { LINKS_Name = "Font", }, }, }, Other = TextPlus { Inputs = { Font = Input { Value = "Keep me", }, }, }, }\0');
   const innerLen = Buffer.alloc(4); innerLen.writeUInt32LE(inner.length);
   const data = Buffer.concat([Buffer.from(`Composition { CustomData = { TEMPLATE_ID = "${TEMPLATE}" }, Compressed = true, }\0`), innerLen, zlib.deflateSync(inner)]);
   const outer = encodeKeyedDict({ entries: [{ key: '0_data', type: 12, value: data.toString('hex') }] });
@@ -114,6 +114,36 @@ test('adding absent colour controls preserves Lua separators when the last input
   assert.equal(decodePreset(out).inputs.textRed, 1);
   assert.equal(decodePreset(out).inputs.highlightBlue, 0);
 });
+
+test('text colour edits update TextPlus shading rather than its macro Clone controls', () => {
+  const out = setPresetInputs(compBlob(), { textRed: 1, textGreen: 1, textBlue: 1, textAlpha: 1 });
+  const outer = zlib.inflateSync(out.subarray(4));
+  const offset = outer.indexOf(0, outer.indexOf('Compressed = true, }')) + 1;
+  const graph = zlib.inflateSync(outer.subarray(offset + 4)).toString();
+  for (const channel of ['Red1', 'Green1', 'Blue1', 'Alpha1']) {
+    assert.match(graph, new RegExp(`\\b${channel} = Input \\{ Value = 1, \\}`));
+  }
+  assert.doesNotMatch(graph, /\b(?:Red|Green|Blue|Alpha)1Clone\s*=/);
+});
+
+test('backup rejection and schema-query errors close the database before returning', async (t) => {
+  const filename = fixture(t), Database = loadSqlite();
+  const close = Database.prototype.close;
+  let closed = 0;
+  t.mock.method(Database.prototype, 'close', function () { closed++; return close.call(this); });
+  t.mock.method(Database.prototype, 'backup', async () => { throw new Error('snapshot failure'); });
+  // loadSqlite also opens/closes a native in-memory probe when available.
+  const probeCloses = Database === BuiltinSqlite ? 0 : 1;
+  await assert.rejects(() => snapshotBackup(filename), /snapshot failure/);
+  assert.equal(closed, probeCloses + 1);
+  closed = 0;
+  assert.throws(() => openGuarded(filename, { table: 'missing', column: 'x' }), /unsupported/);
+  assert.equal(closed, probeCloses + 1);
+  closed = 0;
+  t.mock.method(Database.prototype, 'prepare', () => { throw new Error('query failure'); });
+  assert.throws(() => openGuarded(filename, { table: 'Sm2Timeline', column: 'Name' }), /query failure/);
+  assert.equal(closed, probeCloses + 1);
+});
 test('caption actions: vector order, text over stale Name, dry-run, add/replace/delete, backup and readback', async (t) => {
   quit(t);
   const db = fixture(t, { preset: true });
@@ -129,6 +159,12 @@ test('caption actions: vector order, text over stale Name, dry-run, add/replace/
   assert.deepEqual(result.captions.map((c) => c.text), ['Edited', 'Added']);
   assert.equal((await call(db, 'list_captions', { track: 2 })).captions[0].id, 'foreign');
   assert.equal((await call(db, 'list_subtitle_presets')).presets[0].preset.id, 'holder');
+  // On Windows a surviving SQLite handle prevents these renames. Check the
+  // original and backup immediately after readback, before temp-dir cleanup.
+  for (const filename of [db, result.backup]) {
+    fs.renameSync(filename, `${filename}.closed`);
+    fs.renameSync(`${filename}.closed`, filename);
+  }
 });
 test('caption edits refuse wrong track IDs, conflict, gaps and quantised zero-length words without changing db', async (t) => {
   quit(t); const db = fixture(t), bytes = fs.readFileSync(db);
@@ -194,13 +230,16 @@ test('built-in sqlite backend has readonly blobs and transaction rollback; snaps
   if (typeof builtin?.backup !== 'function') { t.skip('node:sqlite with backup() needs Node 22.16+ / 23.8+; native backend tested above'); return; }
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sqlite-fallback-test-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const filename = path.join(dir, 'Project.db'), db = new BuiltinSqlite(filename);
-  db.exec('PRAGMA journal_mode=WAL; CREATE TABLE x (b BLOB)'); db.prepare('INSERT INTO x VALUES (?)').run(Buffer.from('one'));
-  assert.throws(() => db.transaction(() => { db.exec('DELETE FROM x'); throw new Error('rollback'); })(), /rollback/);
-  const backup = await snapshotBackup(filename), read = new BuiltinSqlite(backup, { readonly: true });
-  assert.ok(Buffer.isBuffer(read.prepare('SELECT b FROM x').get().b));
-  assert.equal(read.prepare('SELECT b FROM x').get().b.toString(), 'one');
-  assert.throws(() => read.exec('DELETE FROM x'), /readonly|read-only/i);
-  read.close(); db.close();
+  try {
+    db.exec('PRAGMA journal_mode=WAL; CREATE TABLE x (b BLOB)'); db.prepare('INSERT INTO x VALUES (?)').run(Buffer.from('one'));
+    assert.throws(() => db.transaction(() => { db.exec('DELETE FROM x'); throw new Error('rollback'); })(), /rollback/);
+    const backup = await snapshotBackup(filename), read = new BuiltinSqlite(backup, { readonly: true });
+    try {
+      assert.ok(Buffer.isBuffer(read.prepare('SELECT b FROM x').get().b));
+      assert.equal(read.prepare('SELECT b FROM x').get().b.toString(), 'one');
+      assert.throws(() => read.exec('DELETE FROM x'), /readonly|read-only/i);
+    } finally { read.close(); }
+  } finally { db.close(); }
 });
 test('a running Resolve refuses the write even when another project is loaded', async (t) => {
   // Measured on Studio 19.1.3.7: a project loaded earlier in the session is

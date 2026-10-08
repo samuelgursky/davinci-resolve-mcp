@@ -174,12 +174,30 @@ six replacements, one deletion and one addition, with explicit word boundaries.
 A fresh native Word Highlight preset was created in the disposable project;
 no personal project or media was used as a preset reference.
 
-The 21-second 1080×1920 / 30 fps render contained 630 frames. All 420 caption
+The 21-second 1080x1920 / 30 fps render contained 630 frames. All 420 caption
 frames contained text, all seven word transitions matched the written timings,
 and no caption pixels touched the frame edges or appeared in the gaps. The
 rendered text was visually inspected for all seven captions in both highlight
 states. Resolve's live text/bounds and saved word timing readback also matched.
-See the [acceptance report and frames](../testing/subtitle-acceptance-2026-10-06/README.md).
+The original frame check did not assert base text colour. The maintainer's
+[acceptance review](https://github.com/samuelgursky/davinci-resolve-mcp/pull/273#issuecomment-6048433383)
+found that the non-highlighted word remained pale yellow. The codec now targets
+TextPlus shading inputs (`Red1`, `Green1`, `Blue1`, `Alpha1`) rather than the
+macro's `Clone` controls. On 2026-10-08, the original track's Inspector confirmed
+`#ffeb85` text. A fresh native Word Highlight, configured through Resolve's UI
+with `#ffffff` text and `#ffff00` highlight, rendered white. After a full quit,
+the corrected MCP write and relaunch also rendered white with Segoe UI Black,
+centred position and black outline at thickness 0.1.
+
+Both new 1080x1920 renders passed checks on all 630 decoded frames: all 420
+caption frames had white base text and yellow highlighting, with exact word
+transitions and no text in the gaps or at the frame edges. Bright fill pixels
+were measured independently per word, and the original render failed the new
+white-text assertion on all 420 caption frames. All seven captions were also
+visually reviewed in both highlight states; the pixel check is not OCR. Selected
+frame PNGs retain the full render resolution. Generated frames and reports are
+kept outside the repository. The earlier green-pixel live harness was removed
+because its pass flag did not establish word timing or text colour.
 
 The earlier failed synthetic render prompted a codec regression fix: inserting
 absent controls after a final input without a trailing comma produced invalid
@@ -197,7 +215,10 @@ generate subtitles, apply Word Highlight with explicit colours, correct two
 captions, add one and delete one, reopen Resolve, then render with
 `ExportSubtitle:true, SubtitleFormat:"BurnIn"`. Inspect rendered frames across
 every word boundary and at the frame edges. Readback alone cannot establish
-visible highlighting, absence of blank frames, or safe margins.
+visible highlighting, absence of blank frames, or safe margins. Assert the
+non-highlighted text colour separately from the highlighted word, check every
+decoded frame against the written word intervals, and check the caption gaps.
+Review the rendered words visually too: pixel colour checks are not OCR.
 
 Also still unverified: holder Duration semantics, per-caption preset rows,
 whether/when UI edits are retimed on save, and SRT import preserving word
