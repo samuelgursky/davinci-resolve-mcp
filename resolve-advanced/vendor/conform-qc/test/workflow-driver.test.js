@@ -12,7 +12,8 @@ const { ResolveDriver, FakeResolveDriver, isResolveDriver } = require('../adapte
 const { conformQcActivity, conformQcWorkflow } = require('../ops/workflow');
 const { verify } = require('../ops/verify');
 
-const GOLDEN = JSON.parse(fs.readFileSync(path.join(pkg.reelFixtureDir(), 'golden_oracle.json'), 'utf8'));
+const client = require('./_client-fixture');
+const GOLDEN = (client.present() ? JSON.parse(fs.readFileSync(path.join(pkg.reelFixtureDir(), 'golden_oracle.json'), 'utf8')) : null);
 
 test('ResolveDriver: interface throws until implemented; fake conforms + reads back', async () => {
   const base = new ResolveDriver();
@@ -25,7 +26,7 @@ test('ResolveDriver: interface throws until implemented; fake conforms + reads b
   assert.equal(isResolveDriver(fake), true);
 });
 
-test('conformQcWorkflow: activity is unit-invokable and equals a direct verify()', async () => {
+test('conformQcWorkflow: activity is unit-invokable and equals a direct verify()', { skip: GOLDEN ? false : client.REASON }, async () => {
   // The activity (heavy work) over the Tier-C golden reel.
   const direct = await verify(GOLDEN, {});
   const viaActivity = await conformQcActivity(GOLDEN, {});

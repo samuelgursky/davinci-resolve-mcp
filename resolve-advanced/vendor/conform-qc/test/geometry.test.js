@@ -23,7 +23,8 @@ const XML_PATH = path.join(DIR, 'turnover.xml');
 const HAVE_XML = fs.existsSync(XML_PATH);
 const SKIP = HAVE_XML ? false : 'turnover.xml absent (git-ignored raw material) — skipping';
 
-const GOLDEN = JSON.parse(fs.readFileSync(path.join(DIR, 'golden_oracle.json'), 'utf8'));
+const client = require('./_client-fixture');
+const GOLDEN = (client.present() ? JSON.parse(fs.readFileSync(path.join(DIR, 'golden_oracle.json'), 'utf8')) : null);
 
 // Parse once (only if present).
 const PARSED = HAVE_XML ? parseGeometry(fs.readFileSync(XML_PATH, 'utf8')) : null;

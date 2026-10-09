@@ -23,6 +23,7 @@ const { HeadlessResolveDriver } = require('../adapters/resolve-headless-driver')
 
 const SAMPLE = pkg.reelFixtureDir();
 const XML = path.join(SAMPLE, 'turnover.xml');
+if (require('./_client-fixture').skipFile(test, 'resolve-readback')) return;
 const GOLDEN = JSON.parse(fs.readFileSync(path.join(SAMPLE, 'golden_oracle.json'), 'utf8'));
 const CTX = { ticksPerFrame: GOLDEN.ticksPerFrame, sequenceWidth: GOLDEN.sequence.width };
 

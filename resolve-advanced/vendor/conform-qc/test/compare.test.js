@@ -20,9 +20,14 @@ const compare = require('../compare');
 const DIR = pkg.reelFixtureDir();
 const FRAMES = path.join(DIR, 'frames');
 const HAVE_FRAMES = fs.existsSync(FRAMES) && fs.readdirSync(FRAMES).some((f) => f.endsWith('.png'));
-const SKIP = HAVE_FRAMES ? false : 'frames/ absent (git-ignored raw material) — skipping';
+const client = require('./_client-fixture');
+// The frame tests read golden_compare.json too, so they also need the client answer key.
+const SKIP = !client.present() ? client.REASON
+  : HAVE_FRAMES ? false : 'frames/ absent (git-ignored raw material) — skipping';
 
-const COMPARE = JSON.parse(fs.readFileSync(path.join(DIR, 'golden_compare.json'), 'utf8'));
+const COMPARE = client.present()
+  ? JSON.parse(fs.readFileSync(path.join(DIR, 'golden_compare.json'), 'utf8'))
+  : null;
 
 test('comparator: alignment mode is a distinct entry point (stub), content-identity is default', async () => {
   // The alignment stub throws clearly (full impl is P4.5).

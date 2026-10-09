@@ -18,6 +18,7 @@ const pkg = require('../index');
 const oracle = require('../oracle');
 const resolveTarget = require('../oracle/resolve');
 
+if (require('./_client-fixture').skipFile(test, 'oracle')) return;
 const GOLDEN = JSON.parse(
   fs.readFileSync(path.join(pkg.reelFixtureDir(), 'golden_oracle.json'), 'utf8'),
 );

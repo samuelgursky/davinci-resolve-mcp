@@ -20,6 +20,7 @@ const pkg = require('../index');
 const { verify } = require('../ops/verify');
 
 const SAMPLE = pkg.reelFixtureDir();
+if (require('./_client-fixture').skipFile(test, 'p1-acceptance')) return;
 const GOLDEN = JSON.parse(fs.readFileSync(path.join(SAMPLE, 'golden_oracle.json'), 'utf8'));
 const COMPARE = JSON.parse(fs.readFileSync(path.join(SAMPLE, 'golden_compare.json'), 'utf8'));
 const FRAMES = path.join(SAMPLE, 'frames');

@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xmeml version="4">
+<sequence id="seq-synth">
+  <name>SYNTH_REEL</name>
+  <media><video>
+    <format><samplecharacteristics>
+      <rate><timebase>24</timebase><ntsc>FALSE</ntsc></rate>
+      <width>1920</width><height>1080</height>
+    </samplecharacteristics></format>
+    <track>
+<clipitem id="clipitem-1">
+  <name>normal</name>
+  <start>0</start>
+  <end>48</end>
+  <in>1000</in>
+  <out>1048</out>
+  <pproTicksIn>10584000000000</pproTicksIn>
+  <pproTicksOut>11092032000000</pproTicksOut>
+  <file id="file-1">
+  <name>SYNTH_normal.mov</name>
+  <pathurl>file://localhost/SYNTH/SYNTH_normal.mov</pathurl>
+  <media><video><samplecharacteristics>
+    <width>960</width><height>540</height>
+  </samplecharacteristics></video></media>
+</file>
+  
+  <filter><effect><name>Basic Motion</name><effectid>basic</effectid>
+    <parameter><parameterid>scale</parameterid><value>200</value></parameter>
+    <parameter><parameterid>rotation</parameterid><value>0</value></parameter>
+    <parameter><parameterid>center</parameterid><value><horiz>0</horiz><vert>0</vert></value></parameter>
+    <parameter><parameterid>leftcrop</parameterid><value>0</value></parameter>
+    <parameter><parameterid>topcrop</parameterid><value>0</value></parameter>
+    <parameter><parameterid>rightcrop</parameterid><value>0</value></parameter>
+    <parameter><parameterid>bottomcrop</parameterid><value>0</value></parameter>
+  </effect></filter>
+  
+</clipitem>
+<clipitem id="clipitem-2">
+  <name>subclip</name>
+  <start>48</start>
+  <end>96</end>
+  <in>500</in>
+  <out>548</out>
+  <pproTicksIn>5292000000000</pproTicksIn>
+  <pproTicksOut>5800032000000</pproTicksOut>
+  <file id="file-2">
+  <name>SYNTH_subclip.mov</name>
+  <pathurl>file://localhost/SYNTH/SYNTH_subclip.mov</pathurl>
+  <media><video><samplecharacteristics>
+    <width>960</width><height>540</height>
+  </samplecharacteristics></video></media>
+</file>
+  <subclipinfo><startoffset>2000</startoffset></subclipinfo>
+  <filter><effect><name>Basic Motion</name><effectid>basic</effectid>
+    <parameter><parameterid>scale</parameterid><value>200</value></parameter>
+    <parameter><parameterid>rotation</parameterid><value>0</value></parameter>
+    <parameter><parameterid>center</parameterid><value><horiz>0</horiz><vert>0</vert></value></parameter>
+    <parameter><parameterid>leftcrop</parameterid><value>0</value></parameter>
+    <parameter><parameterid>topcrop</parameterid><value>0</value></parameter>
+    <parameter><parameterid>rightcrop</parameterid><value>0</value></parameter>
+    <parameter><parameterid>bottomcrop</parameterid><value>0</value></parameter>
+  </effect></filter>
+  
+</clipitem>
+<clipitem id="clipitem-3">
+  <name>slowmo</name>
+  <start>96</start>
+  <end>144</end>
+  <in>3000</in>
+  <out>3048</out>
+  <pproTicksIn>63504000000000</pproTicksIn>
+  <pproTicksOut>64012032000000</pproTicksOut>
+  <file id="file-3">
+  <name>SYNTH_slowmo.mov</name>
+  <pathurl>file://localhost/SYNTH/SYNTH_slowmo.mov</pathurl>
+  <media><video><samplecharacteristics>
+    <width>960</width><height>540</height>
+  </samplecharacteristics></video></media>
+</file>
+  
+  <filter><effect><name>Basic Motion</name><effectid>basic</effectid>
+    <parameter><parameterid>scale</parameterid><value>200</value></parameter>
+    <parameter><parameterid>rotation</parameterid><value>0</value></parameter>
+    <parameter><parameterid>center</parameterid><value><horiz>0</horiz><vert>0</vert></value></parameter>
+    <parameter><parameterid>leftcrop</parameterid><value>0</value></parameter>
+    <parameter><parameterid>topcrop</parameterid><value>0</value></parameter>
+    <parameter><parameterid>rightcrop</parameterid><value>0</value></parameter>
+    <parameter><parameterid>bottomcrop</parameterid><value>0</value></parameter>
+  </effect></filter>
+  <filter><effect><name>Time Remap</name><effectid>timeremap</effectid>
+        <parameter><parameterid>speed</parameterid><value>200</value></parameter>
+        <parameter><parameterid>variablespeed</parameterid><value>0</value></parameter>
+      </effect></filter>
+</clipitem>
+<clipitem id="clipitem-4">
+  <name>reframe</name>
+  <start>144</start>
+  <end>192</end>
+  <in>4000</in>
+  <out>4048</out>
+  <pproTicksIn>42336000000000</pproTicksIn>
+  <pproTicksOut>42844032000000</pproTicksOut>
+  <file id="file-1"/>
+  
+  <filter><effect><name>Basic Motion</name><effectid>basic</effectid>
+    <parameter><parameterid>scale</parameterid><value>250</value></parameter>
+    <parameter><parameterid>rotation</parameterid><value>5</value></parameter>
+    <parameter><parameterid>center</parameterid><value><horiz>120</horiz><vert>-60</vert></value></parameter>
+    <parameter><parameterid>leftcrop</parameterid><value>10</value></parameter>
+    <parameter><parameterid>topcrop</parameterid><value>4</value></parameter>
+    <parameter><parameterid>rightcrop</parameterid><value>8</value></parameter>
+    <parameter><parameterid>bottomcrop</parameterid><value>2</value></parameter>
+  </effect></filter>
+  
+</clipitem>
+    </track>
+  </video></media>
+</sequence>
+</xmeml>

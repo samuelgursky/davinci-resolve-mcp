@@ -1,6 +1,6 @@
 {
   "name": "davinci-resolve-mcp",
-  "version": "4.10.2",
+  "version": "4.10.3",
   "description": "NPM bootstrapper for the DaVinci Resolve MCP Server.",
   "license": "MIT",
   "author": "Samuel Gursky <samgursky@gmail.com>",
@@ -38,6 +38,7 @@
     "resolve-advanced/server/**/*.mjs",
     "resolve-advanced/server/**/*.py",
     "resolve-advanced/vendor/**",
+    "!resolve-advanced/vendor/conform-qc/__fixtures__/**",
     "resolve-advanced/package.json",
     "resolve-advanced/README.md",
     "docs/**/*.md",

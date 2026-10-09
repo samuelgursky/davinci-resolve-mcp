@@ -15,6 +15,7 @@
   "files": [
     "server/**/*.mjs",
     "vendor/**",
+    "!vendor/conform-qc/__fixtures__/**",
     "README.md",
     "LICENSE"
   ],
@@ -37,8 +38,8 @@
     "_comment": "audio (split/trim/convert) + conform frame ops need system ffmpeg/ffprobe on PATH (NOT bundled \u2014 FFmpeg binaries are GPL; this package stays MIT). Install ffmpeg yourself: brew install ffmpeg."
   },
   "scripts": {
-    "test": "node --test vendor/drp-format/__tests__/*.test.js vendor/drt-format/__tests__/*.test.js vendor/drx-codec/__tests__/*.test.js test/*.test.mjs",
-    "test:libs": "node --test vendor/drp-format/__tests__/*.test.js vendor/drt-format/__tests__/*.test.js vendor/drx-codec/__tests__/*.test.js",
+    "test": "node --test vendor/drp-format/__tests__/*.test.js vendor/drt-format/__tests__/*.test.js vendor/drx-codec/__tests__/*.test.js vendor/conform-qc/test/*.test.js test/*.test.mjs",
+    "test:libs": "node --test vendor/drp-format/__tests__/*.test.js vendor/drt-format/__tests__/*.test.js vendor/drx-codec/__tests__/*.test.js vendor/conform-qc/test/*.test.js",
     "test:server": "node --test test/*.test.mjs"
   },
   "engines": {

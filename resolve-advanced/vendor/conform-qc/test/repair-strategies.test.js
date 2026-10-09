@@ -13,6 +13,7 @@ const { MediaIndex } = require('../repair/media-index');
 const { detectDupes, proposeTimeline } = require('../repair/analysis');
 const { makeRepairLadder } = require('../repair');
 
+if (require('./_client-fixture').skipFile(test, 'repair-strategies')) return;
 const GOLDEN = JSON.parse(fs.readFileSync(path.join(pkg.reelFixtureDir(), 'golden_oracle.json'), 'utf8'));
 const CTX = { ticksPerFrame: GOLDEN.ticksPerFrame, sequenceWidth: GOLDEN.sequence.width, sequenceHeight: GOLDEN.sequence.height, sequenceRate: GOLDEN.sequence.fps };
 

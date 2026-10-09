@@ -11,14 +11,14 @@ const DOC = fs.readFileSync(path.join(__dirname, '..', 'docs', 'runbook.md'), 'u
 
 test('runbook: documents both surfaces, tiers, package options, and the closed decisions', () => {
   const must = [
-    /two surfaces/i,
-    /Cloud/, /Local/,
+    /(two|both) surfaces/i,
+    /Other surfaces/, /Local/, // the engine ships only the local path; other hosts compose their own
     /A — burned reference/i, /B — clean ref/i, /C — no reference/i, /math-verified/,
     /no picture, no `?content-verified/i,
     /brightness/i,
     /ADVISORY ONLY/i,
     /never.*(clear a flag|flip a deterministic)/i,
-    /host-injected `?VisionValidator|supplied by the host/i, // optional vision seam, no bundled LLM
+    /host-injected\**\s*`?VisionValidator|supplied by the\s+host/i, // optional vision seam, no bundled LLM
     /SSIM ≥ 0\.90|PSNR ≥ 25/,
     /VFX alignment \*\*never\*\* auto-applies|VFX alignment never/i,
     /MediaRelationship.*→.*project override.*→.*editorialRole|resolution/i, // §10 order

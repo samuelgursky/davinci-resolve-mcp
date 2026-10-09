@@ -20,6 +20,7 @@ const pkg = require('../index');
 const oracle = require('../oracle');
 const { diffTimelines, reverifyChanged, rippleUpdate } = require('../ops/patch');
 
+if (require('./_client-fixture').skipFile(test, 'p45-patch-acceptance')) return;
 const GOLDEN = JSON.parse(fs.readFileSync(path.join(pkg.reelFixtureDir(), 'golden_oracle.json'), 'utf8'));
 const CTX = { ticksPerFrame: GOLDEN.ticksPerFrame, sequenceWidth: GOLDEN.sequence.width };
 

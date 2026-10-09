@@ -1,0 +1,23 @@
+{
+ "note": "Synthetic, client-free. darktrap reference is darkened 0.22x — brightness-robust metric must still MATCH.",
+ "cases": [
+  {
+   "label": "match",
+   "expected_verdict": "MATCH",
+   "reference": "frames/match__reference.png",
+   "derived": "frames/match__derived.png"
+  },
+  {
+   "label": "darktrap",
+   "expected_verdict": "MATCH",
+   "reference": "frames/darktrap__reference.png",
+   "derived": "frames/darktrap__derived.png"
+  },
+  {
+   "label": "wrong",
+   "expected_verdict": "WRONG",
+   "reference": "frames/wrong__reference.png",
+   "derived": "frames/wrong__derived.png"
+  }
+ ]
+}

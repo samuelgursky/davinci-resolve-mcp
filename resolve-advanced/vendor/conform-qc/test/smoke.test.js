@@ -34,7 +34,7 @@ test('package scaffold loads with planned module surface', () => {
   }
 });
 
-test('golden_oracle.json — committed answer key for the Oracle (327 clips)', () => {
+test('golden_oracle.json — committed answer key for the Oracle (327 clips)', { skip: require('./_client-fixture').present() ? false : require('./_client-fixture').REASON }, () => {
   const g = JSON.parse(fs.readFileSync(ORACLE, 'utf8'));
   assert.equal(g.clipCount, 327, 'clipCount must be 327');
   assert.equal(g.clips.length, 327, 'clips array must hold 327 entries');
@@ -53,7 +53,7 @@ test('golden_oracle.json — committed answer key for the Oracle (327 clips)', (
   }
 });
 
-test('golden_compare.json — committed answer key for the comparator (4 verdicts)', () => {
+test('golden_compare.json — committed answer key for the comparator (4 verdicts)', { skip: require('./_client-fixture').present() ? false : require('./_client-fixture').REASON }, () => {
   const g = JSON.parse(fs.readFileSync(COMPARE, 'utf8'));
   assert.ok(Array.isArray(g.cases) && g.cases.length === 4);
   const byLabel = Object.fromEntries(g.cases.map((c) => [c.label, c]));

@@ -11,6 +11,7 @@ const pkg = require('../index');
 const { makeRepairLadder, strategies } = require('../repair');
 const { ConformKnowledge } = require('../knowledge');
 
+if (require('./_client-fixture').skipFile(test, 'repair')) return;
 const GOLDEN = JSON.parse(fs.readFileSync(path.join(pkg.reelFixtureDir(), 'golden_oracle.json'), 'utf8'));
 const CTX = { ticksPerFrame: GOLDEN.ticksPerFrame, sequenceWidth: GOLDEN.sequence.width };
 

@@ -12,13 +12,16 @@ const { verify } = require('../ops/verify');
 const { FakeVisionValidator } = require('../adapters/vision-validator');
 
 const SAMPLE = pkg.reelFixtureDir();
-const GOLDEN = JSON.parse(fs.readFileSync(path.join(SAMPLE, 'golden_oracle.json'), 'utf8'));
+const client = require('./_client-fixture');
+const GOLDEN = client.present()
+  ? JSON.parse(fs.readFileSync(path.join(SAMPLE, 'golden_oracle.json'), 'utf8'))
+  : null;
 
 const SYNTH_DIR = path.join(__dirname, '..', '__fixtures__', 'synthetic');
 const SYNTH = JSON.parse(fs.readFileSync(path.join(SYNTH_DIR, 'golden_oracle.synth.json'), 'utf8'));
 const SF = (name) => path.join(SYNTH_DIR, 'frames', name);
 
-test('verify: Tier C (no reference) — all 327 SAMPLE clips MATH-VERIFIED, read-only', async () => {
+test('verify: Tier C (no reference) — all 327 SAMPLE clips MATH-VERIFIED, read-only', { skip: GOLDEN ? false : client.REASON }, async () => {
   const rep = await verify(GOLDEN, {});
   assert.equal(rep.perCut.length, 327);
   assert.equal(rep.summary.mathVerified, 327);

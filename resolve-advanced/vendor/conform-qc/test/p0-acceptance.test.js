@@ -21,6 +21,7 @@ const oracle = require('../oracle');
 const compare = require('../compare');
 
 const DIR = pkg.reelFixtureDir();
+if (require('./_client-fixture').skipFile(test, 'p0-acceptance')) return;
 const GOLDEN = JSON.parse(fs.readFileSync(path.join(DIR, 'golden_oracle.json'), 'utf8'));
 const COMPARE = JSON.parse(fs.readFileSync(path.join(DIR, 'golden_compare.json'), 'utf8'));
 const CTX = { ticksPerFrame: GOLDEN.ticksPerFrame, sequenceWidth: GOLDEN.sequence.width };

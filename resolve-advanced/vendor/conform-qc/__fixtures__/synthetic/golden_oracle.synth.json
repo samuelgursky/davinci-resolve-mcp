@@ -1,0 +1,116 @@
+{
+ "sequence": {
+  "name": "SYNTH_REEL",
+  "width": 1920,
+  "height": 1080,
+  "fps": 24
+ },
+ "ticksPerFrame": 10584000000,
+ "clipCount": 4,
+ "clips": [
+  {
+   "key": "normal",
+   "seqstart": 0,
+   "xml_in": 1000,
+   "is_subclip": false,
+   "subclip_startoffset": 0,
+   "pproTicksIn": 10584000000000,
+   "scale_premiere": 200,
+   "speed": 100,
+   "center": {
+    "h": 0,
+    "v": 0
+   },
+   "rotation": 0,
+   "crop": {
+    "left": 0,
+    "top": 0,
+    "right": 0,
+    "bottom": 0
+   },
+   "srcW": 960,
+   "srcH": 540,
+   "expected_source_start": 1000,
+   "expected_sample_frame": 1000,
+   "expected_scale_corrected": 100
+  },
+  {
+   "key": "subclip",
+   "seqstart": 48,
+   "xml_in": 500,
+   "is_subclip": true,
+   "subclip_startoffset": 2000,
+   "pproTicksIn": 5292000000000,
+   "scale_premiere": 200,
+   "speed": 100,
+   "center": {
+    "h": 0,
+    "v": 0
+   },
+   "rotation": 0,
+   "crop": {
+    "left": 0,
+    "top": 0,
+    "right": 0,
+    "bottom": 0
+   },
+   "srcW": 960,
+   "srcH": 540,
+   "expected_source_start": 2500,
+   "expected_sample_frame": 2500,
+   "expected_scale_corrected": 100
+  },
+  {
+   "key": "slowmo",
+   "seqstart": 96,
+   "xml_in": 3000,
+   "is_subclip": false,
+   "subclip_startoffset": 0,
+   "pproTicksIn": 63504000000000,
+   "scale_premiere": 200,
+   "speed": 200,
+   "center": {
+    "h": 0,
+    "v": 0
+   },
+   "rotation": 0,
+   "crop": {
+    "left": 0,
+    "top": 0,
+    "right": 0,
+    "bottom": 0
+   },
+   "srcW": 960,
+   "srcH": 540,
+   "expected_source_start": 3000,
+   "expected_sample_frame": 6000,
+   "expected_scale_corrected": 100
+  },
+  {
+   "key": "reframe",
+   "seqstart": 144,
+   "xml_in": 4000,
+   "is_subclip": false,
+   "subclip_startoffset": 0,
+   "pproTicksIn": 42336000000000,
+   "scale_premiere": 250,
+   "speed": 100,
+   "center": {
+    "h": 120,
+    "v": -60
+   },
+   "rotation": 5,
+   "crop": {
+    "left": 10,
+    "top": 4,
+    "right": 8,
+    "bottom": 2
+   },
+   "srcW": 960,
+   "srcH": 540,
+   "expected_source_start": 4000,
+   "expected_sample_frame": 4000,
+   "expected_scale_corrected": 125
+  }
+ ]
+}

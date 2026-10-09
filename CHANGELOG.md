@@ -2,6 +2,40 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.10.3 — the conform-qc tests run, and run in `npm test`
+
+### Tests
+
+- **The vendored conform-qc suite was never part of `npm test`, and 20 of its
+  118 tests failed** (reported from a macOS validation run in the #273
+  thread). Three causes, all fixed:
+  - **The synthetic fixture was never committed.** `synthetic/generate.js`
+    builds a small, anonymised turnover XML, test-pattern frames and their
+    answer keys, and its own docs say the output is committed under
+    `__fixtures__/synthetic/`. It now is: 9 files, about 224 KB, every name
+    and path a `SYNTH_` placeholder, and byte-for-byte reproducible (generated
+    twice and compared). The npm packages exclude it.
+  - **Tests that need the client answer key crashed instead of skipping.**
+    `__fixtures__/sample-reel-01` is derived from client material and stays
+    out of the repository; `reelFixtureDir()` documents that its tests skip
+    when it is absent. A shared `test/_client-fixture.js` now does that.
+    Seven files whose setup is built on the key skip as a whole, with a
+    reason. In `compare`, `geometry`, `verify` and `workflow-driver` only the
+    tests that read the key skip, so their client-free tests keep running.
+  - **The runbook check had gone stale.** It expected "two surfaces" and a
+    "Cloud" surface. The runbook now says it "covers both surfaces" and that
+    the engine "ships only the local path" with other hosts composing their
+    own, and its bold markup and line wrapping broke one more pattern. The
+    patterns follow the runbook; the runbook is unchanged.
+- `resolve-advanced`'s `npm test` and `test:libs` now include
+  `vendor/conform-qc/test/*.test.js`: the advanced suite runs 1,173 tests
+  (from 1,036), 0 failed, with every skip carrying its reason.
+
+### Validation
+
+- Test and packaging changes only; no server or engine code changed. Python
+  suite green; advanced suite 1,173 / 0 failed in a clean worktree.
+
 ## What's New in v4.10.2 — place_fusion_title measured on another build; the .drp harness says when it can't run
 
 ### Documentation
