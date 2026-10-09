@@ -718,7 +718,7 @@ def next_steps(result: dict) -> list:
     """
     lines = [
         "Next:",
-        "  1. Keep DaVinci Resolve open; check Workspace > Scripts for the installed entries.",
+        "  1. Restart DaVinci Resolve so it re-scans the Scripts folders.",
         "  2. Open a saved project (the Scripts menu is empty in Project Manager).",
         "  3. Workspace > Scripts > resolve_bridge_probe  — run it TWICE.",
         # The probe runs INSIDE Resolve, which never sees the shell's

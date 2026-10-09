@@ -13,9 +13,6 @@ could not apply the same effect through native interchange or its own UI.
 | Applying an effect required a reference in another user project | Bundle a native holder from synthetic QA with explicit reference settings and no media |
 | Subtitle `SetProperty` refusal sent every request to full-quit DB patching | Error now routes effects to the live action; text/timing to live UI or explicit offline maintenance |
 | Skills and kernels directed animation work to the offline server | Updated audio/Fusion portable skills, kernels, operating reference, advanced README and subtitle guide |
-| Update panel told users to restart Resolve for Python code updates | Instructions now distinguish MCP-server reload from Resolve application restart |
-| Granular connection helper launched another instance after scripting failed | Match compound guard: running/unknown process state refuses a second launch |
-| Bridge installer prescribed a restart before trying the Scripts menu | Check the installed scripts in the running application first |
 | Codec readback could report success before Resolve parsed the composition | Re-export the imported timeline and compare its retained controls; also compare live edit inventory |
 
 Direct DB-write safety guards remain intact. Never patch the database of an
@@ -58,9 +55,9 @@ than turn extension installation into a repeated step. Do not erase those
 constraints to promise "100% automated".
 
 Code already loaded in an MCP process does not automatically change after a
-Git update. Reload that server/bridge runtime when needed while preserving the
-running Resolve session; reconnect to the existing application. Do not treat a
-sandbox's inability to see or script Resolve as evidence that Resolve is closed.
+Git update. Follow the installer/update instructions for the component being
+updated. Bridge-script installation may require Resolve to restart. This
+feature does not change the general launcher or installer lifecycle.
 
 ## Validation record
 
@@ -73,12 +70,12 @@ sandbox's inability to see or script Resolve as evidence that Resolve is closed.
 - Generated API-limitations, read/write-symmetry and portable-agent assets checked.
 - NPM dry-run package inspection confirmed the live bridge, codec helper and
   native reference asset are included.
-- Windows test-fixture corrections: ps fixtures now select their intended
-  platform, macOS path assertions normalize separators, and dashboard temporary
-  SQLite connections close before their directories are removed.
+- Windows test-fixture corrections are split into a separate change: ps fixtures
+  select their intended platform, macOS path assertions normalize separators,
+  and dashboard temporary SQLite connections close before directory removal.
 
-Changes are local on `feat/subtitle-track-support`; no release or publication
-was performed. Studio stayed open during the original subtitle acceptance;
+The automation is reviewed separately from subtitle database editing. Studio
+stayed open during the original subtitle acceptance;
 the later full-library title test has the interruption documented above.
 Existing MCP processes still need to load the
 updated Python code to expose the new action; that is separate from restarting

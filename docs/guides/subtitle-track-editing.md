@@ -23,8 +23,12 @@ effect changes to `project_db` or ask the user to quit/relaunch Resolve.
 ```
 
 This exports the current native DRT, edits only its subtitle Fusion holder,
-then imports and selects a new timeline revision. The original timeline and
-export remain recoverable. It never edits the open database, changes source
+then imports and selects a new timeline revision. The original timeline remains
+recoverable. Successful operations, including dry runs, delete their staging
+exports. Failures keep the staging folder for diagnosis and return
+`staging_retained:true` and `staging_directory`; remove that folder when diagnosis
+is complete because it contains full timeline exports. Cleanup failures also
+report the retained folder with a warning. It never edits the open database, changes source
 media or requires an application restart. `dry_run:true` prepares the exported
 revision without importing it. Omit `preset` to incrementally adjust the
 current Word Highlight instead of replacing it. `preset_reference` can name
@@ -67,7 +71,11 @@ the effective `textFillMode`; absent Type1 uses the observed TextPlus solid defa
 
 The handler checks live track counts, item names/bounds and Media Pool media IDs
 against the original, then re-exports the imported timeline through Resolve and
-verifies that it retained the preset controls before selecting the revision. A failed import/check
+verifies that it retained the preset controls before selecting the revision.
+`verified_components` lists these checks. Markers, grades, other items' Fusion
+compositions and audio content are **not** compared; they are listed in
+`unverified_components`. This is not verification of a complete timeline copy.
+A failed import/check
 restores the previous active timeline and reports the retained failed revision.
 Resolve re-export readback plus edit inventory is not render verification: inspect rendered
 frames at word boundaries and across caption gaps. Native DRT import was tested

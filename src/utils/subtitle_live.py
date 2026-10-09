@@ -47,7 +47,7 @@ def _capture_installed_preset(resolve, project, preset, output):
 
 
 def _inventory(timeline):
-    """Check the whole edit, not just the preset blob that was changed."""
+    """Compare track counts and item names, bounds and media IDs only."""
     result = {}
     for kind in ("video", "audio", "subtitle"):
         tracks = []
@@ -67,6 +67,10 @@ def set_subtitle_preset(resolve, project, timeline, params, safe_dir):
     node = shutil.which("node")
     if not node:
         return {"success": False, "error": "Node.js is required for the subtitle preset codec"}
+    # The dispatcher coerces strings before the safety-gated helper is entered.
+    dry_run = params.get("dry_run", False)
+    if not isinstance(dry_run, bool):
+        return {"success": False, "error": "dry_run must be coerced to a boolean by the dispatcher"}
     inputs = params.get("inputs", {})
     if not isinstance(inputs, dict):
         return {"success": False, "error": "inputs must be an object"}
@@ -82,7 +86,7 @@ def set_subtitle_preset(resolve, project, timeline, params, safe_dir):
             installed = find_subtitle_preset(params["preset"], params.get("templates_archive"))
         except (OSError, ValueError) as exc:
             return {"success": False, "error": str(exc)}
-        if params.get("dry_run") is True:
+        if dry_run:
             return {"success": False, "error": "Uncached installed preset capture needs a live temporary timeline; use preset_reference for a mutation-free dry run"}
     name = params.get("revision_name") or f"{timeline.GetName()} - subtitles {uuid.uuid4().hex[:8]}"
     if any(project.GetTimelineByIndex(i).GetName() == name for i in range(1, project.GetTimelineCount() + 1)):
@@ -109,13 +113,16 @@ def set_subtitle_preset(resolve, project, timeline, params, safe_dir):
         if params.get("preset") and not reference:
             request["preset"] = params["preset"]
         completed = subprocess.run([node, str(BRIDGE)], input=json.dumps(request),
-                                   capture_output=True, text=True, timeout=60, check=False)
+                                   capture_output=True, text=True, encoding="utf-8", errors="replace",
+                                   timeout=60, check=False)
         if completed.returncode:
             raise RuntimeError(completed.stderr.strip() or "Subtitle codec failed")
         patch = json.loads(completed.stdout)
-        if params.get("dry_run") is True:
+        # The codec's output file is private staging, removed after success.
+        patch.pop("output", None)
+        if dry_run:
             result = {"success": True, "dry_run": True, "executed": False, "patch": patch,
-                      "original_export": str(source), "restart_required": False}
+                      "restart_required": False}
             return result
         # Native imports remap IDs and carry the original media references.
         imported = project.GetMediaPool().ImportTimelineFromFile(str(output), {"importSourceClips": False})
@@ -134,7 +141,8 @@ def set_subtitle_preset(resolve, project, timeline, params, safe_dir):
             raise RuntimeError("Failed to re-export the imported subtitle revision")
         checked = subprocess.run([node, str(BRIDGE)],
                                  input=json.dumps({"operation": "inspect", "source": str(readback), "track": track}),
-                                 capture_output=True, text=True, timeout=60, check=False)
+                                 capture_output=True, text=True, encoding="utf-8", errors="replace",
+                                 timeout=60, check=False)
         if checked.returncode:
             raise RuntimeError(checked.stderr.strip() or "Imported preset readback failed")
         actual = json.loads(checked.stdout)
@@ -150,8 +158,10 @@ def set_subtitle_preset(resolve, project, timeline, params, safe_dir):
         succeeded = True
         result = {"success": True, "restart_required": False, "original_timeline": timeline.GetName(),
                 "timeline": imported.GetName(), "timeline_id": imported.GetUniqueId(),
-                "original_export": str(source), "patched_export": str(output), "patch": patch,
+                "patch": patch,
                 "verification": "resolve_reexport_preset_readback_and_live_edit_inventory",
+                "verified_components": ["track_counts", "item_names", "item_bounds", "media_ids", "subtitle_preset_controls"],
+                "unverified_components": ["markers", "grades", "other_fusion_compositions", "audio_content"],
                 "render_verified": False}
         if warnings:
             result["warnings"] = warnings
@@ -172,3 +182,16 @@ def set_subtitle_preset(resolve, project, timeline, params, safe_dir):
                 logging.getLogger(__name__).error(message)
                 if result is not None:
                     result.setdefault("warnings", []).append(message)
+        if result is not None:
+            if result.get("success"):
+                try:
+                    # This UUID directory belongs only to this operation.
+                    shutil.rmtree(staging)
+                    result["staging_retained"] = False
+                except OSError as exc:
+                    result.setdefault("warnings", []).append(f"Staging cleanup failed: {exc}")
+                    result["staging_retained"] = True
+                    result["staging_directory"] = str(staging)
+            else:
+                result["staging_retained"] = True
+                result["staging_directory"] = str(staging)

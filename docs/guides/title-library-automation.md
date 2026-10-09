@@ -26,6 +26,7 @@ labels without changing rendered text. Expressions and
 unknown modifier chains are refused rather than flattened. The default text
 action edits the first supported text target; use explicit Fusion tools when
 changing multiple independent title lines. Render to verify the resulting text.
+MultiText editing was validated only on Studio 21.1.0.17 / Windows.
 
 Use the full template ID rather than a leaf name: `Statement` exists both as an
 ordinary title and an animated subtitle. Probe `comp.GetData("TEMPLATE_ID")`
@@ -45,8 +46,16 @@ The live helper captures the installed template in its own temporary timeline,
 exports its native composition, restores the working timeline and removes only
 that temporary capture. It swaps the exported subtitle holder composition,
 imports a recoverable revision, checks edit/media inventory and re-exports the
-revision to confirm native preset/control retention. The original timeline and
-exports remain intact. It never writes an open Project.db or changes source files.
+revision to confirm native preset/control retention. The original timeline
+remains intact. The inventory compares track counts, item names/bounds and media
+IDs; it does not compare markers, grades, other Fusion compositions or audio
+content. Results list both verified and unverified components. Inspect the
+revision before relying on it as a complete copy.
+Successful operations, including previews, remove staging exports; failures
+retain them for diagnosis and report `staging_retained` and `staging_directory`.
+Cleanup failures warn and report the retained folder. These files contain full
+timeline exports and should be removed after diagnosis. It never writes an open
+Project.db or changes source files.
 
 Common mapped literal controls are `font`, `fontStyle`, `size`, `position`,
 `textRed`, `textGreen`, `textBlue` and `textAlpha`. Highlight/outline mappings are

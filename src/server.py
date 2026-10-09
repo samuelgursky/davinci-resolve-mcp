@@ -25978,6 +25978,7 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         — Undocumented generator/Text+ GetProperty map on an item (keys are not in public API docs).
       set_title_text(clip_id|..., text, property_key?, as_styled_xml?, try_plain_first?, try_heuristic_keys?, readback?) -> {success, property_key?, attempts}
         — SetProperty on a heuristic or explicit key; tries plain string then minimal styled XML unless as_styled_xml=True.
+        MultiText fallback was validated only on Resolve Studio 21.1.0.17 / Windows.
         # example: action_help(name='<action_name>')
       bulk_set_title_text(ops, ...) -> {results, op_count}  — list of set_title_text payloads (same params per op).
       create_compound_clip(clip_ids, info?) -> {success}
@@ -27086,7 +27087,10 @@ def timeline_ai(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
         dormant RGB writes otherwise refuse rather than falsely claim visible edits.
         Omit preset to adjust the current effect.
         preset_reference accepts an alternate native DRT. Readback/inventory are
-        verified; inspect rendered frames separately. Unbundled dry runs need an
+        verified for track counts, item names/bounds, media IDs and preset controls.
+        Markers, grades, other Fusion comps and audio content are not verified;
+        inspect rendered frames separately. Successful staging exports are removed;
+        failure results report retained staging for diagnosis. Unbundled dry runs need an
         existing preset_reference to avoid live capture. Never patches Project.db.
       detect_scene_cuts(background?) -> {success | job_id}
       analyze_dolby_vision(clip_ids?, analysis_type?, background?) -> {success | job_id}
@@ -27108,10 +27112,9 @@ def timeline_ai(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
             "timeline_ai.create_subtitles", p, lambda: _safe_create_subtitles(tl, p)
         )
     elif action == "set_subtitle_preset":
-        # Keep dry-run intent explicit at the dispatch boundary as well as in
-        # the native-interchange helper (the registry audits this boundary).
+        # Match the safety decorator's boolean interpretation before any capture/import.
         return _set_live_subtitle_preset(get_resolve(), proj, tl,
-                                        {**p, "dry_run": p.get("dry_run") is True}, _resolve_safe_dir)
+                                        {**p, "dry_run": _coerce_bool(p.get("dry_run", p.get("dryRun")))}, _resolve_safe_dir)
     elif action == "detect_scene_cuts":
         return _run_maybe_background(
             "timeline_ai.detect_scene_cuts", p, lambda: {"success": bool(tl.DetectSceneCuts())}
