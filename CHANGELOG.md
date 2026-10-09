@@ -2,6 +2,48 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.9.3 — .drp bin registry for two or more bins; broader temp-root guard tests
+
+### Fixed
+
+- **`drt(action="assemble_project")` registered no bins when timelines went
+  into two or more of them.** The Master folder's `FieldsBlob` is the
+  subfolder registry, `protobuf{field2: keyedDict{"<i>": binId}, field4:
+  time}`, and field 2's length was written as one raw byte. One bin's dict is
+  95 bytes and fits; two bins' is 182, emitted as `0xb6`, whose continuation
+  bit swallowed the dict's first byte and read back as length 54; three bins'
+  269 was truncated to 13. The archive carried every bin directory while its
+  registry decoded to zero entries. The length is now written with the
+  module's existing length-delimited field writer, which emits the same
+  single byte for one bin, so single-bin output is byte-for-byte unchanged.
+  Found and fixed by @Dev-next-gen (#280).
+
+### Tests
+
+- `resolve-advanced/test/drt-assemble-extract.test.mjs`: two timelines in two
+  bins; the registry's declared length covers exactly the keyed dict, both
+  bin ids are present, and field 4 follows. Fails on v4.9.2.
+- `tests/test_source_media_guard.py` (@AllastorV, #277): broad temp roots
+  (the profile, every ancestor of it, `..` and case variants, the working
+  directory), chosen through `TEMP` / `TMPDIR` / `TMP` and through the real
+  environment, never license a media write or delete; a narrow Windows temp
+  dir is scratch while a `Temp-media` sibling is not; and an explicit
+  `RESOLVE_MCP_SCRATCH` opt-in still applies to a rejected temp root.
+
+### Known gap
+
+- On the 19.x template path (`targetAppVersion: "19.1.3"`) the registry is
+  not written at all: the template's Master `FieldsBlob` already registers its
+  own `000_Archive` bin, so the replacement that targets an empty blob finds
+  nothing. Bins assembled for 19.x stay unregistered whatever their count.
+  Reported in #280; not changed here.
+
+### Validation
+
+- Offline suites green. No live Resolve run: the changed bytes are written
+  only for 21.1-target archives, which this project's 19.1.3.7 host cannot
+  import, and the one-bin blob is unchanged. The guard change is tests only.
+
 ## What's New in v4.9.2 — the source-media guard recognises Windows temp space
 
 ### Fixed
