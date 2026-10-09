@@ -1810,6 +1810,10 @@ helpers:
 - `probe_audio_track(track_index?)`
 - `probe_audio_item(track_type?, track_index?, item_index?)`
 - `safe_set_audio_properties(properties, restore?, dry_run?, track_type?, track_index?, item_index?)`
+  — Volume / Pan / EQ writes are not honoured by Resolve's API; a request for
+  any of them returns a `known_limitation` block with the workaround (bake gain
+  into a rendered copy, or apply a Fairlight preset). `AudioSyncOffset` writes
+  do work.
 - `audio_mix_capability_report(...)`
 - `voice_isolation_capabilities(track_index?, track_type?, item_index?)`
 - `audio_mapping_report(clip_ids?)`
@@ -1934,7 +1938,9 @@ Key actions:
 - `get_transform` / `set_transform(Pan?, Tilt?, ZoomX?, ZoomY?, RotationAngle?, ...)`
 - `get_crop` / `set_crop(CropLeft?, CropRight?, CropTop?, CropBottom?, ...)`
 - `get_composite` / `set_composite(Opacity?, CompositeMode?)`
-- `get_audio` / `set_audio(Volume?, Pan?, AudioSyncOffset?)`
+- `get_audio` / `set_audio(Volume?, Pan?, AudioSyncOffset?)` — Resolve ignores
+  Volume / Pan / EQ writes on audio (returns a `known_limitation` block); only
+  `AudioSyncOffset` / `AudioSyncOffsetIsManual` take effect
 - `get_voice_isolation_state` / `set_voice_isolation_state(state)` — Resolve
   20.1+; audio timeline items only
 - `get_keyframes(property)`, `add_keyframe(property, frame, value)`,

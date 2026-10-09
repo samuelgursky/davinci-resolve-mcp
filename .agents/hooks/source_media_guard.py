@@ -26,8 +26,9 @@ import os
 import re
 import shlex
 import sys
+import tempfile
 from pathlib import Path
-from typing import List, Sequence
+from typing import List, Optional, Sequence
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from hook_runtime import load_event, pretool_decision
@@ -100,6 +101,37 @@ def decide(decision: str, reason: str) -> None:
     pretool_decision(decision, reason)
 
 
+def platform_temp_root(
+    os_name: str = os.name,
+    temp: Optional[str] = None,
+    home: Optional[str] = None,
+    cwd: Optional[str] = None,
+) -> Optional[str]:
+    """Windows' temp directory, when it is narrow enough to count as scratch.
+
+    On Windows `%TEMP%` is the only temp space and none of SCRATCH_ROOTS
+    applies, so it has to be added. But `tempfile.gettempdir()` follows
+    TEMP/TMP, which are set for reasons unrelated to this guard; pointing temp
+    at a fast scratch drive is common in post, and that is often the drive the
+    camera originals live on. So a temp root is refused when it is a drive or
+    filesystem root, the user profile or one of its ancestors, or the working
+    directory (gettempdir's last-resort fallback). On Linux and macOS the
+    default temp dir already sits under SCRATCH_ROOTS, so TMPDIR is never
+    trusted there.
+    """
+    if os_name != "nt":
+        return None
+    root = normalize(temp if temp is not None else tempfile.gettempdir()).lower()
+    if os.path.dirname(root) == root:
+        return None
+    profile = normalize(home if home is not None else os.path.expanduser("~")).lower()
+    if profile == root or profile.startswith(root.rstrip(os.sep) + os.sep):
+        return None
+    if root == normalize(cwd if cwd is not None else os.getcwd()).lower():
+        return None
+    return root
+
+
 def is_scratch(path: str, destructive: bool = False) -> bool:
     """Is this path somewhere a derivative may land?
 
@@ -110,7 +142,12 @@ def is_scratch(path: str, destructive: bool = False) -> bool:
     parts = components(path)
 
     configured = os.environ.get("RESOLVE_MCP_SCRATCH", "")
-    roots = SCRATCH_ROOTS + ((normalize(configured).lower(),) if configured else ())
+    # Normalized like the path, so separators and drive letters line up on
+    # Windows, where `/tmp` normalizes to `c:\tmp` (contributed in #277).
+    roots = tuple(normalize(root).lower() for root in SCRATCH_ROOTS + ((configured,) if configured else ()))
+    temp_root = platform_temp_root()
+    if temp_root:
+        roots += (temp_root,)
     if any(resolved == root or resolved.startswith(root.rstrip(os.sep) + os.sep) for root in roots):
         return True
 

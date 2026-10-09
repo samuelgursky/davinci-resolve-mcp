@@ -2,6 +2,182 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.10.0 — subtitle caption and preset editing in saved projects
+
+### Added
+
+- **Subtitle editing through `project_db`.** Resolve's scripting API can
+  generate and list subtitles but cannot change caption text, word timing or
+  a track's animation controls (`TimelineItem.SetProperty` does not reach
+  them). Six new actions edit them in a saved local project's `Project.db`:
+  - `list_captions`, `check_captions` and `write_captions`: caption text,
+    frame bounds and explicit per-word timing; add, replace and delete in one
+    transaction, preserving unknown fields and the original AI words.
+  - `list_subtitle_presets`, `copy_subtitle_preset` and
+    `set_subtitle_preset`: clone a compatible saved animation preset, and edit
+    Word Highlight's font, position, text / highlight / outline colours and
+    outline thickness.
+- Writes require Resolve **fully quit** (checked through the process list,
+  plus `iConfirmProjectClosed:true`), take a unique SQLite snapshot backup
+  including committed WAL pages, refuse unsupported schemas, and run the edit
+  and its readback in one transaction. `verified:true` means database
+  readback, not a render. SQLite uses `better-sqlite3`, or `node:sqlite` on
+  Node 22.16+ / 23.8+. See `docs/guides/subtitle-track-editing.md`.
+- A live `TimelineItem.SetProperty` on a subtitle item is refused before the
+  automatic timeline archive, with a pointer to these actions.
+
+Contributed by @sidevconcept (#273).
+
+### Changed during review
+
+- **No writes while Resolve runs.** An opt-in to write a project that is not
+  currently loaded was removed. Measured on Studio 19.1.3.7: a project loaded
+  earlier in the session is served from memory when loaded again, so a disk
+  write to it is not shown, and saving after editing the same rows
+  overwrites it. A fresh launch does read it.
+- **Text colour.** The writer set the Word Highlight macro's `Clone` colour
+  controls, which do not render, leaving the template's default pale yellow;
+  it now writes the Text+ shading inputs (`Red1`/`Green1`/`Blue1`/`Alpha1`).
+- **Handle release.** A guarded database is closed when a schema query throws,
+  a likely cause of the slow tests reported on Windows.
+
+### Validation
+
+- Contributor-validated on Studio 21.1.0.17 / Windows: a synthetic caption
+  edit, full quit, database write, relaunch and burn-in render passed on all
+  630 decoded frames, with white base text, yellow highlighting and exact
+  word transitions, checked against a natively configured control. Not
+  rendered on this project's 19.1.3.7 host.
+- Offline: Node advanced suite 1,036 tests / 0 failed in a clean worktree;
+  Python suite green.
+
+## What's New in v4.9.3 — .drp bin registry for two or more bins; broader temp-root guard tests
+
+### Fixed
+
+- **`drt(action="assemble_project")` registered no bins when timelines went
+  into two or more of them.** The Master folder's `FieldsBlob` is the
+  subfolder registry, `protobuf{field2: keyedDict{"<i>": binId}, field4:
+  time}`, and field 2's length was written as one raw byte. One bin's dict is
+  95 bytes and fits; two bins' is 182, emitted as `0xb6`, whose continuation
+  bit swallowed the dict's first byte and read back as length 54; three bins'
+  269 was truncated to 13. The archive carried every bin directory while its
+  registry decoded to zero entries. The length is now written with the
+  module's existing length-delimited field writer, which emits the same
+  single byte for one bin, so single-bin output is byte-for-byte unchanged.
+  Found and fixed by @Dev-next-gen (#280).
+
+### Tests
+
+- `resolve-advanced/test/drt-assemble-extract.test.mjs`: two timelines in two
+  bins; the registry's declared length covers exactly the keyed dict, both
+  bin ids are present, and field 4 follows. Fails on v4.9.2.
+- `tests/test_source_media_guard.py` (@AllastorV, #277): broad temp roots
+  (the profile, every ancestor of it, `..` and case variants, the working
+  directory), chosen through `TEMP` / `TMPDIR` / `TMP` and through the real
+  environment, never license a media write or delete; a narrow Windows temp
+  dir is scratch while a `Temp-media` sibling is not; and an explicit
+  `RESOLVE_MCP_SCRATCH` opt-in still applies to a rejected temp root.
+
+### Known gap
+
+- On the 19.x template path (`targetAppVersion: "19.1.3"`) the registry is
+  not written at all: the template's Master `FieldsBlob` already registers its
+  own `000_Archive` bin, so the replacement that targets an empty blob finds
+  nothing. Bins assembled for 19.x stay unregistered whatever their count.
+  Reported in #280; not changed here.
+
+### Validation
+
+- Offline suites green. No live Resolve run: the changed bytes are written
+  only for 21.1-target archives, which this project's 19.1.3.7 host cannot
+  import, and the one-bin blob is unchanged. The guard change is tests only.
+
+## What's New in v4.9.2 — the source-media guard recognises Windows temp space
+
+### Fixed
+
+- **On Windows the source-media guard denied every write into temp space.**
+  `is_scratch()` compared the normalized path against `SCRATCH_ROOTS`
+  (`/tmp`, `/private/tmp`, `/var/folders`) without normalizing the roots, so
+  on Windows `/tmp/out.mp4` normalized to `c:\tmp\out.mp4` and never matched
+  `/tmp`; and Windows' real temp directory (`%TEMP%`) was not a root at all.
+  `ffmpeg … /tmp/out.mp4`, `rm /tmp/work/proxy.mp4` and writes under
+  `%TEMP%` were all refused. The roots are now normalized the same way as the
+  path, and on Windows `%TEMP%` is a scratch root. Found and fixed by
+  @AllastorV (#277).
+
+### Changed on landing
+
+- **The temp directory is trusted only on Windows, and only when narrow.**
+  `tempfile.gettempdir()` follows `TMPDIR` / `TEMP` / `TMP`, which are set
+  for reasons unrelated to this guard; in post they often point at the media
+  drive. Measured on macOS with the change as submitted: with `TMPDIR` set to
+  the home directory, `ffmpeg -y` overwrites and `rm` under `~/Movies` were
+  allowed, where v4.9.1 denied them. So the temp directory is added only on
+  Windows (on Linux and macOS the default temp dir is already under
+  `SCRATCH_ROOTS`), and it is refused when it is a drive or filesystem root,
+  the user profile or an ancestor of it, or the working directory, which
+  `gettempdir()` falls back to when nothing else is writable.
+
+### Tests
+
+- `tests/test_source_media_guard.py`: a write into the platform temp dir is
+  allowed; with `TMPDIR`/`TEMP`/`TMP` set to the home directory, an overwrite
+  and a delete there are still denied (both fail on the change as
+  submitted); and `platform_temp_root` refuses a filesystem root, the profile
+  and its ancestors, and the working directory, accepts a narrow temp folder
+  even on a media drive, and never trusts the variable off Windows.
+
+### Validation
+
+- Guard-only change; no Resolve scripting call changed. The Windows path
+  normalization was verified by the contributor on Windows 11; the
+  Windows-only branch is unit-tested here with injected values, since this
+  project has no Windows host.
+
+## What's New in v4.9.1 — a rejected audio level write now says why, and what to do instead
+
+### Changed
+
+- **`safe_set_audio_properties` and `timeline_item set_audio` explain a
+  refused Volume / Pan / EQ write.** Resolve's scripting API has no write path
+  for audio clip or track level — `SetProperty('Volume'/'Level'/'Gain')`
+  returned `False` when measured live on 21.0.0, and `'Pan'` is the *video* transform
+  key, so it returns `True` while the audio pan does not move. A caller who saw
+  `{"write": false}` (or a `Pan` that "succeeded" and changed nothing) had no
+  way to tell "bad value" from "this cannot be written from the API at all" —
+  and the second is a different task. Both actions now attach a
+  `known_limitation` block when a level or EQ write fails, and on every `Pan`
+  write (its success is the misleading case): the
+  `api_truth` ledger entry plus the concrete ways around it (bake the gain into
+  a rendered copy of the source with ffmpeg; or save the mix once as a
+  Fairlight preset and apply it per-timeline with
+  `project_settings apply_fairlight_preset`, on Resolve 20.2.2+ only; the
+  preset methods are absent on 19.x). `AudioSyncOffset` writes are
+  unaffected — they work, and are not flagged. The legacy granular
+  `set_timeline_item_audio` returns the same guidance as its failure string.
+  Contributed by @youssefm3208-jpg (#279).
+
+### Changed on landing
+
+- A `Volume` / `Level` / `Gain` / EQ write is flagged only when Resolve
+  refused it, so a build that honours the write is not told it is impossible.
+- The Fairlight-preset workaround names its Resolve 20.2.2 floor.
+
+### Tests
+
+- `tests/test_audio_fairlight_probe.py`: a refused Volume write carries the
+  ledger entry and workarounds; a Pan write is flagged even when it returns
+  True; `AudioSyncOffset` is not flagged; an honoured Volume write is not
+  flagged; the preset workaround states its version floor.
+
+### Validation
+
+- Response-shape change only; no Resolve scripting call changed, so no live
+  run was required. The Volume/Pan behaviour is the `api_truth` ledger's live
+  measurement on 21.0.0.
+
 ## What's New in v4.9.0 — bounded Media Pool import
 
 ### Added
