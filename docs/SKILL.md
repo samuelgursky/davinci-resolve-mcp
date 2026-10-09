@@ -418,6 +418,14 @@ Operating rules an agent must know:
   `iConfirmProjectClosed:true`; every write auto-backs-up and read-back
   verifies. Resolve caches open projects in memory: after patching, fully QUIT
   and relaunch Resolve or the patch will not be visible.
+- **Subtitle DB edits**: `project_db` `list_captions` / `write_captions` /
+  `check_captions` cover text, bounds, explicit per-word timing, add and delete.
+  `list_subtitle_presets` / `copy_subtitle_preset` / `set_subtitle_preset` handle
+  animated Fusion holders separately from basic `list_subtitle_styles`.
+  New subtitle writes enforce full Resolve quit BEFORE patching, snapshot the
+  SQLite DB and verify transactionally. See
+  [subtitle-track editing](guides/subtitle-track-editing.md) for selectors,
+  Word Highlight controls, dry-run examples and live-validation limits.
 - **Guards are load-bearing.** Advanced tools refuse rather than fabricate
   (silent-lie guards): a thrown "refused" error usually means wrong input space,
   log-encoded frames, or missing media — read the message before retrying.

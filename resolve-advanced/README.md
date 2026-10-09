@@ -107,6 +107,12 @@ Each dispatches on an `action`. Highlights:
   Includes `list_subtitle_styles` / `set_subtitle_style` — caption font family/size/weight/italic
   and normalised position, which the scripting API cannot touch at all. Whole-track (not
   per-caption); project must be CLOSED and Resolve fully quit + relaunched afterwards.
+  Animated presets use separate `list_subtitle_presets` / `copy_subtitle_preset` /
+  `set_subtitle_preset` actions; caption text and word timing use `list_captions` /
+  `write_captions` / `check_captions`. These SQLite writes enforce full Resolve
+  quit before editing, take unique backups and verify in a transaction.
+  See [subtitle-track editing](../docs/guides/subtitle-track-editing.md) for
+  parameters, Word Highlight controls and the pending live-render acceptance.
 - **`pipeline`** — the DB-as-truth pipeline foundation (see below).
 - **`deliverable`** — deliverable QC / compliance: `deliverable_qc` (ffprobe a render vs its spec →
   pass/fail per field), `loudness_qc` (ebur128 LUFS/true-peak/LRA), `reframe_blanking_check`,

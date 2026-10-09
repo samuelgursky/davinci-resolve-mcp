@@ -3,7 +3,7 @@
  *
  * Closes documented scripting-API gaps by direct SQLite UPDATE. Every write is gated:
  * project must be CLOSED + auto-backup + schema guard + read-back verify (db-patch.mjs).
- * Needs optional `better-sqlite3`. See the design notes design notes.
+ * Uses better-sqlite3 or the node:sqlite fallback.
  *
  * list_folders — read media-pool folders (name + color + lock)
  * rename_folder — Sm2MpFolder.Name (API has NO RenameSubFolder)
@@ -18,6 +18,7 @@
  */
 
 import { z } from 'zod';
+import { subtitleDbAction, subtitleSchemas } from '../subtitle-db.mjs';
 import { createRequire } from 'node:module';
 import { resolveDbPath as _resolveDbPathRaw, responsiveRoots, openGuarded, backup, requireClosed } from '../db-patch.mjs';
 
@@ -104,8 +105,16 @@ function selectOne(db, table, col, value) {
 export const projectDbTool = {
   name: 'project_db',
   description:
-    'Beyond-the-API live Project.db patches (plain columns) — closes gaps the scripting API cannot. Project must be CLOSED (auto-backup + schema guard + verify). Actions: list_folders, rename_folder (no RenameSubFolder API), set_folder_color, list_clips, set_clip_marks, relayout_node_graphs (whole-project Cleanup Node Graph — rewrites node x/y in every graded version Body; grade content untouched; REQUIRES full Resolve quit+relaunch after patching, it caches open projects in memory), list_subtitle_styles, set_subtitle_style (caption font family/size/italic/weight + normalised position — the scripting API exposes NO subtitle styling; whole-track, not per-caption; same quit+relaunch requirement). Needs optional better-sqlite3.',
+    'Beyond-the-API Project.db patches: list_folders, rename_folder, set_folder_color, list_clips, set_clip_marks, relayout_node_graphs, list_subtitle_styles, set_subtitle_style (basic track font/position, NOT animation presets). ' +
+    'Subtitle actions: list_subtitle_presets(projectName|projectDb, timeline?) reads linked Fusion animation presets; ' +
+    'copy_subtitle_preset(sourceProject|sourceProjectDb, sourceTimeline, sourceTrack?, projectName|projectDb, timeline, track?, replace?, inputs?); ' +
+    'set_subtitle_preset(projectName|projectDb, timeline, track?, inputs) edits Word Highlight controls: font, fontStyle, size, position:[x,y], textRed/Green/Blue/Alpha, highlightRed/Green/Blue, outlineRed/Green/Blue, outlineEnabled:0|1, thickness; RGB 0..1. ' +
+    'list_captions(projectName|projectDb, timeline, track?) returns text, start/end and words plus originalWords; ' +
+    'write_captions(same selectors, add:[{text,start,end,words:[{text,start,end}]}]?, replace:[{id,text,start,end,words}]?, delete:[id]?, templateCaptionId?) edits/adds/deletes in one transaction; all times are absolute timeline frames, end exclusive, caption frames integers, word frames may be fractional; ' +
+    'check_captions(same selectors, maxCharacters?:24) flags timing gaps/zero lengths/overflow heuristics. Subtitle track defaults to 1. ' +
+    'New subtitle writes require Resolve fully QUIT (checked through the process list) and iConfirmProjectClosed:true; dryRun:true previews without writing. Unique SQLite snapshot backup, schema guards, atomic transaction and readback. Readback is not render verification. Uses better-sqlite3 or node:sqlite (Node 22.16+ / 23.8+); automatic Windows/macOS/Linux library discovery.',
   async handler({ action, args }) {
+    if (Object.hasOwn(subtitleSchemas, action)) return subtitleDbAction(action, args, resolveDbPath);
     if (action === 'list_folders') {
       const p = listFoldersSchema.parse(args);
       const db = openGuarded(await resolveDbPath(p), { table: 'Sm2MpFolder', column: 'Name' });

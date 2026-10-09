@@ -154,7 +154,11 @@ function unwrapEffectFilters(raw) {
     if (!payload.slice(0, 4).equals(ZSTD_MAGIC)) {
       throw new Error('EffectFiltersBA 0x81 payload is not a zstd frame');
     }
-    if (!fzstd) throw new Error("EffectFiltersBA 0x81 payload is zstd; optional dep 'fzstd' is required to decode");
+    const zlib = require('node:zlib');
+    if (typeof zlib.zstdDecompressSync === 'function') {
+      return { version, marker, protobuf: zlib.zstdDecompressSync(payload) };
+    }
+    if (!fzstd) throw new Error("zstd decoding needs fzstd or Node with zlib.zstdDecompressSync");
     return { version, marker, protobuf: Buffer.from(fzstd.decompress(new Uint8Array(payload))) };
   }
   throw new Error(`unknown EffectFiltersBA payload marker 0x${marker.toString(16)}`);

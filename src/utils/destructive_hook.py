@@ -1194,6 +1194,16 @@ def destructive_op(tool_name: str) -> Callable[[Callable[..., Any]], Callable[..
 
     def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
         def _inner(action: str, params: Optional[Dict[str, Any]] = None, *args, **kwargs) -> Any:
+            if (tool_name == "timeline_item" and action == "set_property"
+                    and (params or {}).get("track_type") == "subtitle"):
+                # This API rejects subtitle generators. Refuse before versioning
+                # so an impossible write cannot create an archived timeline.
+                return {
+                    "success": False,
+                    "error": "SetProperty is unsupported on subtitle items. Use advanced "
+                             "project_db write_captions / set_subtitle_preset with Resolve fully quit.",
+                    "_versioning": {"archived": False, "skipped_reason": "unsupported_subtitle_property"},
+                }
             if lacks_native_dry_run(tool_name, action, params):
                 # An explicit dry-run request this handler would silently
                 # execute for real. Refuse before archive, state lookup, or the

@@ -6,12 +6,14 @@
  * verify. The schema map is Resolve 21 / ProjectVersion 17 (the design notes design notes);
  * the column guard refuses rather than corrupting if the schema differs.
  *
- * Needs the optional native dep `better-sqlite3` (lazy).
+ * Uses optional better-sqlite3 or node:sqlite (lazy, compatible adapter).
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import childProcess from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
@@ -41,9 +43,8 @@ export const PROJECT_LIBRARY_ROOT = path.join(os.homedir(), 'Library/Application
  * Project.db found", sending exactly the users the in-app bridge exists to serve
  * hunting for a path they have no reason to know.
  *
- * macOS-only: the sandbox container is an Apple construct. Where the free
- * edition keeps its library on Windows and Linux is NOT verified here, so
- * nothing is guessed for those platforms — pass `projectDb` explicitly there.
+ * macOS-only: the sandbox container is an Apple construct. Windows/Linux
+ * use the platform roots returned by projectLibraryRoots below.
  */
 export const LITE_DB_ROOT = path.join(
   os.homedir(),
@@ -51,7 +52,16 @@ export const LITE_DB_ROOT = path.join(
 );
 
 /** Every root searched when resolving a project by name, Studio first. */
-export const DB_ROOTS = [DISK_DB_ROOT, PROJECT_LIBRARY_ROOT, LITE_DB_ROOT];
+export function projectLibraryRoots(platform = process.platform, home = os.homedir(), env = process.env) {
+  const join = platform === 'win32' ? path.win32.join : path.posix.join;
+  const libraries = (base) => ['Resolve Project Library', 'Resolve Disk Database']
+    .map((name) => join(base, name, 'Resolve Projects'));
+  if (platform === 'win32') return libraries(join(env.APPDATA || join(home, 'AppData', 'Roaming'),
+    'Blackmagic Design', 'DaVinci Resolve', 'Support'));
+  if (platform === 'linux') return libraries(join(home, '.local', 'share', 'DaVinciResolve'));
+  return [DISK_DB_ROOT, PROJECT_LIBRARY_ROOT, LITE_DB_ROOT];
+}
+export const DB_ROOTS = projectLibraryRoots();
 
 /**
  * Filter roots to the ones that answer a readdir within `deadlineMs`.
@@ -92,7 +102,75 @@ export async function responsiveRoots(roots = DB_ROOTS, deadlineMs = 3000) {
 }
 
 export function loadSqlite() {
-  return requireBetterSqlite3('Project.db patching');
+  // A successful require alone doesn't detect a native ABI mismatch: the
+  // bindings are loaded by the constructor. Probe before selecting a backend.
+  try {
+    const Database = requireBetterSqlite3('Project.db patching');
+    const probe = new Database(':memory:');
+    probe.close();
+    return Database;
+  } catch (nativeError) {
+    // DatabaseSync shipped in 22.13, but snapshotBackup needs sqlite.backup(),
+    // added in 22.16 (23.8 on the 23 line). Without it a write would fail only
+    // after opening the database, with "backup is not a function".
+    let builtin;
+    try { builtin = require('node:sqlite'); } catch { builtin = null; }
+    if (typeof builtin?.backup !== 'function') {
+      throw new Error(`${nativeError.message} Alternatively use Node 22.16+ (or 23.8+), whose node:sqlite provides backup().`);
+    }
+    return BuiltinSqlite;
+  }
+}
+
+// Small better-sqlite3-compatible surface used by Project.db consumers. Keep
+// rows as ordinary objects and blobs as Buffers on either backend.
+export class BuiltinSqlite {
+  constructor(filename, { readonly = false } = {}) {
+    const { DatabaseSync } = require('node:sqlite');
+    this.db = new DatabaseSync(filename, { readOnly: readonly, enableForeignKeyConstraints: false });
+  }
+  exec(sql) { this.db.exec(sql); return this; }
+  close() { this.db.close(); }
+  prepare(sql) {
+    const stmt = this.db.prepare(sql);
+    const row = (r) => r && Object.fromEntries(Object.entries(r)
+      .map(([k, v]) => [k, v instanceof Uint8Array ? Buffer.from(v) : v]));
+    return { get: (...args) => row(stmt.get(...args)),
+      all: (...args) => stmt.all(...args).map(row), run: (...args) => stmt.run(...args) };
+  }
+  transaction(fn) {
+    return (...args) => {
+      this.exec('BEGIN IMMEDIATE');
+      try { const result = fn(...args); this.exec('COMMIT'); return result; }
+      catch (error) { this.exec('ROLLBACK'); throw error; }
+    };
+  }
+  backup(filename) { return require('node:sqlite').backup(this.db, filename); }
+}
+
+/** Verify the process is gone; a caller assertion alone is not sufficient. */
+export function requireResolveQuit(opts) {
+  requireClosed(opts);
+  if (resolveRunning()) throw new Error('Fully QUIT Resolve before subtitle database writes (Resolve is running).');
+}
+
+function resolveRunning() {
+  const win = process.platform === 'win32';
+  const result = childProcess.spawnSync(win ? 'tasklist.exe' : 'ps',
+    win ? ['/FO', 'CSV', '/NH'] : ['-A', '-o', 'comm='],
+    { encoding: 'utf8', timeout: 5000, windowsHide: true });
+  if (result.error || result.status !== 0) throw new Error('Cannot verify Resolve is quit; refusing database write.');
+  return result.stdout.split(/\r?\n/).some((line) => win
+    ? /^"Resolve\.exe",/i.test(line.trim())
+    : /(^|\/)resolve(?:\.exe)?$/i.test(line.trim()));
+}
+
+/** SQLite snapshot includes committed WAL pages; never overwrite an older backup. */
+export async function snapshotBackup(dbPath) {
+  const filename = `${dbPath}.subtitle-${Date.now()}-${randomUUID()}.bak`;
+  const db = openGuarded(dbPath);
+  try { await db.backup(filename); } finally { db.close(); }
+  return filename;
 }
 
 /**
@@ -137,7 +215,7 @@ export function resolveDbPath({ projectDb, projectName, roots, skippedRoots = []
           'are invisible until macOS unwedges it. '
         : '') +
       'If Resolve keeps its projects elsewhere — a relocated library, a network/Postgres ' +
-      'database, or the free edition on Windows/Linux — pass projectDb with the full path.',
+      'database — pass projectDb with the full local SQLite path (Postgres is not a Project.db file).',
     );
   }
   if (hits.length > 1) {
@@ -153,19 +231,22 @@ export function openGuarded(dbPath, { writable = false, table, column } = {}) {
   const Database = loadSqlite();
   if (!fs.existsSync(dbPath)) throw new Error(`Project.db not found: ${dbPath}`);
   const db = new Database(dbPath, { readonly: !writable });
-  if (table && column) {
-    // Quote the table identifier — Resolve tables like "ListMgt::LmVersion" contain "::" which is an
-    // illegal token unquoted (the PRAGMA would fail with "unrecognized token: :").
-    const cols = db
-      .prepare(`PRAGMA table_info("${String(table).replace(/"/g, '""')}")`)
-      .all()
-      .map((c) => c.name);
-    if (!cols.includes(column)) {
-      db.close();
-      throw new Error(`${table}.${column} not found — unsupported Project.db schema/version; refusing to patch.`);
+  try {
+    if (table && column) {
+      // Quote identifiers: Resolve table names can contain "::".
+      const cols = db
+        .prepare(`PRAGMA table_info("${String(table).replace(/"/g, '""')}")`)
+        .all()
+        .map((c) => c.name);
+      if (!cols.includes(column)) {
+        throw new Error(`${table}.${column} not found — unsupported Project.db schema/version; refusing to patch.`);
+      }
     }
+    return db;
+  } catch (error) {
+    db.close();
+    throw error;
   }
-  return db;
 }
 
 export function backup(dbPath) {
