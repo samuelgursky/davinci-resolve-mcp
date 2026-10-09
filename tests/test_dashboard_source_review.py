@@ -1,17 +1,20 @@
 """Source review uses existing correction persistence and analyzed frames."""
 import json
+from contextlib import ExitStack
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
 from src import analysis_dashboard as panel
-from src.utils import analysis_store
+from src.utils import analysis_store, timeline_brain_db
 
 
 class SourceReviewTest(unittest.TestCase):
     def test_selection_and_rating_survive_reload_without_changing_notes(self):
-        with tempfile.TemporaryDirectory() as temp:
+        with tempfile.TemporaryDirectory() as temp, ExitStack() as cleanup:
+            # Cached SQLite handles must close before Windows removes the directory.
+            cleanup.callback(timeline_brain_db.close, temp)
             folder = Path(temp) / 'clips' / 'sample'
             folder.mkdir(parents=True)
             report = {'clip': {'clip_id': 'sample', 'clip_name': 'Sample',
