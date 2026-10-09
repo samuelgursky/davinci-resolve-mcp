@@ -1,6 +1,6 @@
 {
   "name": "davinci-resolve-mcp",
-  "version": "4.9.3",
+  "version": "4.10.0",
   "description": "NPM bootstrapper for the DaVinci Resolve MCP Server.",
   "license": "MIT",
   "author": "Samuel Gursky <samgursky@gmail.com>",

@@ -2,6 +2,55 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.10.0 — subtitle caption and preset editing in saved projects
+
+### Added
+
+- **Subtitle editing through `project_db`.** Resolve's scripting API can
+  generate and list subtitles but cannot change caption text, word timing or
+  a track's animation controls (`TimelineItem.SetProperty` does not reach
+  them). Six new actions edit them in a saved local project's `Project.db`:
+  - `list_captions`, `check_captions` and `write_captions`: caption text,
+    frame bounds and explicit per-word timing; add, replace and delete in one
+    transaction, preserving unknown fields and the original AI words.
+  - `list_subtitle_presets`, `copy_subtitle_preset` and
+    `set_subtitle_preset`: clone a compatible saved animation preset, and edit
+    Word Highlight's font, position, text / highlight / outline colours and
+    outline thickness.
+- Writes require Resolve **fully quit** (checked through the process list,
+  plus `iConfirmProjectClosed:true`), take a unique SQLite snapshot backup
+  including committed WAL pages, refuse unsupported schemas, and run the edit
+  and its readback in one transaction. `verified:true` means database
+  readback, not a render. SQLite uses `better-sqlite3`, or `node:sqlite` on
+  Node 22.16+ / 23.8+. See `docs/guides/subtitle-track-editing.md`.
+- A live `TimelineItem.SetProperty` on a subtitle item is refused before the
+  automatic timeline archive, with a pointer to these actions.
+
+Contributed by @sidevconcept (#273).
+
+### Changed during review
+
+- **No writes while Resolve runs.** An opt-in to write a project that is not
+  currently loaded was removed. Measured on Studio 19.1.3.7: a project loaded
+  earlier in the session is served from memory when loaded again, so a disk
+  write to it is not shown, and saving after editing the same rows
+  overwrites it. A fresh launch does read it.
+- **Text colour.** The writer set the Word Highlight macro's `Clone` colour
+  controls, which do not render, leaving the template's default pale yellow;
+  it now writes the Text+ shading inputs (`Red1`/`Green1`/`Blue1`/`Alpha1`).
+- **Handle release.** A guarded database is closed when a schema query throws,
+  a likely cause of the slow tests reported on Windows.
+
+### Validation
+
+- Contributor-validated on Studio 21.1.0.17 / Windows: a synthetic caption
+  edit, full quit, database write, relaunch and burn-in render passed on all
+  630 decoded frames, with white base text, yellow highlighting and exact
+  word transitions, checked against a natively configured control. Not
+  rendered on this project's 19.1.3.7 host.
+- Offline: Node advanced suite 1,036 tests / 0 failed in a clean worktree;
+  Python suite green.
+
 ## What's New in v4.9.3 — .drp bin registry for two or more bins; broader temp-root guard tests
 
 ### Fixed
