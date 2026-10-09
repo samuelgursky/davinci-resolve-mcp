@@ -440,8 +440,16 @@ def _ensure_path_includes_standard_tool_dirs() -> None:
     parts = current.split(os.pathsep) if current else []
     existing = set(parts)
     additions = [d for d in candidates if os.path.isdir(d) and d not in existing]
-    if additions:
-        os.environ["PATH"] = os.pathsep.join(additions + parts) if parts else os.pathsep.join(additions)
+    # The script dir must come first even when it is already on PATH. An
+    # activated venv puts it there, but prepending the other missing dirs in
+    # front of it would let /opt/homebrew/bin or /usr/local/bin shadow it
+    # (reported on macOS in #273's validation, where Homebrew was not yet on
+    # the inherited PATH).
+    script_dir = candidates[0]
+    front = [script_dir] if (script_dir in existing or script_dir in additions) else []
+    ordered = front + [d for d in additions if d != script_dir] + [p for p in parts if p != script_dir]
+    if ordered != parts:
+        os.environ["PATH"] = os.pathsep.join(ordered)
 
 
 _ensure_path_includes_standard_tool_dirs()

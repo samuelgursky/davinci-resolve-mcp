@@ -54,6 +54,23 @@ class InterpreterScriptDirOnPathTests(unittest.TestCase):
         for earlier in parts[: parts.index(script_dir)]:
             self.assertNotIn(earlier, ("/usr/local/bin", "/opt/homebrew/bin"))
 
+    def test_an_already_listed_script_dir_stays_ahead_of_added_dirs(self) -> None:
+        """An activated venv is already on PATH; the system dirs added later
+        must not be prepended in front of it. The test above only catches this
+        on a host whose PATH lacks Homebrew, so pin PATH here (reported from a
+        macOS run in #273)."""
+        from unittest import mock
+        from src.utils import media_analysis
+
+        script_dir = os.path.dirname(os.path.abspath(sys.executable))
+        for path in ([script_dir, "/usr/bin", "/bin"], ["/usr/bin", script_dir, "/bin"]):
+            with self.subTest(path=path), mock.patch.dict(os.environ, {"PATH": os.pathsep.join(path)}):
+                media_analysis._ensure_path_includes_standard_tool_dirs()
+                parts = os.environ["PATH"].split(os.pathsep)
+                self.assertEqual(parts[0], script_dir)
+                for kept in path:
+                    self.assertIn(kept, parts)
+
     def test_the_setup_is_idempotent(self) -> None:
         """It runs at import and can be called again; a PATH that grows by one
         entry per call would eventually be the bug."""

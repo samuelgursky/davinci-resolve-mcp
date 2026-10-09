@@ -2,6 +2,38 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.10.1 — the server's own tools stay first on PATH; portable runtime tests
+
+### Fixed
+
+- **A tool installed alongside the server could be shadowed by an older
+  system copy.** At import, `media_analysis` adds the interpreter's script
+  directory and the standard tool directories (`/opt/homebrew/bin`,
+  `/usr/local/bin`, …) to `PATH`, meaning to put the server's own venv first.
+  When the venv was already on `PATH` (an activated environment) but the
+  Homebrew directories were not, the missing directories were prepended in
+  front of it, so a `whisper` or `ffmpeg` in `/opt/homebrew/bin` won over the
+  one installed with the server. The venv's script directory now always comes
+  first; every other entry is kept, and the call stays idempotent. Reported
+  by @sidevconcept from a macOS validation run (#273); the existing test only
+  caught it on a host whose `PATH` lacked Homebrew.
+
+### Tests
+
+- `tests/test_child_process_text_encoding.py`: with `PATH` pinned to the venv
+  plus system directories, the venv stays first, whether it was listed first
+  or in the middle. Fails on v4.10.0.
+- `tests/test_headless_runtime.py` and `tests/test_dashboard_source_review.py`
+  (@sidevconcept, #282, related to #278): the macOS process-table fixtures pin
+  their platform instead of following the test host, a launch-path assertion
+  normalizes separators, and the source-review test closes its cached SQLite
+  connection before its temporary directory is removed, which Windows
+  requires. Test-only.
+
+### Validation
+
+- Offline suite green. No Resolve scripting call changed.
+
 ## What's New in v4.10.0 — subtitle caption and preset editing in saved projects
 
 ### Added
