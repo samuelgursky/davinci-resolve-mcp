@@ -113,6 +113,17 @@ def main():
         return 1
     version = resolve.GetVersionString()
     print(f"Resolve {version} / {resolve.GetProductName()}")
+    # createEmptyProject authors the Resolve 21 project format. A 19.x host
+    # refuses it at ImportProject, so every case would read as a FAIL that says
+    # nothing about the authoring tier (measured on 19.1.3.7, 2026-10-09).
+    try:
+        major = int(str(version).split(".")[0])
+    except ValueError:
+        major = None
+    if major is not None and major < 21:
+        print(f"CANNOT RUN: this harness authors Resolve 21 projects and Resolve {version} "
+              "cannot import them. Run it against a Resolve 21.x host. Nothing was changed.")
+        return 2
     pm = resolve.GetProjectManager()
     original = pm.GetCurrentProject()
     original_name = original.GetName() if original else None

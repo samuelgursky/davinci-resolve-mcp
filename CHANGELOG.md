@@ -2,6 +2,35 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.10.2 — place_fusion_title measured on another build; the .drp harness says when it can't run
+
+### Documentation
+
+- **`place_fusion_title` is inert on the free edition 21.1.0 too.** The
+  harness's `RT_TITLE` project was built offline and imported into free
+  Resolve 21.1.0 through the Project Manager. A second into the title the
+  viewer was black, while a `place_generator` SMPTE Color Bar project built and
+  imported the same way rendered. `vendor/drp-format/README.md` now lists the
+  builds measured: inert on Studio 21.0.4.5 and free 21.1.0, with one
+  contributor-reported visible render on Studio 21.0.3.7 (#273 thread) that has
+  not been reproduced here. The harness keeps `place_fusion_title` as
+  known-broken.
+- `docs/process/release-process.md`: the round-trip harness needs a Resolve
+  21.x host, and external scripting cannot drive the free edition. When no
+  21.x Studio is available, the release notes say the harness was not run.
+
+### Changed
+
+- `tests/live_drp_roundtrip_verification.py` stops with `CANNOT RUN` (exit 2)
+  on a Resolve older than 21, instead of reporting every case as a failure.
+  It authors the Resolve 21 project format, which 19.1.3.7 refuses at
+  `ImportProject` (all six cases failed there before any frame was checked).
+
+### Validation
+
+- No server code changed; offline suite green. The free 21.1.0 result is a
+  manual import and viewer check, not a harness run.
+
 ## What's New in v4.10.1 — the server's own tools stay first on PATH; portable runtime tests
 
 ### Fixed

@@ -53,7 +53,7 @@ and `.../resolve-authoring-completion.md`.
 **Place elements (track-targeted — the #74 bypass, offline)**
 | Action | What it does |
 |---|---|
-| `place_fusion_title` | ⚠️ **INERT on 21.0.4.5 — placed but not rendered, see below.** Text+ on a chosen track. Options: `text, font, style, size, vJustify, hJustify, color:{r,g,b}`, `trackIndex`, `startFrame`, `durationFrames` |
+| `place_fusion_title` | ⚠️ **INERT on Studio 21.0.4.5 and free 21.1.0 — placed but not rendered, see below** (one contributor-reported visible render on Studio 21.0.3.7). Text+ on a chosen track. Options: `text, font, style, size, vJustify, hJustify, color:{r,g,b}`, `trackIndex`, `startFrame`, `durationFrames` |
 | `place_generator` | built-in generator (`generatorName`, e.g. "Solid Color") on a chosen track |
 | `place_transition` | cross-dissolve at an abutting cut (`track`, `atFrame`, `durationFrames`) — clips need handle media |
 
@@ -144,6 +144,14 @@ Selector's current target (V1 in practice), which no API can read or set.
 > (the bundled clip element is structurally identical to a real one: same tags, size differing
 > only by text length) and DbId rewriting (the comp blobs contain no DbId references). Root cause
 > open. Use the live nested-timeline route until this is fixed.
+>
+> **Builds measured so far.** Inert on Studio 21.0.4.5 (above) and on the free edition 21.1.0
+> (2026-10-09: the harness's `RT_TITLE` project imported through the Project Manager, viewer
+> black a second into the title, while a `place_generator` SMPTE Color Bar project built and
+> imported the same way rendered). A contributor's round-trip harness run on Studio 21.0.3.7 /
+> macOS reported the title **visible** (UNEXPECTED PASS, PR #273 thread); that result is theirs
+> and has not been reproduced here. The live harness cannot run on a 19.x host — 19.1.3 refuses
+> the Resolve 21 project format at `ImportProject` — so only a 21.x Resolve can add data points.
 >
 > **The defect is specific to the Fusion-comp path, not to clone-a-template.** `place_generator`,
 > built the same way, works: an imported Solid Color shows a populated `Generator - Solid Color`

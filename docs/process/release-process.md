@@ -153,6 +153,15 @@ that only diffs `GetStart()`/`GetDuration()` will call that green. Known-broken
 cases are declared in the harness rather than skipped, so a fix reports
 `UNEXPECTED PASS` and fails until the docs describing it are updated.
 
+The harness needs a **Resolve 21.x host**: it authors the Resolve 21 project
+format, which 19.x refuses at `ImportProject`, so on 19.x it stops with
+`CANNOT RUN` (exit 2) instead of reporting every case as a failure. External
+scripting is Studio-only, so it also cannot drive the free edition. When no
+21.x Studio is available, say in the release notes that the harness was not
+run and why; a manual import into the free edition (as done for
+`place_fusion_title` on 21.1.0) is evidence for that one case, not a harness
+pass.
+
 The same rule generalises: **"the file round-trips" and "Resolve honours it" are
 different claims.** Only a live import establishes the second one. Do not write
 "verified live" in a doc unless a runnable command produced that result.
