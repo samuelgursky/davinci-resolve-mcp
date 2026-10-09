@@ -18,6 +18,7 @@ const inputs = z.object({
   font: z.string().min(1).optional(), fontStyle: z.string().min(1).optional(),
   size: z.number().positive().max(1).optional(), position: z.tuple([rgb, rgb]).optional(),
   textRed: rgb.optional(), textGreen: rgb.optional(), textBlue: rgb.optional(), textAlpha: rgb.optional(),
+  textFillMode: z.literal('solid').optional(),
   highlightRed: rgb.optional(), highlightGreen: rgb.optional(), highlightBlue: rgb.optional(),
   outlineRed: rgb.optional(), outlineGreen: rgb.optional(), outlineBlue: rgb.optional(),
   outlineEnabled: z.union([z.literal(0), z.literal(1)]).optional(), thickness: z.number().min(0).max(1).optional(),

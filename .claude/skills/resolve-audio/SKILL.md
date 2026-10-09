@@ -25,6 +25,24 @@ on target; on `ott_dialogue_gated` it deliberately does not trim, because dialog
 figure being graded. Flags (`loudness_off_target`, `true_peak_over`, `clipped`) come back
 with remedies and are never auto-corrected — report them, do not paper over them.
 
+## Live subtitle effects
+
+Discover installed factory titles/subtitle presets with
+`timeline_ai.list_title_presets`. For subtitle-track effects use live
+`timeline_ai.set_subtitle_preset` with a preset name or full template ID; omit
+`preset` to adjust the current effect. Common literal `inputs` cover font/style,
+size/position and text RGBA. Highlight/outline mappings are Word Highlight-specific.
+Unmapped or connected/animated controls are refused. Other installed subtitle
+presets are captured natively in a temporary title timeline and applied through
+DRT interchange; the original edit remains recoverable. Ordinary Fusion titles
+use `timeline.insert_fusion_title` with the full template ID, then scoped
+`fusion_comp` probes/input writes. Keep Resolve open and inspect native rendered
+frames. Do not route routine effects to Project.db. Unbundled dry runs need an
+existing `preset_reference` to avoid live capture. Caption text/timing corrections
+can use live UI; direct DB maintenance remains offline. See
+`docs/guides/title-library-automation.md` and
+`docs/guides/subtitle-track-editing.md`.
+
 ## Two servers — plan/measure offline, apply live
 
 | Job | Server | Tools |

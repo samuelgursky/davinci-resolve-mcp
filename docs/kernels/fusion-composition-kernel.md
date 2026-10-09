@@ -1,5 +1,14 @@
 # Fusion Composition Kernel
 
+Subtitle-track animation holders do not enumerate as caption Fusion comps.
+For installed subtitle presets and common font, colour, size and position edits,
+use live `timeline_ai.set_subtitle_preset`; Word Highlight also has mapped
+highlight/outline controls. Discover presets with `timeline_ai.list_title_presets`.
+See [subtitle-track editing](../guides/subtitle-track-editing.md) and
+[title library automation](../guides/title-library-automation.md).
+Keep Resolve open. Generic caption `SetProperty`/`GetFusionCompByIndex` is not
+the route, and direct Project.db patching is reserved for explicit offline work.
+
 The Fusion Composition kernel expands `fusion_comp` into a safer graph
 inspection, tool creation, input write, connection, and boundary-report layer
 for timeline item Fusion comps and active Fusion page comps.

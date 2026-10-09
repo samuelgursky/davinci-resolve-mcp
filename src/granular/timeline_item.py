@@ -1392,7 +1392,8 @@ def ti_set_property(property_name: str, property_value: Any, item_index: int = 0
     """
     if track_type == "subtitle":
         return {"success": False, "error": "SetProperty is unsupported on subtitle items. "
-                "Use advanced project_db write_captions / set_subtitle_preset with Resolve fully quit."}
+                "For effects use live timeline_ai set_subtitle_preset with Resolve open. "
+                "For caption text/timing use the live UI, or advanced project_db write_captions on a fully quit project."}
     item, err = _get_timeline_item(track_type, track_index, item_index)
     if err:
         return err

@@ -14,8 +14,9 @@ const { wrapEffectFilters, unwrapEffectFilters } = require('../vendor/drp-format
 const { decodePreset, setPresetInputs, TEMPLATE } = require('../vendor/drp-format/subtitle-preset.js');
 const { encodeKeyedDict } = require('../vendor/drp-format/keyed-dict.js');
 
-function compBlob({ trailingSeparator = true } = {}) {
-  const inner = Buffer.from('{ Template = TextPlus { Inputs = { Font = Input { Value = "Inter", }, Green1 = Input { Value = 0.92, }, Blue1 = Input { Value = 0.52, }, Center = Input { Value = { 0.5, 0.4 }, }, HOutlineThickness = Input { Value = 0.02, }, StyledText = Input { SourceOp = "Animation", Source = "Value", }' + (trailingSeparator ? ',' : '') + ' }, UserControls = { Font = { LINKS_Name = "Font", }, }, }, Other = TextPlus { Inputs = { Font = Input { Value = "Keep me", }, }, }, }\0');
+function compBlob({ trailingSeparator = true, gradient = false } = {}) {
+  const fill = gradient ? 'Type1 = Input { Value = 2, }, ShadingGradient1 = Input { Value = Gradient { Colors = { [0] = { 0.732, 0.732, 0.732, 1 }, [1] = { 1, 1, 1, 1 }, }, }, }, ' : '';
+  const inner = Buffer.from('{ Template = TextPlus { Inputs = { '+fill+'Font = Input { Value = "Inter", }, Green1 = Input { Value = 0.92, }, Blue1 = Input { Value = 0.52, }, Center = Input { Value = { 0.5, 0.4 }, }, HOutlineThickness = Input { Value = 0.02, }, StyledText = Input { SourceOp = "Animation", Source = "Value", }' + (trailingSeparator ? ',' : '') + ' }, UserControls = { Font = { LINKS_Name = "Font", }, }, }, Other = TextPlus { Inputs = { Font = Input { Value = "Keep me", }, }, }, }\0');
   const innerLen = Buffer.alloc(4); innerLen.writeUInt32LE(inner.length);
   const data = Buffer.concat([Buffer.from(`Composition { CustomData = { TEMPLATE_ID = "${TEMPLATE}" }, Compressed = true, }\0`), innerLen, zlib.deflateSync(inner)]);
   const outer = encodeKeyedDict({ entries: [{ key: '0_data', type: 12, value: data.toString('hex') }] });
@@ -113,6 +114,18 @@ test('adding absent colour controls preserves Lua separators when the last input
   assert.match(graph, /StyledText = Input \{ SourceOp = "Animation", Source = "Value", }\s*}/);
   assert.equal(decodePreset(out).inputs.textRed, 1);
   assert.equal(decodePreset(out).inputs.highlightBlue, 0);
+});
+
+test('gradient colour edits cannot falsely report visible RGB; solid replacement is explicit', () => {
+  const blob = compBlob({gradient:true});
+  assert.equal(decodePreset(blob).inputs.textFillMode,'gradient');
+  assert.throws(() => setPresetInputs(blob,{textRed:0.15}),/RGB would be invisible/);
+  const edited = setPresetInputs(blob,{textRed:0.15,textFillMode:'solid'});
+  assert.equal(decodePreset(edited).inputs.textFillMode,'solid');
+  assert.equal(decodePreset(edited).inputs.textRed,0.15);
+  const outer = zlib.inflateSync(edited.subarray(4));
+  const offset=outer.indexOf(0,outer.indexOf('Compressed = true, }'))+1;
+  assert.match(zlib.inflateSync(outer.subarray(offset+4)).toString(),/ShadingGradient1 = Input \{ Value = Gradient/);
 });
 
 test('text colour edits update TextPlus shading rather than its macro Clone controls', () => {

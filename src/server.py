@@ -48,6 +48,10 @@ from src.utils.resolve211_blanking import validate_blanking
 from src.utils.resolve211_alignment import auto_align
 from src.utils.resolve211_dctl import native_dctl_result
 from src.utils.resolve211_normalization import normalize_audio
+from src.utils.subtitle_live import set_subtitle_preset as _set_live_subtitle_preset
+from src.utils.title_library import list_title_presets as _list_installed_title_presets
+from src.utils.title_controls import title_text_targets as _title_text_targets
+from src.utils.title_controls import title_text_keys as _title_text_keys
 from src.utils.resolve211_edits import validate_edit_options, validate_transition_options, transition_result
 
 # Platform-specific Resolve paths
@@ -5999,13 +6003,16 @@ def _timeline_get_title_text(tl, p: Dict[str, Any]) -> Dict[str, Any]:
         try:
             if int(item.GetFusionCompCount() or 0) > 0:
                 comp = item.GetFusionCompByIndex(1)
-                tools = comp.GetToolList(False, "TextPlus") if comp else None
-                for key in (tools or {}):
-                    value = tools[key].GetInput("StyledText")
-                    if isinstance(value, str) and value.strip():
-                        text = value
-                        text_key = "StyledText"
-                        source = "fusion_comp"
+                tools = comp.GetToolList(False) if comp else None
+                for tool in (tools or {}).values():
+                    for input_key in _title_text_keys(tool):
+                        value = tool.GetInput(input_key)
+                        if isinstance(value, str) and value.strip():
+                            text = value
+                            text_key = input_key
+                            source = "fusion_comp"
+                            break
+                    if text is not None:
                         break
         except Exception as exc:
             values.append({"fusion_comp_error": str(exc)})
@@ -6091,12 +6098,14 @@ def _timeline_set_title_text(tl, p: Dict[str, Any]) -> Dict[str, Any]:
         try:
             if int(item.GetFusionCompCount() or 0) > 0:
                 comp = item.GetFusionCompByIndex(1)
-                tools = comp.GetToolList(False, "TextPlus") if comp else None
-                for tool_key in (tools or {}):
-                    tool = tools[tool_key]
-                    tool.SetInput("StyledText", text)
-                    confirmed = tool.GetInput("StyledText")
-                    rec = {"mode": "fusion_comp", "property_key": "StyledText",
+                targets, skipped = _title_text_targets(comp) if comp else ([], [])
+                attempts.extend({"mode": "fusion_comp", "success": False, **row} for row in skipped)
+                for target in targets:
+                    tool, input_key = target["tool"], target["input"]
+                    tool.SetInput(input_key, text)
+                    confirmed = tool.GetInput(input_key)
+                    rec = {"mode": "fusion_comp", "property_key": input_key,
+                           "tool_name": target["tool_name"],
                            "success": confirmed == text}
                     if confirmed != text:
                         rec["readback"] = _ser(confirmed)
@@ -6105,7 +6114,8 @@ def _timeline_set_title_text(tl, p: Dict[str, Any]) -> Dict[str, Any]:
                         return {
                             "success": True,
                             "timeline_item_id": _safe_timeline_item_id(item),
-                            "property_key": "StyledText",
+                            "property_key": input_key,
+                            "tool_name": target["tool_name"],
                             "mode": "fusion_comp",
                             "attempts": attempts,
                         }
@@ -6114,8 +6124,8 @@ def _timeline_set_title_text(tl, p: Dict[str, Any]) -> Dict[str, Any]:
 
     return {
         "success": False,
-        "error": "SetProperty did not succeed and the Fusion-comp StyledText fallback found no "
-        "TextPlus tool to write; run title_property_scan, copy a real key from `properties`, "
+        "error": "SetProperty did not succeed and the Fusion-comp fallback found no supported "
+        "literal title text input; run title_property_scan, copy a real key from `properties`, "
         "and pass `property_key` (see `attempts` for diagnostics).",
         "attempts": attempts,
     }
@@ -25968,6 +25978,7 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         — Undocumented generator/Text+ GetProperty map on an item (keys are not in public API docs).
       set_title_text(clip_id|..., text, property_key?, as_styled_xml?, try_plain_first?, try_heuristic_keys?, readback?) -> {success, property_key?, attempts}
         — SetProperty on a heuristic or explicit key; tries plain string then minimal styled XML unless as_styled_xml=True.
+        MultiText fallback was validated only on Resolve Studio 21.1.0.17 / Windows.
         # example: action_help(name='<action_name>')
       bulk_set_title_text(ops, ...) -> {results, op_count}  — list of set_title_text payloads (same params per op).
       create_compound_clip(clip_ids, info?) -> {success}
@@ -27063,13 +27074,36 @@ def timeline_ai(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
       create_subtitles(settings?, background?) -> {success | job_id}  — auto-caption from audio.
         These are long ops: background=true returns a job_id immediately; poll
         resolve_control(action="job_status", params={"job_id": ...}).
+      list_title_presets(templates_archive?) -> installed native titles/subtitle presets (inventory, not live acceptance).
+      set_subtitle_preset(track?, inputs?, preset?, preset_reference?, reference_track?, revision_name?, dry_run?, templates_archive?)
+        Apply an installed subtitle preset and common literal font/style, size,
+        position and text RGBA controls with Resolve kept open. Word Highlight
+        also supports mapped highlight/outline colours and thickness. Native
+        export -> codec -> native import as a selected revision; original retained.
+        Word Highlight and Lollipop have bundled references; other installed
+        presets are captured natively in a temporary title timeline. Full IDs
+        disambiguate duplicate names. Unknown/connected controls are refused.
+        Gradient/image text colour changes require explicit inputs.textFillMode="solid";
+        dormant RGB writes otherwise refuse rather than falsely claim visible edits.
+        Omit preset to adjust the current effect.
+        preset_reference accepts an alternate native DRT. Readback/inventory are
+        verified for track counts, item names/bounds, media IDs and preset controls.
+        Markers, grades, other Fusion comps and audio content are not verified;
+        inspect rendered frames separately. Successful staging exports are removed;
+        failure results report retained staging for diagnosis. Unbundled dry runs need an
+        existing preset_reference to avoid live capture. Never patches Project.db.
       detect_scene_cuts(background?) -> {success | job_id}
       analyze_dolby_vision(clip_ids?, analysis_type?, background?) -> {success | job_id}
       grab_still() -> {success}
       grab_all_stills(source?) -> {count}
     """
     p = _params(params)
-    _, tl, err = _get_tl()
+    if action == "list_title_presets":
+        try:
+            return _list_installed_title_presets(p.get("templates_archive"))
+        except (OSError, ValueError) as exc:
+            return _err(str(exc))
+    proj, tl, err = _get_tl()
     if err:
         return err
 
@@ -27077,6 +27111,10 @@ def timeline_ai(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
         return _run_maybe_background(
             "timeline_ai.create_subtitles", p, lambda: _safe_create_subtitles(tl, p)
         )
+    elif action == "set_subtitle_preset":
+        # Match the safety decorator's boolean interpretation before any capture/import.
+        return _set_live_subtitle_preset(get_resolve(), proj, tl,
+                                        {**p, "dry_run": _coerce_bool(p.get("dry_run", p.get("dryRun")))}, _resolve_safe_dir)
     elif action == "detect_scene_cuts":
         return _run_maybe_background(
             "timeline_ai.detect_scene_cuts", p, lambda: {"success": bool(tl.DetectSceneCuts())}
@@ -27101,7 +27139,7 @@ def timeline_ai(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
     elif action == "grab_all_stills":
         stills = tl.GrabAllStills(p.get("source", 1))
         return {"count": len(stills) if stills else 0}
-    return _unknown(action, ["create_subtitles","detect_scene_cuts","analyze_dolby_vision","grab_still","grab_all_stills"])
+    return _unknown(action, ["list_title_presets","create_subtitles","set_subtitle_preset","detect_scene_cuts","analyze_dolby_vision","grab_still","grab_all_stills"])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

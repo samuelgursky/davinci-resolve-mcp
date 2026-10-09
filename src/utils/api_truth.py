@@ -1735,7 +1735,14 @@ API_TRUTH: List[Dict[str, Any]] = [
                        "list_subtitle_presets / copy_subtitle_preset, or "
                        "set_subtitle_preset for named Word Highlight inputs "
                        "inside the nested zlib tool section. These new actions "
-                       "check that Resolve is fully quit BEFORE writing. "
+                       "check that Resolve is fully quit BEFORE database writing. "
+                       "For live Word Highlight effects instead use timeline_ai "
+                       "set_subtitle_preset: native DRT export, patch the exported "
+                       "holder, and native import as a recoverable timeline revision. "
+                       "On Studio 21.1.0.17/Windows (2026-10-08), colour, size and "
+                       "position changed visibly without quitting Resolve; clip/caption "
+                       "bounds and media IDs matched the original. This does not add a "
+                       "native subtitle setter or establish other effects/builds. "
                        "Holder Duration is preserved; its rendering semantics "
                        "and per-caption preset layouts remain unverified.",
         "tags": ["missing-method", "subtitle", "style", "preset"],

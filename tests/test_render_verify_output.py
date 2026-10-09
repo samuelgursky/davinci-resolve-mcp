@@ -199,8 +199,14 @@ class SetTitleTextFusionFallbackTest(unittest.TestCase):
     comp-lock render bug — and confirms by reading the input back."""
 
     def test_falls_back_to_fusion_comp_write(self):
-        store = {}
+        store = {"StyledText": "ORIGINAL TEXT"}
         tool = mock.Mock()
+        tool.GetAttrs.return_value = {"TOOLS_RegID": "TextPlus", "TOOLS_Name": "Title"}
+        text_input = mock.Mock()
+        text_input.GetAttrs.return_value = {"INPS_ID": "StyledText"}
+        text_input.GetExpression.return_value = None
+        text_input.GetConnectedOutput.return_value = None
+        tool.GetInputList.return_value = {1: text_input}
         tool.SetInput.side_effect = lambda k, v: store.__setitem__(k, v)
         tool.GetInput.side_effect = lambda k: store.get(k)
         comp = mock.Mock()
@@ -240,6 +246,12 @@ class GetTitleTextFusionFallbackTest(unittest.TestCase):
 
     def test_falls_back_to_fusion_comp(self):
         tool = mock.Mock()
+        tool.GetAttrs.return_value = {"TOOLS_RegID": "TextPlus", "TOOLS_Name": "Title"}
+        text_input = mock.Mock()
+        text_input.GetAttrs.return_value = {"INPS_ID": "StyledText"}
+        text_input.GetExpression.return_value = None
+        text_input.GetConnectedOutput.return_value = None
+        tool.GetInputList.return_value = {1: text_input}
         tool.GetInput.return_value = "COMP FALLBACK TEXT"
         comp = mock.Mock()
         comp.GetToolList.return_value = {1: tool}

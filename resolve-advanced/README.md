@@ -104,6 +104,10 @@ Each dispatches on an `action`. Highlights:
   confirm_token for the batch, timeline archived first, full per-clip report to a file).
   Live-validated 2026-09-08: 878-clip conform, 254 grades carried, 0 failures.
 - **`project_read` / `project_db`** — read/patch the Resolve project DB (SQLite or Postgres).
+  For routine live subtitle preset changes use the Python server's
+  `timeline_ai.set_subtitle_preset` instead: Resolve stays open and the original
+  timeline is retained beside the selected revision. The full-quit requirement
+  below applies to direct DB patching, not all subtitle automation.
   Includes `list_subtitle_styles` / `set_subtitle_style` — caption font family/size/weight/italic
   and normalised position, which the scripting API cannot touch at all. Whole-track (not
   per-caption); project must be CLOSED and Resolve fully quit + relaunched afterwards.
@@ -112,7 +116,7 @@ Each dispatches on an `action`. Highlights:
   `write_captions` / `check_captions`. These SQLite writes enforce full Resolve
   quit before editing, take unique backups and verify in a transaction.
   See [subtitle-track editing](../docs/guides/subtitle-track-editing.md) for
-  parameters, Word Highlight controls and the pending live-render acceptance.
+  parameters, common subtitle controls and measured live-render acceptance.
 - **`pipeline`** — the DB-as-truth pipeline foundation (see below).
 - **`deliverable`** — deliverable QC / compliance: `deliverable_qc` (ffprobe a render vs its spec →
   pass/fail per field), `loudness_qc` (ebur128 LUFS/true-peak/LRA), `reframe_blanking_check`,

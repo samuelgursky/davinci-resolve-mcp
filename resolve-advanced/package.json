@@ -15,6 +15,7 @@
   "files": [
     "server/**/*.mjs",
     "vendor/**",
+    "assets/**",
     "README.md",
     "LICENSE"
   ],

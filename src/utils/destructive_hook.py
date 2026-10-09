@@ -187,6 +187,7 @@ DESTRUCTIVE_ACTIONS_BY_TOOL: Dict[str, FrozenSet[str]] = {
         "detect_scene_cuts",
         "analyze_dolby_vision",
         "create_subtitles",
+        "set_subtitle_preset",
     }),
     "timeline_item": frozenset({
         "delete_keyframe",
@@ -368,6 +369,7 @@ NATIVE_DRY_RUN_ACTIONS: frozenset = frozenset({
     ("timeline", "apply_cuts"),
     ("timeline", "ripple_insert"),
     ("timeline_ai", "create_subtitles"),
+    ("timeline_ai", "set_subtitle_preset"),
     ("script_plugin", "safe_install_extension"),
     ("script_plugin", "safe_remove_extension"),
     ("project_manager", "safe_project_delete"),
@@ -1200,8 +1202,9 @@ def destructive_op(tool_name: str) -> Callable[[Callable[..., Any]], Callable[..
                 # so an impossible write cannot create an archived timeline.
                 return {
                     "success": False,
-                    "error": "SetProperty is unsupported on subtitle items. Use advanced "
-                             "project_db write_captions / set_subtitle_preset with Resolve fully quit.",
+                    "error": "SetProperty is unsupported on subtitle items. For effects use live "
+                             "timeline_ai set_subtitle_preset with Resolve open. For caption text/timing "
+                             "use the live UI, or advanced project_db write_captions on a fully quit project.",
                     "_versioning": {"archived": False, "skipped_reason": "unsupported_subtitle_property"},
                 }
             if lacks_native_dry_run(tool_name, action, params):

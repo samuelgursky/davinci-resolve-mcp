@@ -10,6 +10,24 @@ Thin router; depth stays in the kernel.
   `fusion_comp` boundary).
 - **Offline authoring** — `resolve-advanced/README.md` → the `fusion` tool.
 
+## Live subtitle effects
+
+Discover installed factory titles/subtitle presets with
+`timeline_ai.list_title_presets`. For subtitle-track effects use live
+`timeline_ai.set_subtitle_preset` with a preset name or full template ID; omit
+`preset` to adjust the current effect. Common literal `inputs` cover font/style,
+size/position and text RGBA. Highlight/outline mappings are Word Highlight-specific.
+Unmapped or connected/animated controls are refused. Other installed subtitle
+presets are captured natively in a temporary title timeline and applied through
+DRT interchange; the original edit remains recoverable. Ordinary Fusion titles
+use `timeline.insert_fusion_title` with the full template ID, then scoped
+`fusion_comp` probes/input writes. Keep Resolve open and inspect native rendered
+frames. Do not route routine effects to Project.db. Unbundled dry runs need an
+existing `preset_reference` to avoid live capture. Caption text/timing corrections
+can use live UI; direct DB maintenance remains offline. See
+`docs/guides/title-library-automation.md` and
+`docs/guides/subtitle-track-editing.md`.
+
 ## Two servers — author offline, apply live
 
 | Job | Server | Tools |
