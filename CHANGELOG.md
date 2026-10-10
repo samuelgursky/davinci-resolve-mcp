@@ -2,6 +2,29 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.10.4 — enrolled in Anthropic's OSS Scanner
+
+### Security
+
+- **The repository now carries an OSS Scanner build and threat model**
+  under `.oss-scanner/`. [OSS Scanner](https://github.com/anthropics/oss-scanner)
+  builds a project in an isolated VM, scans it offline, and emails findings
+  to the maintainer. Keeping both files here means they can change without a
+  pull request to the scanner's repository.
+  - `.oss-scanner/Dockerfile` mirrors CI: Python 3.11, Node 22, ffmpeg, both
+    lockfiles via `npm ci`, then the offline suites. Built with the
+    scanner's `tools/check`: Python 4027 passed (26 skipped), advanced
+    server 1113 passed (60 skipped), 0 failed. Resolve is not in the image;
+    the suite stubs it as in CI.
+  - `.oss-scanner/threat_model.md` treats every MCP tool argument as
+    untrusted (LLM context can carry attacker text), and names the
+    properties a finding would break: no caller-supplied code execution,
+    the destructive-op gate, immutable source media, and the token- and
+    Host/Origin-gated local listeners. It points at the subprocess call
+    sites and the archive/XML/SQLite parsers, cites the four published
+    advisories as examples of each class, and sets severity tiers.
+- No server code changed.
+
 ## What's New in v4.10.3 — the conform-qc tests run, and run in `npm test`
 
 ### Tests
