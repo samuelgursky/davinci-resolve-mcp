@@ -316,7 +316,7 @@ export const drtTool = {
         if (!f || /[\/\\]/.test(f)) throw new Error(`assemble_project: folder must be a plain bin name (no path separators): ${JSON.stringify(t.folder)}`);
         return f;
       });
-      const { assembleTimeline } = drp();
+      const { assembleTimeline, escapeXml } = drp();
       const buffers = [];
       for (const [i, spec] of p.timelines.entries()) {
         const s = { ...spec, timelineName: names[i] };
@@ -459,7 +459,10 @@ export const drtTool = {
             bins.set(folder, bin);
           }
           const bin = bins.get(folder);
-          const tlRe = new RegExp(`<Element>\\s*<Sm2MpTimelineClip DbId="[^"]+">(?:(?!<\\/Element>\\s*<Element>)[\\s\\S])*?<Name>${names[i].replace(/[.*+?^$()|[\]{}]/g, '\\$&')}<\\/Name>[\\s\\S]*?<\\/Sm2MpTimelineClip>\\s*<\\/Element>`);
+          // The name reached the pool clip through escapeXml: `Reel 1 & 2` is stored
+          // `Reel 1 &amp; 2`, and the raw name matched nothing.
+          const nameXml = escapeXml(names[i]).replace(/[.*+?^$()|[\]{}]/g, '\\$&');
+          const tlRe = new RegExp(`<Element>\\s*<Sm2MpTimelineClip DbId="[^"]+">(?:(?!<\\/Element>\\s*<Element>)[\\s\\S])*?<Name>${nameXml}<\\/Name>[\\s\\S]*?<\\/Sm2MpTimelineClip>\\s*<\\/Element>`);
           const hit = mpXml.match(tlRe);
           if (!hit) throw new Error(`assemble_project: could not locate pool clip for timeline ${names[i]} to move into folder ${folder}`);
           mpXml = mpXml.replace(hit[0], '');
@@ -495,7 +498,7 @@ export const drtTool = {
         for (const [folder, bin] of bins) {
           base.file(bin.entry,
             `<?xml version="1.0" encoding="UTF-8"?>\n` +
-            `<Sm2MpFolder DbId="${bin.id}">\n <FieldsBlob/>\n <Name>${folder}</Name>\n` +
+            `<Sm2MpFolder DbId="${bin.id}">\n <FieldsBlob/>\n <Name>${escapeXml(folder)}</Name>\n` +
             ` <MpFolder>${masterFolderId}</MpFolder>\n <UniqueMediaPoolItemId>${randomUUID()}</UniqueMediaPoolItemId>\n` +
             ` <MediaVec>\n${bin.clips.join('\n')}\n </MediaVec>\n` +
             ` <MediaPool>${poolId}</MediaPool>\n <Folded>false</Folded>\n <ColorTag>FOLDER_COLOR_NONE</ColorTag>\n` +
