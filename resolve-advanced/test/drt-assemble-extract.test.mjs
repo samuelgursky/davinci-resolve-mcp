@@ -612,3 +612,41 @@ test('assemble_project folders: the registry names every bin, not just the first
   assert.equal(inner[i + len], 0x20, 'field 4 begins right after field 2');
   await fs.unlink(out);
 });
+
+test('assemble_project folders: a timeline whose name needs xml escaping still reaches its bin', async () => {
+  // The pool clip carries the name escaped (createEmptyProject/addMediaClip run it
+  // through escapeXml), so the lookup that moves the clip into its bin has to match
+  // `Reel 1 &amp; 2`. Matching the raw `Reel 1 & 2` found nothing and the whole call
+  // threw "could not locate pool clip for timeline Reel 1 & 2".
+  const out = tmp('.drp');
+  const spec = (name, folder) => ({ timelineName: name, folder, media: [{
+    mediaFilePath: '/m/a.mp4', spec: { width: 640, height: 360, frameCount: 480, fps: 24 },
+    cuts: [{ startFrame: 86400, durationFrames: 48 }] }] });
+  await drtTool.handler({ action: 'assemble_project', args: {
+    outputPath: out, targetAppVersion: '21.1',
+    timelines: [spec('Reel 1 & 2', 'Reels'), spec('Reel 3', 'Reels')],
+  }});
+  const zip = await JSZip.loadAsync(await fs.readFile(out));
+  const bin = await zip.file('MediaPool/Master/Reels/MpFolder.xml').async('string');
+  assert.match(bin, /<Name>Reel 1 &amp; 2<\/Name>/, 'the escaped name moved into the bin');
+  const master = await zip.file('MediaPool/Master/MpFolder.xml').async('string');
+  assert.doesNotMatch(master, /<Name>Reel 1 &amp; 2<\/Name>/, 'and left Master');
+  await fs.unlink(out);
+});
+
+test('assemble_project folders: a bin name needing xml escaping produces well-formed xml', async () => {
+  const out = tmp('.drp');
+  const spec = (name) => ({ timelineName: name, folder: 'R&D', media: [{
+    mediaFilePath: '/m/a.mp4', spec: { width: 640, height: 360, frameCount: 480, fps: 24 },
+    cuts: [{ startFrame: 86400, durationFrames: 48 }] }] });
+  await drtTool.handler({ action: 'assemble_project', args: {
+    outputPath: out, targetAppVersion: '21.1',
+    timelines: [spec('R1'), spec('R2')],
+  }});
+  const zip = await JSZip.loadAsync(await fs.readFile(out));
+  const bin = await zip.file('MediaPool/Master/R&D/MpFolder.xml').async('string');
+  const { XMLValidator } = createRequire(import.meta.url)('fast-xml-parser');
+  assert.equal(XMLValidator.validate(bin), true, 'the bin folder xml parses');
+  assert.match(bin, /<Name>R&amp;D<\/Name>/);
+  await fs.unlink(out);
+});
