@@ -69,6 +69,54 @@ For an unbundled installed preset, a mutation-free dry run needs an existing
 `preset_reference`: discovering its native definition otherwise needs a temporary
 live title. `dry_run` never creates that temporary timeline.
 
+### Input discovery and explicit literal edits (issue #295)
+
+`timeline_ai(action="list_subtitle_preset_inputs", params={"track":1})`
+exports and inspects the current subtitle preset without importing a revision.
+It returns mapped `inputs`, `editableInputs`, and `literalInputs` entries with
+exact Fusion `name`, current `value` when decodable, `writable`, and a refusal
+`reason` where applicable. This inventory covers persisted inputs on the
+supported `Template = TextPlus` tool, not every native default or other tools
+elsewhere in the graph.
+
+Pass exact writable names through the opt-in `literal_inputs` parameter:
+
+```json
+{"action":"set_subtitle_preset","params":{
+  "track":1,"literal_inputs":{"HOutlineThickness":0.075}
+}}
+```
+
+Only existing finite number, string, or two-number point literals of the same
+type are accepted. Unknown fields, caption `StyledText`, expressions,
+connections, animation, and simultaneous mapped/literal writes to the same
+input are refused. Use mapped text colour/fill controls so the gradient guard
+remains effective. Native re-export must retain every requested literal value
+before the new timeline is selected. The original remains recoverable.
+
+The Word Highlight writer also has independent base outline controls:
+`baseOutlineEnabled`, `baseOutlineRed/Green/Blue`, and `baseOutlineThickness`.
+Enabling writes `baseOutlineShape:1` (Text+ outline) on shading element 4,
+separate from spoken-word `HOutline` and shadow element 8. Set all RGB channels
+explicitly for the desired colour. This changes element 4 intentionally; the
+retained original revision preserves prior element-4 styling.
+
+```json
+{"action":"set_subtitle_preset","params":{"inputs":{
+  "baseOutlineEnabled":1,"baseOutlineRed":0,"baseOutlineGreen":0,
+  "baseOutlineBlue":0,"baseOutlineThickness":0.08,
+  "outlineEnabled":1,"thickness":0.1
+}}}
+```
+
+**Validation pending:** the new controls are structurally tested; native Text+
+input names were probed on Studio 19.1.3.7. Animated subtitle render acceptance
+on Studio 21.1 is required before release. A free 21.1.0.15 import/re-export
+succeeded, but rendering raised a Studio limitation and produced a black frame;
+this is not visible-effect validation. Per-word scale and cue transitions
+remain unsupported, including through `literal_inputs` when absent or connected.
+Input discovery does not synthesize animation or combine presets.
+
 For gradient/image text fills (observed in Grey with Shadow), solid RGB inputs
 are dormant. The writer refuses a colour edit that would only change those
 invisible values. Pass `inputs.textFillMode:"solid"` explicitly to replace the
