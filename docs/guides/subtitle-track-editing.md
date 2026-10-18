@@ -149,6 +149,13 @@ this is not visible-effect validation. Per-word scale and cue transitions
 remain unsupported, including through `literal_inputs` when absent or connected.
 Input discovery does not synthesize animation or combine presets.
 
+Please report results on [issue #295](https://github.com/samuelgursky/davinci-resolve-mcp/issues/295)
+with your Resolve edition/build, OS and MCP version. In a disposable project or
+backed-up duplicate timeline, compare rendered frames before/after across spoken
+and unspoken words and caption-free gaps. Check the base outline, highlight,
+caption text/timing and retained original timeline. The issue remains open while
+feedback and the unsupported animation requests are outstanding.
+
 For gradient/image text fills (observed in Grey with Shadow), solid RGB inputs
 are dormant. The writer refuses a colour edit that would only change those
 invisible values. Pass `inputs.textFillMode:"solid"` explicitly to replace the
