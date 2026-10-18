@@ -138,11 +138,19 @@ jobs:
           echo "shasum=${shasum}" >> "$GITHUB_OUTPUT"
           echo "Expected tarball shasum: ${shasum}"
 
+      - name: Select npm release channel
+        id: release_channel
+        shell: bash
+        run: |
+          channel="$(node -p "require('./package.json').version.includes('-') ? 'next' : 'latest'")"
+          echo "dist_tag=${channel}" >> "$GITHUB_OUTPUT"
+          echo "Publishing on npm channel: ${channel}"
+
       - name: Publish to npm
         id: npm_publish
         if: steps.npm_version.outputs.publish == 'true'
         continue-on-error: true
-        run: npm publish --provenance --access public
+        run: npm publish --provenance --access public --tag "${{ steps.release_channel.outputs.dist_tag }}"
 
       - name: Verify publish landed
         if: steps.npm_version.outputs.publish == 'true' && steps.npm_publish.outcome == 'failure'
@@ -184,7 +192,7 @@ jobs:
         # job: the publish above already landed, and if the trusted-publishing
         # token cannot edit dist-tags the log says so and a maintainer runs
         # `npm dist-tag add <pkg>@<version> latest` by hand.
-        if: always() && steps.npm_version.outcome == 'success'
+        if: always() && steps.npm_version.outcome == 'success' && steps.release_channel.outputs.dist_tag == 'latest'
         continue-on-error: true
         shell: bash
         run: |

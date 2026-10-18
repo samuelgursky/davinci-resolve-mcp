@@ -109,13 +109,21 @@ retained original revision preserves prior element-4 styling.
 }}}
 ```
 
-**Validation pending:** the new controls are structurally tested; native Text+
-input names were probed on Studio 19.1.3.7. Animated subtitle render acceptance
-on Studio 21.1 is required before release. A free 21.1.0.15 import/re-export
+**Feedback release — Studio 21.1 rendering unverified:** the new controls have
+automated structural tests; native Text+ input names were probed on Studio
+19.1.3.7. The maintainer authorized publication with this limitation disclosed
+while requesting end-user feedback. A free 21.1.0.15 import/re-export
 succeeded, but rendering raised a Studio limitation and produced a black frame;
 this is not visible-effect validation. Per-word scale and cue transitions
 remain unsupported, including through `literal_inputs` when absent or connected.
 Input discovery does not synthesize animation or combine presets.
+
+Please report results on [issue #295](https://github.com/samuelgursky/davinci-resolve-mcp/issues/295)
+with your Resolve edition/build, OS and MCP version. In a disposable project or
+backed-up duplicate timeline, compare rendered frames before/after across spoken
+and unspoken words and caption-free gaps. Check the base outline, highlight,
+caption text/timing and retained original timeline. The issue remains open while
+feedback and the unsupported animation requests are outstanding.
 
 For gradient/image text fills (observed in Grey with Shadow), solid RGB inputs
 are dormant. The writer refuses a colour edit that would only change those
