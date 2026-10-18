@@ -471,6 +471,11 @@ Operating rules an agent must know:
   `highlightBackground*` (a box behind the spoken word), `wordsPerLine`,
   `writeOn` and `showSpeaker`; see docs/guides/subtitle-track-editing.md.
   Per-word scale and cue transitions are not literal inputs and are refused.
+  `list_subtitle_preset_inputs` inspects persisted literal Fusion inputs on the
+  current holder. Opt-in `literal_inputs` accepts exact writable names and
+  same-type literals, with native re-export verification. Connections, caption
+  text, absent fields and animation remain protected. Studio 21.1 render
+  acceptance for these controls is pending; see the subtitle-track editing guide.
   Native DRT export/edit/import creates and selects a recoverable revision,
   preserving the original. Do not ask the user to quit or relaunch for effects.
   Render frames to verify appearance; inventory/readback alone is insufficient.
