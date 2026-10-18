@@ -84,6 +84,51 @@ class SubtitleLiveTest(unittest.TestCase):
         self.assertIn('did not retain', result['error'])
         self.p.SetCurrentTimeline.assert_called_once_with(self.t)
 
+    def test_literal_readback_mismatch_restores_original(self):
+        responses = [
+            Mock(returncode=0, stdout=json.dumps({'templateId': 'Word Highlight', 'after': {}, 'literalAfter': {'Size': 0.09}})),
+            Mock(returncode=0, stdout=json.dumps({'templateId': 'Word Highlight', 'inputs': {}, 'literalInputs': [{'name': 'Size', 'value': 0.08}]})),
+        ]
+        with patch.object(live.shutil, 'which', return_value='node'), \
+             patch.object(live.subprocess, 'run', side_effect=responses), \
+             patch.object(live, '_inventory', return_value={'edit': 1}):
+            result = live.set_subtitle_preset(self.r, self.p, self.t,
+                                             {'literal_inputs': {'Size': 0.09}, 'revision_name': 'Revision'}, lambda _: self.tmp.name)
+        self.assertFalse(result['success'])
+        self.assertIn('literal', result['error'])
+        self.p.SetCurrentTimeline.assert_called_once_with(self.t)
+
+    def test_input_listing_exports_without_import_or_timeline_switch(self):
+        with patch.object(live.shutil, 'which', return_value='node'), \
+             patch.object(live.subprocess, 'run', return_value=Mock(returncode=0, stdout=json.dumps({
+                 'templateId': 'Word Highlight', 'literalInputs': [{'name': 'Size', 'value': 0.08, 'writable': True}]}))):
+            result = live.list_subtitle_preset_inputs(self.r, self.t, {}, lambda _: self.tmp.name)
+        self.assertTrue(result['success'])
+        self.t.Export.assert_called_once()
+        self.p.GetMediaPool.assert_not_called()
+        self.p.SetCurrentTimeline.assert_not_called()
+        self.assertEqual(list(Path(self.tmp.name).iterdir()), [])
+
+    def test_input_listing_reports_cleanup_failure_and_invalid_track(self):
+        for track in (0, True, 2):
+            with self.subTest(track=track):
+                result = live.list_subtitle_preset_inputs(self.r, self.t, {'track': track}, lambda _: self.tmp.name)
+                self.assertFalse(result['success'])
+                self.t.Export.assert_not_called()
+        with patch.object(live.shutil, 'which', return_value='node'), \
+             patch.object(live.subprocess, 'run', return_value=Mock(returncode=0, stdout='{}')), \
+             patch.object(live.shutil, 'rmtree', side_effect=OSError('cleanup refused')):
+            result = live.list_subtitle_preset_inputs(self.r, self.t, {}, lambda _: self.tmp.name)
+        self.assertTrue(result['success'])
+        self.assertTrue(result['staging_retained'])
+        self.assertTrue(Path(result['staging_directory']).is_dir())
+        self.assertIn('cleanup refused', result['warnings'][0])
+
+    def test_bad_literal_container_refuses_before_export(self):
+        result = self.call({'literal_inputs': []})
+        self.assertFalse(result['success'])
+        self.t.Export.assert_not_called()
+
     def test_missing_node_deps_fail_before_node_is_spawned(self):
         with patch.object(live.shutil, 'which', return_value='node'), \
              patch.object(live, 'subtitle_codec_gap', return_value='missing jszip'), \
