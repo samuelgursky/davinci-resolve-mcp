@@ -425,6 +425,13 @@ Operating rules an agent must know:
   size/position and text RGBA; highlight, outline, drop-shadow and justification
   integers are Word Highlight-specific. The centred reference stores alignment
   `3`. Per-word scale and cue transitions are not literal inputs and are refused.
+  `list_subtitle_preset_inputs` inspects persisted literal Fusion inputs on the
+  current holder. Opt-in `literal_inputs` accepts exact writable names and
+  same-type literals, with native re-export verification. Connections, caption
+  text, absent fields and animation remain protected. Word Highlight also has
+  `baseOutlineEnabled/Red/Green/Blue/Thickness` (independent shading element 4;
+  enabling sets `baseOutlineShape:1`). Studio 21.1 render acceptance for these
+  new controls is pending; see the subtitle-track editing guide.
   Native DRT export/edit/import creates and selects a recoverable revision,
   preserving the original. Do not ask the user to quit or relaunch for effects.
   Render frames to verify appearance; inventory/readback alone is insufficient.

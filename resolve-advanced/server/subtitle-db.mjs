@@ -22,6 +22,10 @@ const inputs = z.object({
   highlightRed: rgb.optional(), highlightGreen: rgb.optional(), highlightBlue: rgb.optional(),
   outlineRed: rgb.optional(), outlineGreen: rgb.optional(), outlineBlue: rgb.optional(),
   outlineEnabled: z.union([z.literal(0), z.literal(1)]).optional(), thickness: z.number().min(0).max(1).optional(),
+  baseOutlineEnabled: z.union([z.literal(0), z.literal(1)]).optional(),
+  baseOutlineShape: z.literal(1).optional(),
+  baseOutlineRed: rgb.optional(), baseOutlineGreen: rgb.optional(), baseOutlineBlue: rgb.optional(),
+  baseOutlineThickness: z.number().min(0).max(1).optional(),
   // Word Highlight shading element 8 (a drop shadow) and its justification
   // integers. The centred bundled reference stores 3. Per-word scale and cue
   // in/out are not literal inputs on this macro and stay refused.

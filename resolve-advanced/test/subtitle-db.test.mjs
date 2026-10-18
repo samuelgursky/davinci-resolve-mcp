@@ -14,9 +14,9 @@ const { wrapEffectFilters, unwrapEffectFilters } = require('../vendor/drp-format
 const { decodePreset, setPresetInputs, TEMPLATE } = require('../vendor/drp-format/subtitle-preset.js');
 const { encodeKeyedDict } = require('../vendor/drp-format/keyed-dict.js');
 
-function compBlob({ trailingSeparator = true, gradient = false } = {}) {
+function compBlob({ trailingSeparator = true, gradient = false, extraInputs = '' } = {}) {
   const fill = gradient ? 'Type1 = Input { Value = 2, }, ShadingGradient1 = Input { Value = Gradient { Colors = { [0] = { 0.732, 0.732, 0.732, 1 }, [1] = { 1, 1, 1, 1 }, }, }, }, ' : '';
-  const inner = Buffer.from('{ Template = TextPlus { Inputs = { '+fill+'Font = Input { Value = "Inter", }, Green1 = Input { Value = 0.92, }, Blue1 = Input { Value = 0.52, }, Center = Input { Value = { 0.5, 0.4 }, }, HOutlineThickness = Input { Value = 0.02, }, StyledText = Input { SourceOp = "Animation", Source = "Value", }' + (trailingSeparator ? ',' : '') + ' }, UserControls = { Font = { LINKS_Name = "Font", }, }, }, Other = TextPlus { Inputs = { Font = Input { Value = "Keep me", }, }, }, }\0');
+  const inner = Buffer.from('{ Template = TextPlus { Inputs = { '+fill+extraInputs+'Font = Input { Value = "Inter", }, Green1 = Input { Value = 0.92, }, Blue1 = Input { Value = 0.52, }, Center = Input { Value = { 0.5, 0.4 }, }, HOutlineThickness = Input { Value = 0.02, }, StyledText = Input { SourceOp = "Animation", Source = "Value", }' + (trailingSeparator ? ',' : '') + ' }, UserControls = { Font = { LINKS_Name = "Font", }, }, }, Other = TextPlus { Inputs = { Font = Input { Value = "Keep me", }, }, }, }\0');
   const innerLen = Buffer.alloc(4); innerLen.writeUInt32LE(inner.length);
   const data = Buffer.concat([Buffer.from(`Composition { CustomData = { TEMPLATE_ID = "${TEMPLATE}" }, Compressed = true, }\0`), innerLen, zlib.deflateSync(inner)]);
   const outer = encodeKeyedDict({ entries: [{ key: '0_data', type: 12, value: data.toString('hex') }] });
@@ -155,6 +155,23 @@ test('text colour edits update TextPlus shading rather than its macro Clone cont
     assert.match(graph, new RegExp(`\\b${channel} = Input \\{ Value = 1, \\}`));
   }
   assert.doesNotMatch(graph, /\b(?:Red|Green|Blue|Alpha)1Clone\s*=/);
+});
+
+test('literal discovery cannot expose nested tables, expressions or nonfinite values as writable', () => {
+  const blob = compBlob({ extraInputs:
+    'Shading = Input { Value = { Hidden = Input { Value = 1, }, }, }, ' +
+    'Tracking = Input { Value = 1, Expression = "time / 24", }, ' +
+    'Overflow = Input { Value = 1e999, }, ' +
+    'Label = Input { Value = "Hidden = Input { Value = 2, }", }, ' });
+  const entries = decodePreset(blob).literalInputs;
+  assert.equal(entries.some(e => e.name === 'Hidden'), false);
+  for (const name of ['Shading', 'Tracking', 'Overflow', 'StyledText']) {
+    assert.equal(entries.find(e => e.name === name).writable, false);
+    assert.throws(() => setPresetInputs(blob, {}, { [name]: 1 }), /absent, connected, protected or nonliteral/);
+  }
+  assert.equal(entries.find(e => e.name === 'Label').writable, true);
+  const out = setPresetInputs(blob, {}, { Label: 'Native subtitle controls' });
+  assert.equal(decodePreset(out).literalInputs.find(e => e.name === 'Label').value, 'Native subtitle controls');
 });
 
 test('backup rejection and schema-query errors close the database before returning', async (t) => {

@@ -90,6 +90,44 @@ def _inventory(timeline):
     return result
 
 
+def list_subtitle_preset_inputs(resolve, timeline, params, safe_dir):
+    """Inspect the current native holder without capturing/importing a timeline."""
+    node = shutil.which("node")
+    gap = subtitle_codec_gap()
+    if not node or gap:
+        return {"success": False, "error": gap or "Node.js is required for the subtitle preset codec"}
+    track = params.get("track", 1)
+    if isinstance(track, bool) or not isinstance(track, int) or not 1 <= track <= timeline.GetTrackCount("subtitle"):
+        return {"success": False, "error": "Subtitle track index out of range"}
+    staging = Path(safe_dir(str(ROOT / "logs" / "subtitle-live"))) / uuid.uuid4().hex
+    staging.mkdir(parents=True, exist_ok=False)
+    result = None
+    try:
+        source = staging / "inspect.drt"
+        if not timeline.Export(str(source), resolve.EXPORT_DRT):
+            raise RuntimeError("Native timeline export failed")
+        checked = subprocess.run([node, str(BRIDGE)],
+                                 input=json.dumps({"operation": "inspect", "source": str(source), "track": track}),
+                                 capture_output=True, text=True, encoding="utf-8", errors="replace",
+                                 timeout=60, check=False)
+        if checked.returncode:
+            raise RuntimeError(checked.stderr.strip() or "Subtitle preset inspection failed")
+        result = {"success": True, **json.loads(checked.stdout),
+                  "scope": "persisted Template TextPlus inputs; omitted defaults are not enumerated",
+                  "verification": "native_export_inspection", "render_verified": False}
+        return result
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+        result = {"success": False, "error": str(exc)}
+        return result
+    finally:
+        try:
+            shutil.rmtree(staging)
+        except OSError as exc:
+            if result is not None:
+                result.update(staging_retained=True, staging_directory=str(staging))
+                result.setdefault("warnings", []).append(f"Inspection export cleanup failed: {exc}")
+
+
 def set_subtitle_preset(resolve, project, timeline, params, safe_dir):
     """Create and select a verified revision; restore original on any failure."""
     node = shutil.which("node")
@@ -105,6 +143,9 @@ def set_subtitle_preset(resolve, project, timeline, params, safe_dir):
     inputs = params.get("inputs", {})
     if not isinstance(inputs, dict):
         return {"success": False, "error": "inputs must be an object"}
+    literal_inputs = params.get("literal_inputs", {})
+    if not isinstance(literal_inputs, dict):
+        return {"success": False, "error": "literal_inputs must be an object"}
     track = params.get("track", 1)
     if isinstance(track, bool) or not isinstance(track, int) or not 1 <= track <= timeline.GetTrackCount("subtitle"):
         return {"success": False, "error": "Subtitle track index out of range"}
@@ -134,7 +175,8 @@ def set_subtitle_preset(resolve, project, timeline, params, safe_dir):
     try:
         if not timeline.Export(str(source), resolve.EXPORT_DRT):
             raise RuntimeError("Native timeline export failed")
-        request = {"source": str(source), "output": str(output), "track": track, "inputs": inputs}
+        request = {"source": str(source), "output": str(output), "track": track, "inputs": inputs,
+                   "literal_inputs": literal_inputs}
         if installed:
             captured = staging / "installed-title.drt"
             _capture_installed_preset(resolve, project, installed, captured)
@@ -184,6 +226,9 @@ def set_subtitle_preset(resolve, project, timeline, params, safe_dir):
         actual = json.loads(checked.stdout)
         if actual.get("templateId") != patch.get("templateId") or actual.get("inputs") != patch.get("after"):
             raise RuntimeError("Resolve did not retain the requested subtitle controls")
+        actual_literals = {entry["name"]: entry.get("value") for entry in actual.get("literalInputs", [])}
+        if any(actual_literals.get(name) != value for name, value in patch.get("literalAfter", {}).items()):
+            raise RuntimeError("Resolve did not retain the requested literal subtitle inputs")
         selected, detail = set_current_timeline(project, imported)
         if not selected:
             raise RuntimeError(describe_switch_failure(detail, "selecting subtitle revision"))
