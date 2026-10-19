@@ -30,7 +30,7 @@
     "zstd-codec": "^0.1.5"
   },
   "optionalDependencies": {
-    "better-sqlite3": "^11.10.0",
+    "better-sqlite3": "^13.0.3",
     "js-yaml": "^4.3.2",
     "pg": "^8.23.1",
     "sharp": "^0.35.4"
