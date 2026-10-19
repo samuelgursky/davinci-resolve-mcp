@@ -3,7 +3,8 @@
  *
  * A ramp made on Resolve's retime bar changes exactly two Sm2TiItem columns: MediaTimemapBA
  * (an Sm2TimeMap with protobuf keyframes) and Duration. This writes the same two, render-verified
- * on Studio 21.0.4.5 (see buildRampTimemapR21). Same safety tier as subtitle-db: Resolve fully
+ * on Studio 21.0.4.5 (see buildRampTimemapR21), eased speed points included (segment
+ * easeFrames). Same safety tier as subtitle-db: Resolve fully
  * quit (process list), unique SQLite snapshot backup, schema guards, transaction, readback.
  */
 import { randomUUID } from 'node:crypto';
@@ -14,7 +15,11 @@ const require = createRequire(import.meta.url);
 const { decodeTimemap, buildRampTimemapR21 } = require('../vendor/drp-format/media-timemap.js');
 
 const target = { projectDb: z.string().optional(), projectName: z.string().optional() };
-const segment = z.object({ durationFrames: z.number().int().positive(), speed: z.number().positive() }).strict();
+const segment = z.object({
+  durationFrames: z.number().int().positive(), speed: z.number().positive(),
+  easeFrames: z.union([z.number().positive(), z.literal('auto')]).optional()
+    .describe('ease the speed point where this segment starts ("Ease In and Out"): half-width in record frames, or auto = a third of the shorter neighbour'),
+}).strict();
 export const retimeSchemas = {
   list_video_items: z.object({ ...target, timeline: z.string().optional() }).strict(),
   set_speed_ramp: z.object({
@@ -50,7 +55,8 @@ function videoItems(db, timeline) {
 }
 const summary = (t) => (!t ? null : t.error ? { error: t.error } : t.form === 'identity'
   ? { form: 'identity', sourceFrames: null, seconds: t.seconds }
-  : { form: 'retimed', variable: t.variable, segments: t.segments, sourceDurationSec: t.sourceDurationSec, recordDurationSec: t.recordDurationSec });
+  : { form: 'retimed', variable: t.variable, segments: t.segments, eases: t.eases?.map(({ recordSec, easeSec }) => ({ recordSec, easeSec })),
+    sourceDurationSec: t.sourceDurationSec, recordDurationSec: t.recordDurationSec });
 
 export async function retimeDbAction(action, args, resolveDbPath) {
   const p = retimeSchemas[action].parse(args);
@@ -77,7 +83,7 @@ export async function retimeDbAction(action, args, resolveDbPath) {
     if (!(sourceFrames > 1)) throw new Error('cannot derive the media frame count from the existing map');
     const built = buildRampTimemapR21({ segments: p.segments, sourceFrames, fps: item.fps, uniqueId: randomUUID() });
     const plan = { item: { id: item.id, name: item.name, timeline: item.timeline, track: item.track, index: item.index },
-      fps: item.fps, sourceFrames, durationFrames: built.durationFrames, sourceEndFrame: built.sourceEndFrame,
+      fps: item.fps, sourceFrames, durationFrames: built.durationFrames, sourceEndFrame: built.sourceEndFrame, eased: built.eased,
       before: { duration: item.duration, retime: summary(item.retime) } };
     if (p.dryRun) return { dryRun: true, ...plan };
     const backupPath = await snapshotBackup(dbPath);
