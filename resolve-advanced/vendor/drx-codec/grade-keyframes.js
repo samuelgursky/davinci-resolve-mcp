@@ -15,9 +15,12 @@
  * 0 / 50 / 75 and exactly 100 % from frame 100 on; kind 1 gave 0 % through frame 99 and 100 %
  * from frame 100. Resolve stored the blocks unchanged (Project.db readback).
  *
- * Caveat found in the same session: Primary RGB gain written as 0x0600001D–1F shows in the
- * panel but does NOT change the render on 21.0.4.5 (static or keyframed). Midtone Detail
- * (0x86000113) and saturation (0x06000005) do render. Prove other params with a render.
+ * Primary R/G/B wheel channels (gain 0x0600001D–1F etc.) need Lum Mix 0 (0x8600000B) in the
+ * corrector to act per channel; under Resolve's default Lum Mix equal R/G/B moves cancel on luma.
+ * A base from generateDRX carries it (it writes Lum Mix 0 for R/G/B moves), and every keyframe
+ * block copies the base params: keyframed gain R=G=B 1.0→1.6 over frames 0→28 rendered
+ * 127.59 → 165.86 (f14) → 204.14 (f28) on a grey-128 band (2026-10-19). Prove other params with
+ * a render.
  *
  * @module drx-codec/grade-keyframes
  */
