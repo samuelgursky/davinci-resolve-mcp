@@ -262,8 +262,9 @@ Everything below is flagged in code/tests where it applies; this list is the sum
 
 **Decoded but no write path (deliberate; transfer via Body copy works byte-exact):**
 - Tracker data (per-frame 3×3 transforms) — authoring synthetic tracks not built.
-- Keyframed/animated params — decode cracked; keyframe WRITE not built
-  (verify_grade flags keyframed grades `unverifiable`).
+- Keyframed/animated params — decode cracked; WRITE built 2026-10-19 as a library function
+  (`grade-keyframes.js`, see the Studio 21.0.4.5 section) but not yet exposed as a `drx`
+  tool action (verify_grade still flags keyframed grades `unverifiable`).
 
 **Known-soft spots (documented in place):**
 - HDR zone-def STOCK defaults: only Dark is capture-verified; other zones' F2/F4
@@ -279,6 +280,36 @@ Everything below is flagged in code/tests where it applies; this list is the sum
 - hue-axis HSL bumps whose edges land ON band slots pass through raw (nudge/snap idea).
 - Pipeline run-level status doesn't roll up when stages are driven individually (rollup
   polish); gallery ExportStills / export_frame_as_still fail HEADLESS-only.
+
+## Studio 21.0.4.5 writers — render-verified 2026-10-19
+
+Measured on Windows, Studio 21.0.4.5, throwaway projects; every claim below is a render
+measurement (frame-coded barcode clip or per-frame metric), not a readback.
+
+- **Keyframed grade params — WRITE built** (`vendor/drx-codec/grade-keyframes.js`). A keyframed
+  corrector's F6 repeats per keyframe `{F1: frame×2, F2:{F1: kind, F3:[params]}}`. kind 2 =
+  dynamic (linear): Midtone Detail 0→100 over frames 0→100 gave 0.0 / 50.1 / 75.1 % of the
+  static MD-100 detail lift at frames 0 / 50 / 75 and 100 % from frame 100. kind 1 = static
+  (hold): 0 % through frame 99, 100 % from frame 100. Apply with gradeMode 2 (gradeMode 0 drops
+  keyframes).
+- **Primary RGB gain ids 0x0600001D–1F do NOT render on 21.0.4.5.** A written gain 1.6 shows
+  in the panel (Color Bars R/G/B 1.60) but the viewer, parade and render are unchanged, static
+  or keyframed. The "panel (1.10→1.10)" row above was a panel readback only. Saturation
+  (0x06000005) and Midtone Detail (0x86000113) do render.
+- **Variable-speed ramps, Studio 21 form — WRITE built** (`buildRampTimemapR21` +
+  `project_db set_speed_ramp`). 21 writes protobuf KeyframesBA points (YMin/YMax -1); a ramp made
+  on the retime bar changes only `Sm2TiItem.MediaTimemapBA` and `Duration`. A written
+  100 %→25 %→200 % map rendered 240/240 frames on the predicted source frame, floor(fps×S(t));
+  Resolve's own hand ramp follows the same rule (538/538). The builder reproduces the hand ramp
+  byte-for-byte. Eased (curved) ramps: still not captured — the Inspector "Ease" options stay
+  disabled for a speed point and changing them wrote nothing.
+- **Magic Mask 2 — the click is stored, the mattes are not** (`magic-mask-author.js`). Corrector
+  type 2 holds the subject click: source frame×2, stroke id 2048, op 6, and x/y centred y-up
+  image fractions (x = u−0.5, y = 0.5−v). The tracked per-frame mattes are not in the body or
+  Project.db. An authored click (moved to another clip's frame 10, x 0.15, y 0.05) applied with
+  ApplyGradeFromDRX, then `CreateMagicMask("BI")` with no clicks, tracked all 50 frames; a
+  Saturation-0 Primary in the same node took subject saturation 170 → 4.6 while the background
+  stayed 164.6. `RegenerateMagicMask()` returned False on that fresh apply.
 
 ## Remaining gaps (follow-ups)
 - **Color Warper write on R21**: the built pin-list path matches the R21 fixture exactly

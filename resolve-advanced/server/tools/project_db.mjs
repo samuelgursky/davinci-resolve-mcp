@@ -19,6 +19,7 @@
 
 import { z } from 'zod';
 import { subtitleDbAction, subtitleSchemas } from '../subtitle-db.mjs';
+import { retimeDbAction, retimeSchemas } from '../retime-db.mjs';
 import { createRequire } from 'node:module';
 import { resolveDbPath as _resolveDbPathRaw, responsiveRoots, openGuarded, backup, requireClosed } from '../db-patch.mjs';
 
@@ -112,9 +113,12 @@ export const projectDbTool = {
     'list_captions(projectName|projectDb, timeline, track?) returns text, start/end and words plus originalWords; ' +
     'write_captions(same selectors, add:[{text,start,end,words:[{text,start,end}]}]?, replace:[{id,text,start,end,words}]?, delete:[id]?, templateCaptionId?) edits/adds/deletes in one transaction; all times are absolute timeline frames, end exclusive, caption frames integers, word frames may be fractional; ' +
     'check_captions(same selectors, maxCharacters?:24) flags timing gaps/zero lengths/overflow heuristics. Subtitle track defaults to 1. ' +
-    'New subtitle writes require Resolve fully QUIT (checked through the process list) and iConfirmProjectClosed:true; dryRun:true previews without writing. Unique SQLite snapshot backup, schema guards, atomic transaction and readback. Readback is not render verification. Uses better-sqlite3 or node:sqlite (Node 22.16+ / 23.8+); automatic Windows/macOS/Linux library discovery.',
+    'Speed ramps: list_video_items(projectName|projectDb, timeline?) lists video items with their decoded retime; '+
+    'set_speed_ramp(projectName|projectDb, itemId | timeline+track?+index?, segments:[{durationFrames, speed}], allowRetimed?, dryRun?) writes a variable-speed ramp from the clip head (Studio 21 protobuf Sm2TimeMap + Duration; render-verified on 21.0.4.5). ' +
+    'New subtitle and speed-ramp writes require Resolve fully QUIT (checked through the process list) and iConfirmProjectClosed:true; dryRun:true previews without writing. Unique SQLite snapshot backup, schema guards, atomic transaction and readback. Readback is not render verification. Uses better-sqlite3 or node:sqlite (Node 22.16+ / 23.8+); automatic Windows/macOS/Linux library discovery.',
   async handler({ action, args }) {
     if (Object.hasOwn(subtitleSchemas, action)) return subtitleDbAction(action, args, resolveDbPath);
+    if (Object.hasOwn(retimeSchemas, action)) return retimeDbAction(action, args, resolveDbPath);
     if (action === 'list_folders') {
       const p = listFoldersSchema.parse(args);
       const db = openGuarded(await resolveDbPath(p), { table: 'Sm2MpFolder', column: 'Name' });

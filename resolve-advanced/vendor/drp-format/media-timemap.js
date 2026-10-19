@@ -377,10 +377,53 @@ function buildRampTimemapKeyed({ segments, srcIn = 0, sourceFrames, fps = 24, un
   ] });
 }
 
+/**
+ * VARIABLE-SPEED RAMP, R21 form — the shape Studio 21.0.4.5 writes itself for a ramp made on
+ * the retime bar (speed point + segment speed): YMin/YMax -1, XMax = record seconds,
+ * LastValidYOffset = (sourceFrames-1)/fps, KeyframesBA = PROTOBUF points [recordSec, sourceSec]
+ * after the implicit (0,0) origin. Only MediaTimemapBA and the item's Duration change
+ * (measured: a hand 100%→50% ramp differed from its constant twin in exactly those two columns).
+ *
+ * Render-verified 2026-10-19 on Studio 21.0.4.5: a 100% (30f) → 25% (90f) → 200% (120f) map
+ * patched into a closed project's Sm2TiItem rendered 240/240 frames on the predicted source
+ * frame floor(fps × S(t)). Resolve's own hand ramp renders by the same floor rule (538/538).
+ * The ramp starts at the media head (srcIn 0); windowed starts are not measured in this form.
+ *
+ * @param {object} p
+ * @param {Array<{durationFrames:number, speed:number}>} p.segments - record-domain pieces from
+ *   the clip head; speed is source/record (0.5 = half speed). >= 1 segment.
+ * @param {number} p.sourceFrames - media frame count at p.fps.
+ * @param {number} p.fps          - timeline = media frame rate (the measured case).
+ * @param {string} p.uniqueId     - fresh uuid.
+ * @returns {{ timemap: Buffer, durationFrames: number, keyframes: Array, sourceEndFrame: number }}
+ */
+function buildRampTimemapR21({ segments, sourceFrames, fps, uniqueId }) {
+  if (!Array.isArray(segments) || !segments.length) throw new TypeError('buildRampTimemapR21: segments must be a non-empty array of {durationFrames, speed}');
+  if (!Number.isInteger(sourceFrames) || sourceFrames < 2) throw new TypeError('buildRampTimemapR21: sourceFrames must be an integer >= 2');
+  if (!(fps > 0)) throw new TypeError('buildRampTimemapR21: fps must be > 0');
+  // Seconds accumulate per segment, as Resolve does (byte-exact vs its own hand ramp).
+  let rec = 0; let src = 0; let recSec = 0; let srcSec = 0; const keyframes = [];
+  for (const [i, s] of segments.entries()) {
+    if (!Number.isInteger(s.durationFrames) || s.durationFrames < 1) throw new TypeError(`buildRampTimemapR21: segments[${i}].durationFrames must be a positive integer`);
+    if (!(s.speed > 0)) throw new RangeError(`buildRampTimemapR21: segments[${i}].speed must be > 0`);
+    rec += s.durationFrames; src += s.durationFrames * s.speed;
+    recSec += s.durationFrames / fps; srcSec += (s.durationFrames * s.speed) / fps;
+    keyframes.push({ recordSec: recSec, sourceSec: srcSec });
+  }
+  // Source frame shown on the LAST record frame (rec-1), Resolve's floor rule.
+  const last = segments[segments.length - 1];
+  const sourceEndFrame = Math.floor(src - last.speed);
+  if (sourceEndFrame > sourceFrames - 1) {
+    throw new RangeError(`buildRampTimemapR21: ramp reaches source frame ${sourceEndFrame} but the media ends at ${sourceFrames - 1}`);
+  }
+  const timemap = buildTimemap({ keyframes, sourceDurationSec: (sourceFrames - 1) / fps, recordDurationSec: recSec, uniqueId });
+  return { timemap, durationFrames: rec, keyframes, sourceEndFrame };
+}
+
 module.exports = {
   decodeTimemap, encodeTimemap, encodeRetimedTimemap,
   identityTimemap, buildConstantSpeedTimemap, buildConstantSpeedTimemapKeyed,
-  buildFreezeTimemapKeyed, buildRampTimemapKeyed,
+  buildFreezeTimemapKeyed, buildRampTimemapKeyed, buildRampTimemapR21,
   buildTimemap, decodeProtobuf,
   TYPE_LINEAR,
 };
