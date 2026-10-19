@@ -31,7 +31,7 @@
   },
   "optionalDependencies": {
     "better-sqlite3": "^11.10.0",
-    "js-yaml": "^4.3.2",
+    "js-yaml": "^5.5.0",
     "pg": "^8.23.0",
     "sharp": "^0.35.4"
   },
