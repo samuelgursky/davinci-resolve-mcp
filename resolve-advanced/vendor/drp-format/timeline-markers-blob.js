@@ -65,7 +65,7 @@ function encodeMarkerEntry(m) {
   return lenDelim(1, Buffer.concat([varField(1, m.frame), lenDelim(2, wrapped)]));
 }
 
-/** zstd single-segment frame with one RAW block (no compression). */
+/** zstd single-segment frame of RAW blocks (no compression), 128 KiB per block at most. */
 function zstdRawFrame(payload) {
   const magic = Buffer.from([0x28, 0xb5, 0x2f, 0xfd]);
   let header;
@@ -76,9 +76,17 @@ function zstdRawFrame(payload) {
     header[0] = 0xa0; // single-segment, 4-byte FCS
     header.writeUInt32LE(payload.length, 1);
   }
-  const block = Buffer.alloc(3);
-  block.writeUIntLE((payload.length << 3) | 1, 0, 3); // last=1, type=raw
-  return Buffer.concat([magic, header, block, payload]);
+  // RFC 8878 caps every block at 128 KiB; libzstd rejects a larger raw block as corrupt.
+  const blocks = [];
+  let o = 0;
+  do {
+    const size = Math.min(payload.length - o, 128 * 1024);
+    const block = Buffer.alloc(3);
+    block.writeUIntLE((size << 3) | (o + size === payload.length ? 1 : 0), 0, 3); // type=raw
+    blocks.push(block, payload.subarray(o, o + size));
+    o += size;
+  } while (o < payload.length);
+  return Buffer.concat([magic, header, ...blocks]);
 }
 
 function zstdRawInflate(buf) {

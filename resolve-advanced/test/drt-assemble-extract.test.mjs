@@ -174,6 +174,42 @@ test('spec.markers encode byte-exact and attach to the sequence owner', async ()
   await fs.unlink(out);
 });
 
+test('spec.markers past 128 KiB split into zstd raw blocks a decoder accepts', async () => {
+  // RFC 8878 caps a block at 128 KiB; libzstd 1.5 refuses a larger raw block
+  // as "Data corruption detected". 700 markers with 200-char notes are ~160 KiB.
+  const requireC = createRequire(import.meta.url);
+  const { decodeTimelineMarkersBlob } = requireC('../vendor/drp-format/timeline-markers-blob.js');
+  const { decodeKeyedDict } = requireC('../vendor/drp-format/keyed-dict.js');
+  const markers = Array.from({ length: 700 }, (_, i) => ({ frame: 86400 + i, name: `M${i}`, note: 'x'.repeat(200) }));
+  const out = tmp('.drt');
+  await drtTool.handler({ action: 'assemble', args: {
+    outputPath: out, targetAppVersion: '19.1.3',
+    spec: { timelineName: 'MRK', media: {
+      mediaFilePath: '/m/a.mp4', spec: { width: 640, height: 360, frameCount: 4800, fps: 24 },
+      cuts: [{ startFrame: 86400, durationFrames: 960 }],
+    }, markers },
+  }});
+  const pj = await (await JSZip.loadAsync(await fs.readFile(out))).file('project.xml').async('string');
+  const fb = Buffer.from(pj.match(/<Sm2SequenceLockableBlob[\s\S]*?<FieldsBlob>([0-9a-fA-F]*)<\/FieldsBlob>/)[1], 'hex');
+  const zf = Buffer.from(decodeKeyedDict(fb).entries.find((e) => e.key === 'BlobData').value, 'hex').subarray(9);
+  let o = 5 + [1, 2, 4, 8][zf[4] >> 6];
+  const sizes = [];
+  for (;;) {
+    const bh = zf.readUIntLE(o, 3);
+    assert.equal((bh >> 1) & 3, 0, 'raw block');
+    sizes.push(bh >> 3);
+    o += 3 + (bh >> 3);
+    if (bh & 1) break;
+  }
+  assert.equal(o, zf.length, 'the last block ends the frame');
+  assert.ok(sizes.length > 1 && sizes.every((s) => s <= 128 * 1024), `block sizes ${sizes}`);
+  assert.equal(sizes.reduce((a, b) => a + b, 0), zf.readUInt32LE(5), 'blocks add up to the content size');
+  const decoded = decodeTimelineMarkersBlob(fb);
+  assert.equal(decoded.length, 700);
+  assert.deepEqual(decoded.at(-1), { frame: 0, color: 'Blue', note: 'x'.repeat(200), duration: 1, name: 'M0', customData: '' });
+  await fs.unlink(out);
+});
+
 test('createRequire import for marker tests', () => { assert.ok(createRequire); });
 
 test('subtitles author as plain Subtitle generators on a Type-2 track', async () => {
