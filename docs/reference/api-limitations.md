@@ -12,7 +12,7 @@ that none exists).
 
 **Verified on:** DaVinci Resolve Studio 21.0.2
 
-**Totals:** 42 missing capabilities, 58 bugs / unreliable behaviors.
+**Totals:** 43 missing capabilities, 61 bugs / unreliable behaviors.
 
 The authoritative source is the runtime-queryable `api_truth` ledger
 (`resolve_control api_truth "<query>"`); this document is generated from
@@ -360,6 +360,13 @@ equivalent, blocking full automation.
 - **Behavior:** Resolve's FCP7 XML writer (measured on Studio 19.1.3.7, E107, verbatim export kept as a fixture) emits NO pproTicksIn/pproTicksOut on any clipitem — the Premiere tick fields a Premiere-shaped oracle treats as the authoritative source position are simply absent, so a reader that requires them derives no source frame for ANY cut of a Resolve export. Every clipitem edge that sits under a transitionitem is written as -1 and means the transition's junction (span center for alignment center; the writer emitted `center` for every dissolve and fade authored centered), `out - in` is the record duration, and a -1 START edge's <in> is the source at the overlap start. With three centered transitions two equal-length clips both carry -1/-1 edges, so a reader must pair junctions in record order — the first pair that fits places both clips at the same position. Black legs are Solid Color generatoritems whose -1 edge resolves the same way.
 - **Workaround / current handling:** Read <in> as the literal source frame (Resolve reads and writes it that way), record-align it by the junction-minus-span-start offset on a -1 start, and walk -1/-1 clips with a record-order cursor. conform.snapshot ingest_xml and editorial.parse_interchange both do; the frame QC then samples each cut CLEAR of its transition windows (inside one the reference is a blend, or black for a fade).
 - **Tags:** timeline, export, xml, fcp7, transitions, silent-failure
+
+### Timeline slip / trim of an existing item (no API on 19.x)
+
+- **Object:** `Timeline`
+- **Behavior:** There is no call to slip an item's source range or trim its edges in place: no SetProperty key moves the source in-point and no Timeline method takes a new range. The only route is to delete the item and append the new range at the same record frame, which loses its grade, transform, crop and composite unless they are carried over by hand. With a source rate different from the timeline's, the appended length can come out a frame off (the AppendToTimeline mixed-fps floor) and needed a corrected endFrame and a second append.
+- **Workaround / current handling:** timeline replace_source_range: append the new range on a temporary track at the same record frame, CopyGrades onto it, carry transform/crop/composite/scaling, delete the original, append the final copy on the original track, CopyGrades from the temporary copy, re-apply the properties, delete the temporary copy, restore the track lock. Start, end and duration are verified exactly; an endFrame that lands a frame off is corrected and retried.
+- **Tags:** missing-method, timeline, edit, mixed-fps
 
 ## Bugs / Unreliable Behavior (please fix)
 
@@ -830,3 +837,27 @@ values, or automation-hostile modal prompts.
 - **Behavior:** No scriptable call produces an archive. With source media and proxies off it returns False instantly and writes nothing, for an open or a closed project and with render cache on or off. With isArchiveSrcMedia or isArchiveProxyMedia on it creates an empty directory at the target and Resolve crashes (SIGSEGV) in the same second; the call comes back through the bridge as None and every later handle is dead. Four crashes, one of them in a Blackmagic Cloud library, share identical top stack frames in Fusion script-symbol teardown on the UI thread; a separate crash in the same session during DeleteProject/LoadProject had a different stack, so the signature belongs to the archive calls. Media-flag calls crashed 4 of 4, flags-off calls 0 of 5. A file already at the target survived every case byte for byte, including a crash, so the destination is never overwritten; unsaved work in the open project is what is lost. The native defaults turn source media on, so a default call crashes Resolve. Resolve logs nothing about the False returns.
 - **Workaround / current handling:** Keep isArchiveSrcMedia and isArchiveProxyMedia off unless you have verified the build, and save every open project first. Treat False as 'nothing archived', not as a path problem: a .dra and a folder-style path fail identically. Archive from the Project Manager UI when you need a real archive.
 - **Tags:** crash, unreliable-return, silent-failure, project, reported
+
+### TimelineItem.SetProperty (Inspector-keyframed property)
+
+- **Object:** `TimelineItem`
+- **Signature:** `(propertyKey, propertyValue) -> Bool`
+- **Behavior:** On a clip that carries Edit-page (Inspector) keyframes for a transform property, as clips from an AAF import can, SetProperty('ZoomX', v) returns True and GetProperty reads v back, but the rendered frame never changes: the keyframes win at render time. Nothing in the return or the readback says so. On 19.x it cannot be detected or fixed from the API either: dir() of a live TimelineItem lists no keyframe methods (GetKeyframeCount, AddKeyframe and the rest are absent, and not in the scripting README), so the attribute is None and a call dies as "'NoneType' object is not callable".
+- **Workaround / current handling:** Prove a transform with frames, never with the return or the readback. timeline_item probe_keyframe_override exports the frame twice (null control), nudges the property, exports again and restores it; verdict 'override' means keyframes are winning. Then remove them in the Inspector, or rebuild the item from the Media Pool (timeline replace_source_range re-appends it; a fresh append should carry no Inspector keyframes, which is not yet verified by render). The timeline_item keyframe actions return KEYFRAME_API_UNAVAILABLE on builds without the methods.
+- **Tags:** silent-failure, unreliable-return, keyframes, transform, timeline, missing-method
+
+### Timeline.DeleteClips (locked track)
+
+- **Object:** `Timeline`
+- **Signature:** `([TimelineItem], ripple) -> bool`
+- **Behavior:** On a locked track DeleteClips returns a bare False and deletes nothing, with nothing to say the lock is why. The lock does not stop SetProperty: transform and other property writes on items of the same locked track still succeed, so a property edit that worked is no evidence the track is unlocked. Separate from the Edit-page gate in 'Timeline.DeleteClips (requires the Edit page; flaky first attempt)'.
+- **Workaround / current handling:** Read Timeline.GetIsTrackLocked for every track the targets sit on before deleting. timeline delete_clips refuses with TRACK_LOCKED naming the tracks; replace_source_range unlocks only with unlock_track=true and locks the track again afterwards; media_pool append_to_timeline names locked target tracks in its failure.
+- **Tags:** silent-failure, timeline, edit, track-lock
+
+### Resolve.OpenPage (during playback)
+
+- **Object:** `Resolve`
+- **Signature:** `(pageName) -> Bool`
+- **Behavior:** With playback engaged, a visit to the Color page followed by a page/playhead restore (resolve_control restore_state) timed out, and from then on EVERY scripting call hung, including a brand-new scriptapp() connection: Resolve's main thread was stuck in a viewer render loop until playback was dealt with in the GUI. The 19.x scripting API has no transport control (no Play, Stop or IsPlaying), so a script can neither stop playback first nor ask whether it is running.
+- **Workaround / current handling:** Detect playback by reading Timeline.GetCurrentTimecode twice ~0.2 s apart; a playhead that moved means the transport is running. resolve_control open_page / restore_state, gallery_stills grab_and_export and the page-switching timeline_frame routes refuse with PLAYBACK_ACTIVE (allow_during_playback=true overrides). Stop playback in the GUI (Space or K) before retrying.
+- **Tags:** hang, page-dependent, playback, missing-method

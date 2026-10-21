@@ -1890,9 +1890,16 @@ rendering — grade, Fusion, titles, transitions — rather than inferring it fr
 metadata. (For the raw camera file instead, use
 `media_analysis(action="extract_frames")`.)
 
-- `quality="frame"` (default) renders exactly that frame — the only
-  frame-accurate route. Full resolution, well under a second, works headless.
-  `preview` is the same render bounded to 1280px.
+- `quality="frame"` (default) exports exactly that frame with
+  `Project.ExportCurrentFrameAsStill`: frame-accurate, full resolution, about
+  0.2 s, **no page switch and no render settings**. The seek is read back by
+  frame before the export and the playhead is read again after it; a playhead
+  that moved means playback is running and the capture refuses
+  (`PLAYBACK_ACTIVE`). `preview` is the same export bounded to 1280px.
+- `quality="render"` renders the frame as a one-frame render job. Use it only
+  when you want that route by name: on a real project on Studio 19.1.3.7 it
+  failed every call with "AddRenderJob returned nothing" while the export
+  worked every call.
 - `quality="thumbnail"` is instant and touches nothing, but returns the **clip's**
   thumbnail — identical for every frame of that clip. Use it to see which clip is
   under the playhead, never to judge a specific frame. Needs the Color page *and*
@@ -1903,22 +1910,23 @@ metadata. (For the raw camera file instead, use
   (default), `png`, or `tif`.
 - `timecode` accepts absolute (`01:00:15:12`) or elapsed (`00:00:15:12`) time;
   `frame` is the absolute timeline frame. Omit both to capture the playhead.
+- The page-switching routes (`render`, `thumbnail`, `still`) refuse while
+  playback is running; `allow_during_playback=true` overrides.
 
-The playhead, page, current timeline and Gallery are restored. The render route
+The playhead, page, current timeline and Gallery are restored. The `render` route
 additionally touches project render settings and puts them back: render mode,
 format, codec, mark range and output folder (`TargetDir`, read off a throwaway
 render job because there is no `GetRenderSettings`). The file name
 (`CustomName`) is never written, and the render job is deleted. One gap: a
 project that has never had an output folder has none to put back, and Resolve
 cannot clear one, so it is left on the capture's temporary folder
-(`capabilities` repeats this as `render_settings_caveat`). Reach for
-`quality="thumbnail"` when zero side effects matter more than accuracy.
+(`capabilities` repeats this as `render_settings_caveat`).
 
-The render calls pull Resolve onto the Deliver page. The capture switches back
-and reads the page to confirm it. If a restore does not take (page, playhead,
-timeline, render mode, format, range or output folder), the image is followed by a
-`{"warnings": [...]}` block naming what was left changed and the call that puts
-it back. No warnings block means every restore was confirmed.
+The render calls pull Resolve onto the Deliver page. The `render` route switches
+back and reads the page to confirm it. If a restore does not take (page,
+playhead, timeline, render mode, format, range or output folder), the image is
+followed by a `{"warnings": [...]}` block naming what was left changed and the
+call that puts it back. No warnings block means every restore was confirmed.
 
 ```
 timeline_frame(action="capture", params={"timecode": "01:00:15:12", "max_width": 1280})
@@ -2493,6 +2501,42 @@ Other recorded traps ride along on results as `known_limitation` without blockin
 `RESOLVE_MCP_DISABLE_TRAP_GUARD=1` disables both behaviours.
 
 
+**Stop playback before switching pages** — On Studio 19.1.3.7 a Color-page visit
+while playback was running, followed by `restore_state`, timed out, and after
+that every scripting call hung, even a fresh connection: Resolve's main thread
+was stuck in a viewer render loop. 19.x has no transport API, so the server
+cannot stop playback. `resolve_control open_page` / `restore_state`,
+`gallery_stills grab_and_export` and the page-switching `timeline_frame` routes
+refuse with `PLAYBACK_ACTIVE` when the playhead is moving; ask the user to stop
+playback (Space or K). `allow_during_playback=true` overrides.
+
+**A transform write that reads back can still not render** — On a clip with
+Inspector keyframes (an AAF import can bring them), `SetProperty('ZoomX', v)`
+returns True and reads back `v`, and the render does not change. 19.x has no
+TimelineItem keyframe methods at all, so the `timeline_item` keyframe actions
+return `KEYFRAME_API_UNAVAILABLE` there. `timeline_item(action=
+"probe_keyframe_override")` exports the frame twice (null control), nudges the
+property, exports again and restores it; `verdict: "override"` means keyframes
+are winning. Prove sizing with frames, never with the readback.
+
+**Locked tracks fail deletes silently** — `DeleteClips` on a locked track
+returns a bare False, while `SetProperty` on the same items still works.
+`timeline delete_clips` refuses with `TRACK_LOCKED` naming the tracks.
+
+**Edit transform units** — Zoom is relative to the fitted image. Pan moves
+`Pan × fittedW / timelineW` px and Tilt `Tilt × fittedH / timelineH` px (+up),
+so Pan equals timeline pixels only when the fitted width equals the timeline's.
+A 720×1280 clip in a 4096×1716 timeline fits at 965×1716, and Pan −500 moved it
+117 px. `set_transform` takes `pan_px` / `tilt_px` and converts for
+scale-to-fit.
+
+**Slipping a clip** — there is no slip or trim API.
+`timeline(action="replace_source_range", params={"timeline_item_id": ...,
+"source_start": N})` rebuilds the item at the same record frame through a
+temporary track, carrying grade, transform, crop, composite and scaling, and
+verifies start, end and duration exactly. It is confirm-token gated, archives
+the timeline first, and refuses a locked track unless `unlock_track=true`.
+
 **Resolve API object lifetimes** — Objects like timelines, clips, and color groups
 returned by the API are live references that can become stale if the project state
 changes (e.g., the user deletes a timeline). Always re-fetch IDs after any
@@ -2572,8 +2616,9 @@ extracted from a delivered render.
 
 **Start here: `timeline_frame(action="capture")`** — Returns the frame at the
 playhead (or at any `timecode`/`frame` you name) as MCP image content, so a
-multimodal assistant can simply look at it. It renders that one frame, which is
-what makes it frame-accurate; `max_width` bounds the context cost.
+multimodal assistant can simply look at it. It exports that one frame from the
+viewer with `ExportCurrentFrameAsStill`, which is frame-accurate and switches no
+page; `max_width` bounds the context cost.
 
 ```
 timeline_frame(action="capture", params={"timecode": "01:00:15:12", "max_width": 1280})

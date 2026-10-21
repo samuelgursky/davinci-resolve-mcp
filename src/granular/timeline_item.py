@@ -3,6 +3,22 @@
 from src.granular.common import *  # noqa: F401,F403
 from src.utils.clip_colors import clip_color_refusal
 
+
+def _keyframe_api_missing(timeline_item, method_name):
+    """Why a TimelineItem keyframe call cannot run here, or None.
+
+    None of these methods is in the shipped scripting README, and a live
+    TimelineItem on Studio 19.1.3.7 exposes none of them: the attribute is
+    None and calling it raised "'NoneType' object is not callable". Same gate
+    as the compound server's KEYFRAME_API_UNAVAILABLE.
+    """
+    if _has_method(timeline_item, method_name):
+        return None
+    return (f"TimelineItem.{method_name} is not available on this Resolve build. "
+            "Edit-page keyframes cannot be read, added or removed from the scripting "
+            "API here (Studio 19.1.3.7 exposes no keyframe methods). Remove them in the "
+            "Inspector, or rebuild the item from the Media Pool.")
+
 resolve = ResolveProxy()
 
 
@@ -779,6 +795,9 @@ def get_timeline_item_keyframes(timeline_item_id: str, property_name: str) -> Di
         
         if not timeline_item:
             return {"error": f"Timeline item with ID '{timeline_item_id}' not found"}
+        missing = _keyframe_api_missing(timeline_item, "GetKeyframeCount")
+        if missing:
+            return {"error": missing}
         
         # Get all keyframeable properties for this item
         keyframeable_properties = []
@@ -929,6 +948,9 @@ def add_keyframe(timeline_item_id: str, property_name: str, frame: int, value: f
         
         if not timeline_item:
             return f"Error: Timeline item with ID '{timeline_item_id}' not found"
+        missing = _keyframe_api_missing(timeline_item, "AddKeyframe")
+        if missing:
+            return f"Error: {missing}"
         
         # Check if the specified property is valid for this item type
         if is_audio and property_name not in audio_properties:
@@ -1010,6 +1032,9 @@ def modify_keyframe(timeline_item_id: str, property_name: str, frame: int, new_v
         
         if not timeline_item:
             return f"Error: Timeline item with ID '{timeline_item_id}' not found"
+        missing = _keyframe_api_missing(timeline_item, "ModifyKeyframe")
+        if missing:
+            return f"Error: {missing}"
         
         # Check if the property has keyframes
         keyframe_count = timeline_item.GetKeyframeCount(property_name)
@@ -1122,6 +1147,9 @@ def delete_keyframe(timeline_item_id: str, property_name: str, frame: int) -> st
         
         if not timeline_item:
             return f"Error: Timeline item with ID '{timeline_item_id}' not found"
+        missing = _keyframe_api_missing(timeline_item, "DeleteKeyframe")
+        if missing:
+            return f"Error: {missing}"
         
         # Check if the property has keyframes
         keyframe_count = timeline_item.GetKeyframeCount(property_name)
@@ -1207,6 +1235,9 @@ def set_keyframe_interpolation(timeline_item_id: str, property_name: str, frame:
         
         if not timeline_item:
             return f"Error: Timeline item with ID '{timeline_item_id}' not found"
+        missing = _keyframe_api_missing(timeline_item, "SetKeyframeInterpolation")
+        if missing:
+            return f"Error: {missing}"
         
         # Check if the property has keyframes
         keyframe_count = timeline_item.GetKeyframeCount(property_name)

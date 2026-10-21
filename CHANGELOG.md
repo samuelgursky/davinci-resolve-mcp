@@ -2,6 +2,84 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## Unreleased — Conform-session fixes for Studio 19.1
+
+Six gaps a real conform session hit on Resolve Studio 19.1.3.7, each measured
+live with rendered frames. Not yet versioned or released.
+
+### Fixed
+
+- **`timeline_frame capture` works on projects where rendering a frame fails.**
+  The default `quality="frame"` now exports the viewer's frame with
+  `Project.ExportCurrentFrameAsStill`: seek, read the playhead back by frame,
+  export, read the playhead again, restore it. It switches no page and writes
+  no render settings. On the project that surfaced this, the render route
+  failed every call with "AddRenderJob returned nothing"; the export worked
+  every call (3840×2160 in about 0.2 s). The single-frame render is still
+  there as `quality="render"`, used only when asked for by name. `preview` and
+  `full` now mean the export.
+- **Keyframe actions no longer crash on 19.x.** `timeline_item`
+  `get_keyframes`, `add_keyframe`, `modify_keyframe`, `delete_keyframe` and
+  `set_keyframe_interpolation` died with "'NoneType' object is not callable":
+  a live 19.1 TimelineItem exposes no keyframe methods. They now return
+  `KEYFRAME_API_UNAVAILABLE` with the live version and what to do instead.
+- **Locked tracks are named, not answered with a bare False.**
+  `timeline delete_clips` refuses with `TRACK_LOCKED` listing the locked
+  tracks before calling `DeleteClips`. A failed `media_pool
+  append_to_timeline` names locked target tracks in its error.
+- **Page switches refuse during playback.** A Color-page visit while playback
+  ran, followed by `restore_state`, hung Resolve's main thread, and every
+  later scripting call hung with it. `resolve_control open_page` and
+  `restore_state`, `gallery_stills grab_and_export`, and the page-switching
+  capture routes detect a moving playhead and refuse with `PLAYBACK_ACTIVE`.
+  `allow_during_playback=true` overrides.
+
+### Added
+
+- **`timeline replace_source_range`: slip a clip to a new source range.**
+  19.x has no slip or trim API. The action rebuilds the item at the same
+  record frame through a temporary track: append the new range there,
+  CopyGrades and carry transform, crop, composite and scaling onto it, delete
+  the original, append the final copy on the original track, copy grade and
+  properties again, remove the temporary copy and track, restore the track
+  lock. Start, end and duration are verified exactly. A length that lands a
+  frame off (mixed source and timeline rates) is corrected and retried. If the
+  final placement fails, the temporary copy stays as the recovery and the
+  error says where. Confirm-token gated, archived first, `dry_run` supported;
+  a locked track needs `unlock_track=true`.
+- **`timeline_item probe_keyframe_override`.** Tells whether a property write
+  reaches the render. On a clip with Inspector keyframes, `SetProperty`
+  returns True and reads back while the render ignores it. The probe exports
+  the frame twice as a null control, nudges the property, exports again,
+  restores the property and compares. Verdict: `override`, `writes_render` or
+  `inconclusive`.
+- **`set_transform` takes `pan_px` / `tilt_px`.** Pan and Tilt scale with the
+  fitted image: Pan moves `Pan × fittedW / timelineW` px. For scale-to-fit the
+  action computes the fitted size from the clip and timeline resolutions and
+  reports the factors it used. Other scaling modes need `fitted_width` /
+  `fitted_height`.
+
+### Documentation
+
+- New api_truth entries, carried into `docs/reference/api-limitations.md`:
+  ExportCurrentFrameAsStill as the frame-capture route, the silent
+  keyframe override on SetProperty, DeleteClips on a locked track, Edit
+  transform units (reconciling the "Pan = timeline pixels" rule of thumb,
+  which holds only when the fitted width equals the timeline's), OpenPage
+  during playback, and the missing slip/trim API.
+- `docs/SKILL.md`: capture routes rewritten for the new default; Known Gotchas
+  cover playback, keyframe overrides, locked tracks, transform units and the
+  slip action.
+
+### Validation
+
+- Offline: new `tests/test_conform_session_gaps.py` (45 tests) and an updated
+  `tests/test_playhead_frame_capture.py`. Full Python suite: 4,174 tests, zero
+  failures, 5 skipped. No advanced-server (Node) code changed.
+- Live: the behaviour these fixes encode was measured in the conform session
+  itself. A live pass of the new code paths on a scratch project has not run
+  yet, because Resolve was in use by that session.
+
 ## What's New in v4.14.4 — Compatible dependency updates
 
 Lands #303, #304, #305, #306, and #308. Resolves #307, #309, and #310.

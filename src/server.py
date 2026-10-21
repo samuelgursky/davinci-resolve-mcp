@@ -31,6 +31,7 @@ import tempfile
 import threading
 import time
 import zlib
+import contextlib
 from typing import Dict, Any, Optional, List, Tuple
 
 # ─── Path Setup ───────────────────────────────────────────────────────────────
@@ -61,6 +62,7 @@ from src.utils import archive_guard
 from src.utils import typed_api_search
 from src.utils import lut_files
 from src.utils import resolve_writes as _resolve_writes
+from src.utils import playback_guard as _playback_guard
 from src.utils.mcp_stdio import run_fastmcp_stdio
 from src.utils.api_truth import lookup_api_truth, VERIFIED_ON as _API_TRUTH_VERIFIED_ON
 from src.utils import clip_colors as _clip_colors
@@ -1342,6 +1344,7 @@ _TOKEN_GATED_DESTRUCTIVE_ACTIONS = frozenset({
     ("timeline", "delete_track"),
     ("timeline", "apply_cuts"),
     ("timeline", "ripple_insert"),
+    ("timeline", "replace_source_range"),
     # Catastrophic media-pool deletes (EX3): irreversibly destroy clips/folders/
     # timelines. Gated like delete_track; also archive-on-mutate via the registry.
     ("media_pool", "delete_clips"),
@@ -2048,6 +2051,303 @@ def _send_resolve_keystroke_go_to_mark_in() -> Dict[str, Any]:
 def _has_method(obj, method_name):
     # `hasattr` is a constant True on Resolve objects — see src/utils/resolve_probe.
     return _probe_has_method(obj, method_name)
+
+#: timeline_item keyframe action -> the TimelineItem method it calls. None of
+#: them is in the shipped scripting README, and on Studio 19.1.3.7 dir() of a
+#: live TimelineItem lists none of them, so the bound attribute is None and the
+#: call died as "'NoneType' object is not callable".
+_TIMELINE_ITEM_KEYFRAME_METHODS = {
+    "get_keyframes": "GetKeyframeCount",
+    "add_keyframe": "AddKeyframe",
+    "modify_keyframe": "ModifyKeyframe",
+    "delete_keyframe": "DeleteKeyframe",
+    "set_keyframe_interpolation": "SetKeyframeInterpolation",
+}
+
+
+def _timeline_item_keyframe_api_missing(method_name):
+    """KEYFRAME_API_UNAVAILABLE for a TimelineItem keyframe call this build lacks."""
+    try:
+        resolve = get_resolve()
+        version = resolve.GetVersionString() if resolve else None
+    except Exception:
+        version = None
+    return _err(
+        f"TimelineItem.{method_name} is not available on this Resolve build"
+        + (f" ({version})" if version else "")
+        + ". Edit-page (Inspector) keyframes cannot be read, added or removed from "
+          "the scripting API here: the method is not in the scripting README and a "
+          "live TimelineItem on Studio 19.1.3.7 exposes no keyframe methods at all.",
+        code="KEYFRAME_API_UNAVAILABLE", category="unsupported", retryable=False,
+        reason="A keyframed property ignores SetProperty at render time, so a clip that "
+               "carries Inspector keyframes (an AAF import, for one) cannot be resized "
+               "through the API either.",
+        remediation="Remove the keyframes in the Inspector by hand, or rebuild the item from "
+                    "the Media Pool (timeline action='replace_source_range' re-appends it). "
+                    "timeline_item(action='probe_keyframe_override') tells whether a "
+                    "property write reaches the render.",
+        state={"method": method_name, "resolve_version": version},
+    )
+
+
+#: probe_keyframe_override: how each property is nudged so the change is
+#: unmistakable in a frame (a 1.5x zoom, 200 px of pan/tilt, 30 degrees).
+_KEYFRAME_PROBE_NUDGE = {
+    "ZoomX": lambda v: (v or 1.0) * 1.5,
+    "ZoomY": lambda v: (v or 1.0) * 1.5,
+    "Pan": lambda v: (v or 0.0) + 200.0,
+    "Tilt": lambda v: (v or 0.0) + 200.0,
+    "RotationAngle": lambda v: (v or 0.0) + 30.0,
+    "CropLeft": lambda v: (v or 0.0) + 200.0,
+    "Opacity": lambda v: 50.0 if (v is None or float(v) > 75.0) else 100.0,
+}
+#: Mean absolute luma difference (0-255) below which two frames count as the
+#: same picture. The null control has to come in under it for any verdict.
+_KEYFRAME_PROBE_NULL_TOLERANCE = 1.0
+#: A frame this flat (luma standard deviation) shows no change from any nudge.
+_KEYFRAME_PROBE_FLAT_STDDEV = 2.0
+
+
+def _still_luma_signature(data: bytes) -> Tuple[Optional[bytes], Optional[str]]:
+    """64-px-wide 8-bit luma of an encoded image, via ffmpeg. (bytes, error)."""
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        return None, "ffmpeg not found on PATH"
+    try:
+        proc = subprocess.run(
+            [ffmpeg, "-loglevel", "error", "-i", "pipe:0", "-vf", "scale=64:-2,format=gray",
+             "-frames:v", "1", "-f", "rawvideo", "pipe:1"],
+            input=data, capture_output=True, timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return None, str(exc)
+    if proc.returncode != 0 or not proc.stdout:
+        return None, (proc.stderr.decode("utf-8", "replace").strip() or "ffmpeg failed")[:400]
+    return proc.stdout, None
+
+
+def _luma_mean_abs_diff(a: bytes, b: bytes) -> Optional[float]:
+    if not a or not b or len(a) != len(b):
+        return None
+    return sum(abs(x - y) for x, y in zip(a, b)) / float(len(a))
+
+
+def _luma_stddev(a: bytes) -> float:
+    mean = sum(a) / float(len(a))
+    return (sum((x - mean) ** 2 for x in a) / float(len(a))) ** 0.5
+
+
+def _timeline_item_probe_keyframe_override(proj, tl, item, p: Dict[str, Any]) -> Dict[str, Any]:
+    """Does a SetProperty on this item reach the render, or do keyframes win?
+
+    api_truth 'TimelineItem.SetProperty (Inspector-keyframed property)': on a
+    clip carrying Edit-page keyframes, SetProperty('ZoomX', v) returns True and
+    reads back v while the render keeps the keyframed value. 19.x has no
+    keyframe API to look with, so this looks at frames instead:
+
+      A  export the frame mid-item
+      B  export it again, unchanged      <- null control: A and B must match
+      C  nudge the property, export
+      -  put the property back (always, in a finally) and read it back
+
+    A vs B establishes that the export is deterministic for this frame; only
+    then does A vs C mean anything. C matching A is the override. A flat frame
+    (a black generator, say) would show no nudge, so it is inconclusive too.
+    """
+    prop = str(p.get("property") or "ZoomX")
+    if prop not in _KEYFRAME_PROBE_NUDGE:
+        return _err(
+            f"property must be one of {sorted(_KEYFRAME_PROBE_NUDGE)}; got {prop!r}",
+            code="INVALID_PROPERTY", category="invalid_input",
+        )
+    refused = _playback_refusal(p, "probe_keyframe_override", tl=tl)
+    if refused:
+        return refused
+    start, end = _frame_int(item.GetStart()), _frame_int(item.GetEnd())
+    if start is None or end is None or end <= start:
+        return _err("Could not read the item's start/end", code="ITEM_UNREADABLE", category="api_error")
+    frame = int(p.get("frame", start + (end - start) // 2))
+    if not start <= frame < end:
+        return _err(f"frame {frame} is outside the item ({start}..{end})",
+                    code="INVALID_FRAME", category="invalid_input")
+    try:
+        original = item.GetProperty(prop)
+    except Exception as exc:
+        return _err(f"GetProperty({prop!r}) raised: {exc}", code="GET_PROPERTY_FAILED", category="api_error")
+    if original is None:
+        return _err(f"GetProperty({prop!r}) returned nothing", code="GET_PROPERTY_FAILED", category="api_error")
+    try:
+        nudged = _KEYFRAME_PROBE_NUDGE[prop](float(original))
+    except (TypeError, ValueError):
+        return _err(f"{prop} is not numeric ({original!r})", code="INVALID_PROPERTY", category="invalid_input")
+
+    teardown: List[str] = []
+    shot = {"format": "png", "frame": frame}
+
+    def _capture(label):
+        image = _playhead_frame_export(proj, tl, dict(shot), teardown)
+        if isinstance(image, dict):
+            return None, image
+        return image.data, None
+
+    frames: Dict[str, bytes] = {}
+    set_ok = None
+    readback_nudged = None
+    restored = None
+    try:
+        for label in ("a", "b"):
+            data, cap_err = _capture(label)
+            if cap_err:
+                return _capture_with_teardown(cap_err, teardown)
+            frames[label] = data
+        set_ok = bool(item.SetProperty(prop, nudged))
+        try:
+            readback_nudged = item.GetProperty(prop)
+        except Exception:
+            readback_nudged = None
+        data, cap_err = _capture("c")
+        if cap_err:
+            return _capture_with_teardown(cap_err, teardown)
+        frames["c"] = data
+    finally:
+        if set_ok is not None:
+            try:
+                restore_ok = bool(item.SetProperty(prop, original))
+                back = item.GetProperty(prop)
+                restored = restore_ok and back is not None and abs(float(back) - float(original)) < 1e-6
+            except Exception:
+                restored = False
+            if not restored:
+                teardown.append(
+                    f"{prop} was not put back to {original!r}. Restore it with "
+                    f"timeline_item(action='set_property', params={{'key': {prop!r}, 'value': {original!r}}})."
+                )
+
+    method = "luma"
+    sigs = {}
+    for label, data in frames.items():
+        sig, sig_err = _still_luma_signature(data)
+        if sig_err:
+            method = "bytes"
+            break
+        sigs[label] = sig
+    if method == "luma":
+        null_diff = _luma_mean_abs_diff(sigs["a"], sigs["b"])
+        change_diff = _luma_mean_abs_diff(sigs["a"], sigs["c"])
+        flat = _luma_stddev(sigs["a"]) < _KEYFRAME_PROBE_FLAT_STDDEV
+    else:
+        null_diff = 0.0 if frames["a"] == frames["b"] else None
+        change_diff = 0.0 if frames["a"] == frames["c"] else None
+        flat = False
+    if null_diff is None or null_diff > _KEYFRAME_PROBE_NULL_TOLERANCE:
+        verdict, why = "inconclusive", "the null control failed: two exports of the unchanged frame differ"
+    elif flat:
+        verdict, why = "inconclusive", "the frame is flat, so no nudge would show"
+    elif change_diff is not None and change_diff <= max(_KEYFRAME_PROBE_NULL_TOLERANCE, 3 * null_diff):
+        verdict, why = "override", (
+            f"SetProperty({prop!r}) returned {set_ok} and read back {readback_nudged!r}, but the "
+            "frame did not change: the item very likely carries Inspector keyframes for it")
+    else:
+        verdict, why = "writes_render", f"the {prop} write changed the rendered frame"
+    result = _ok(
+        verdict=verdict, reason=why, property=prop, frame=frame,
+        original_value=original, nudged_value=nudged, set_property_returned=set_ok,
+        readback_after_set=readback_nudged, restored=restored, compare_method=method,
+        null_diff=null_diff, change_diff=change_diff,
+    )
+    return _capture_with_teardown(result, teardown)
+
+
+def _edit_transform_pixel_units(tl, item, p: Dict[str, Any]):
+    """Pixels per Pan / Tilt unit for this item. Returns (conversion, error).
+
+    api_truth 'TimelineItem Pan / Tilt / ZoomX / ZoomY (Edit Inspector
+    transform units)': Pan moves Pan x fittedW / timelineW pixels and Tilt
+    moves Tilt x fittedH / timelineH pixels (+up), where fitted is the clip
+    after input scaling. Measured for scale-to-fit only (a 720x1280 clip in a
+    4096x1716 timeline fits at 965x1716; Pan -500 moved it 117 px), so other
+    scaling modes need fitted_width / fitted_height from the caller.
+    """
+    def _num(*keys):
+        for key in keys:
+            if p.get(key) is not None:
+                try:
+                    return float(p[key])
+                except (TypeError, ValueError):
+                    return None
+        return None
+
+    tl_w, tl_h = _num("timeline_width"), _num("timeline_height")
+    if not tl_w or not tl_h:
+        try:
+            tl_w = float(tl.GetSetting("timelineResolutionWidth"))
+            tl_h = float(tl.GetSetting("timelineResolutionHeight"))
+        except Exception:
+            tl_w = tl_h = None
+    if not tl_w or not tl_h:
+        return None, _err("Could not read the timeline resolution",
+                          code="TIMELINE_RESOLUTION_UNREADABLE", category="api_error",
+                          remediation="Pass timeline_width and timeline_height.")
+    fit_w, fit_h = _num("fitted_width"), _num("fitted_height")
+    mode = "caller-supplied fitted size"
+    src = None
+    if not fit_w or not fit_h:
+        src_w, src_h = _num("source_width"), _num("source_height")
+        if src_w and src_h:
+            src = (src_w, src_h)
+        else:
+            try:
+                mpi = item.GetMediaPoolItem()
+                parsed = _parse_resolution(mpi.GetClipProperty("Resolution")) if mpi else None
+            except Exception:
+                parsed = None
+            src = (float(parsed[0]), float(parsed[1])) if parsed else None
+        if not src:
+            return None, _err("Could not read the clip's source resolution",
+                              code="SOURCE_RESOLUTION_UNREADABLE", category="api_error",
+                              remediation="Pass source_width and source_height, or fitted_width and fitted_height.")
+        try:
+            scaling = int(item.GetProperty("Scaling") or 0)
+        except Exception:
+            scaling = None
+        project_mode = None
+        if scaling == 0:
+            try:
+                project_mode = tl.GetSetting("timelineInputResScaleType")
+            except Exception:
+                project_mode = None
+        is_fit = scaling == 2 or (scaling == 0 and project_mode in (None, "", "scaleToFit"))
+        if not is_fit:
+            return None, _err(
+                "pan_px / tilt_px are only modelled for 'scale entire image to fit' input "
+                f"scaling; this item has Scaling={scaling!r}"
+                + (f" (project {project_mode!r})" if project_mode else ""),
+                code="SCALING_MODE_UNMEASURED", category="unsupported",
+                remediation="Pass fitted_width and fitted_height (the clip's on-screen size at "
+                            "Zoom 1.0), or set Pan/Tilt directly.",
+                state={"scaling": scaling, "project_scaling": project_mode},
+            )
+        factor = min(tl_w / src[0], tl_h / src[1])
+        fit_w, fit_h = src[0] * factor, src[1] * factor
+        mode = "scale to fit"
+    conversion = {
+        "model": mode,
+        "timeline_size": [tl_w, tl_h],
+        "source_size": list(src) if src else None,
+        "fitted_size": [round(fit_w, 3), round(fit_h, 3)],
+        "pan_px_per_unit": fit_w / tl_w,
+        "tilt_px_per_unit": fit_h / tl_h,
+        "tilt_direction": "+up",
+    }
+    try:
+        zoom = float(item.GetProperty("ZoomX"))
+    except Exception:
+        zoom = None
+    if zoom is not None and abs(zoom - 1.0) > 1e-6:
+        conversion["caveat"] = (f"ZoomX is {zoom:g}; whether Zoom changes the Pan/Tilt scale "
+                                "was not measured. Check the frame.")
+    return conversion, None
+
 
 def _requires_method(obj, method_name, min_version):
     if _has_method(obj, method_name):
@@ -4655,6 +4955,51 @@ def _timeline_items_presence(tl, items):
     return "absent"
 
 
+def _timeline_locked_tracks(tl, tracks) -> List[str]:
+    """'type:index' for each of `tracks` ((type, index) pairs) that is locked.
+
+    api_truth 'Timeline.DeleteClips (locked track)': a delete on a locked track
+    returns a bare False, and SetProperty still writes there, so nothing else
+    tells the caller why. An unreadable lock is left out: it is not evidence.
+    """
+    locked = []
+    for track_type, track_index in sorted({(str(t), int(i)) for t, i in tracks}):
+        try:
+            if bool(tl.GetIsTrackLocked(track_type, track_index)):
+                locked.append(f"{track_type}:{track_index}")
+        except Exception:
+            continue
+    return locked
+
+
+def _items_tracks(items):
+    """(type, index) for every item whose track can be read."""
+    tracks = []
+    for item in items:
+        info, _ = _timeline_item_track_info(item)
+        if info:
+            tracks.append(info)
+    return tracks
+
+
+def _track_locked_refusal(locked: List[str], what: str, *, extra_remediation: str = ""):
+    """TRACK_LOCKED for a call that would otherwise fail with a bare False."""
+    first_type, first_index = locked[0].split(":")
+    return _err(
+        f"{what} would fail on locked track(s): {', '.join(locked)}. Resolve answers a "
+        "locked track with a bare False and no reason.",
+        code="TRACK_LOCKED", category="precondition", retryable=False,
+        reason="SetProperty still writes to items on a locked track, so a property edit "
+               "that worked does not mean the track is unlocked.",
+        remediation=(
+            f"Unlock with timeline(action='set_track_lock', params={{'track_type': "
+            f"{first_type!r}, 'index': {int(first_index)}, 'locked': false}}), retry, then lock "
+            "it again." + (f" {extra_remediation}" if extra_remediation else "")
+        ),
+        state={"locked_tracks": locked},
+    )
+
+
 def _timeline_delete_clips_verified(tl, items, ripple, *, resolve=None):
     """Timeline.DeleteClips with a page guard and readback-and-retry.
 
@@ -5162,6 +5507,388 @@ def _ripple_item_row(item, track_type, track_index):
 
 def _ripple_public_row(row):
     return {k: row[k] for k in ("clip_id", "name", "track_type", "track_index", "start", "end", "duration")}
+
+
+#: What replace_source_range carries from the original item to its replacement,
+#: through the temporary copy. Retime is deliberately absent: a speed written
+#: onto the new item changes its length, which is the one thing a slip must
+#: not do. Keyframes are absent because 19.x has no keyframe API to copy them.
+_SLIP_COPY_GROUPS = ["transform", "crop", "composite", "scaling", "dynamic_zoom",
+                     "stabilization", "clip_color", "enabled", "flags", "markers"]
+#: Property groups read back on the final item and compared to the original.
+_SLIP_VERIFY_GROUPS = ("transform", "crop", "composite", "scaling")
+#: AppendToTimeline attempts per placement. The first uses the exclusive
+#: endFrame; a length that lands a frame off (the mixed-fps floor, api_truth
+#: 'MediaPool.AppendToTimeline with mixed-fps sources') is corrected and retried.
+_SLIP_APPEND_ATTEMPTS = 3
+
+
+def _slip_property_snapshot(item) -> Dict[str, Any]:
+    snapshot = {}
+    for group in _SLIP_VERIFY_GROUPS:
+        for key in _DUPLICATE_COPY_PROPERTY_KEYS[group]:
+            try:
+                snapshot[key] = item.GetProperty(key)
+            except Exception:
+                snapshot[key] = None
+    return snapshot
+
+
+def _slip_property_mismatches(expected: Dict[str, Any], item) -> Dict[str, Any]:
+    mismatches = {}
+    for key, want in expected.items():
+        if want is None:
+            continue
+        try:
+            got = item.GetProperty(key)
+        except Exception:
+            got = None
+        try:
+            same = abs(float(got) - float(want)) < 1e-4
+        except (TypeError, ValueError):
+            same = got == want
+        if not same:
+            mismatches[key] = {"expected": want, "got": got}
+    return mismatches
+
+
+def _slip_item_at(tl, track_index: int, record_frame: int, mpi_id: Optional[str]):
+    """The video item starting at record_frame on a track (newest on a tie)."""
+    try:
+        items = tl.GetItemListInTrack("video", track_index) or []
+    except Exception:
+        return None
+    found = None
+    for candidate in items:
+        try:
+            if _frame_int(candidate.GetStart()) != record_frame:
+                continue
+        except Exception:
+            continue
+        if mpi_id and _safe_media_pool_item_id(_timeline_item_media_pool_item(candidate)) != mpi_id:
+            continue
+        found = candidate
+    return found
+
+
+def _slip_append(mp, tl, info: Dict[str, Any], *, duration: int, ratio: float,
+                 mpi_id: Optional[str], resolve=None):
+    """Append one clipInfo and PROVE it landed at the right start and length.
+
+    Returns (item, final_info, attempts). A wrong-length append is deleted and
+    retried with endFrame corrected by the shortfall, in source frames, at
+    least one. Exclusive endFrame is the rule (api_truth 'MediaPool.
+    AppendToTimeline clipInfo endFrame (exclusive bound)'); a source rate that
+    differs from the timeline's can still floor a frame away, which a real
+    session on Studio 19.1.3.7 hit and fixed with exactly this retry.
+    """
+    attempts: List[Dict[str, Any]] = []
+    record = int(info["recordFrame"])
+    track_index = int(info["trackIndex"])
+    for _attempt in range(_SLIP_APPEND_ATTEMPTS):
+        # The returned handles can be thin (api_truth 'MediaPool.AppendToTimeline
+        # (null-id timeline items)'), so the track is read back for the item;
+        # the return is kept only as evidence in the attempt log.
+        try:
+            returned = mp.AppendToTimeline([dict(info)])
+        except Exception as exc:
+            attempts.append({"endFrame": info["endFrame"], "error": f"AppendToTimeline raised: {exc}"})
+            return None, info, attempts
+        landed = _slip_item_at(tl, track_index, record, mpi_id)
+        if landed is None:
+            attempts.append({"endFrame": info["endFrame"], "returned": bool(returned),
+                             "error": "nothing landed at the record frame"})
+            return None, info, attempts
+        got_start = _frame_int(landed.GetStart())
+        got_end = _frame_int(landed.GetEnd())
+        got_duration = _timeline_item_duration(landed, got_start, got_end)
+        attempts.append({"startFrame": info["startFrame"], "endFrame": info["endFrame"],
+                         "start": got_start, "end": got_end, "duration": got_duration})
+        if got_start == record and got_duration == duration:
+            return landed, info, attempts
+        # Wrong length: take it back out before trying again, so a retry can
+        # never stack two copies in one slot.
+        if not _timeline_delete_clips_verified(tl, [landed], False, resolve=resolve):
+            attempts[-1]["error"] = "a wrong-length append could not be removed"
+            return None, info, attempts
+        if got_start != record or got_duration is None:
+            attempts[-1]["error"] = "landed at the wrong record frame"
+            return None, info, attempts
+        shortfall = duration - got_duration
+        step = int(round(shortfall * ratio)) or (1 if shortfall > 0 else -1)
+        info = {**info, "endFrame": int(info["endFrame"]) + step}
+    return None, info, attempts
+
+
+def _copy_grades_checked(source_item, target_item, resolve=None) -> Dict[str, Any]:
+    """CopyGrades source -> target, retried once on the Color page.
+
+    Grade WRITES are page-dependent on 19.1.3.7 (api_truth: AddVersion and
+    ApplyGradeFromDRX return False off the Color page); CopyGrades has not been
+    measured either way, so a False off Color earns one retry there, and the
+    page is put back. Node counts are read back as the evidence.
+    """
+    def _attempt():
+        try:
+            return bool(source_item.CopyGrades([target_item]))
+        except Exception:
+            return False
+
+    out: Dict[str, Any] = {"success": _attempt(), "color_page_retry": False}
+    if not out["success"] and resolve is not None:
+        try:
+            page = resolve.GetCurrentPage()
+        except Exception:
+            page = None
+        if page and page != "color":
+            with _restoring_page(resolve, what="CopyGrades on the Color page"):
+                out["color_page_opened"] = bool(_open_page_serialized(resolve, "color"))
+                if out["color_page_opened"]:
+                    out["success"] = _attempt()
+            out["color_page_retry"] = True
+
+    def _nodes(item):
+        try:
+            graph = item.GetNodeGraph()
+            return int(graph.GetNumNodes()) if graph else None
+        except Exception:
+            return None
+
+    out["source_nodes"], out["target_nodes"] = _nodes(source_item), _nodes(target_item)
+    return out
+
+
+def _timeline_replace_source_range_impl(proj, tl, p: Dict[str, Any], *, resolve=None) -> Dict[str, Any]:
+    """Slip a video item to a new source range, keeping its grade and sizing.
+
+    The 19.x API cannot slip or trim (api_truth 'Timeline slip / trim of an
+    existing item (no API on 19.x)'), so this rebuilds the item:
+
+      1. append the new range at the same record frame on a temporary track
+      2. CopyGrades original -> temporary copy, and carry transform, crop,
+         composite, scaling and the rest (_SLIP_COPY_GROUPS)
+      3. delete the original
+      4. append the final copy on the original track
+      5. CopyGrades temporary -> final, and re-apply the properties
+      6. delete the temporary copy and its track, restore the track lock
+
+    The temporary copy holds the grade and sizing between steps 3 and 4, so a
+    failure at step 4 leaves it in place as the recovery, and says where.
+    Start, end and duration are verified exactly at both placements. The
+    version-on-mutate hook archives the timeline first; executing is
+    confirm-token gated; dry_run=true returns the plan.
+
+    Params: timeline_item_id (video), and either source_start (FILE-relative
+    source frame, as timeline_item get_source_start_frame reports) or
+    slip_frames (offset from the current one). source_end (exclusive) defaults
+    to the same record length at the source's own rate. unlock_track=true
+    unlocks a locked track for the swap. ignore_linked=true proceeds when
+    linked audio exists (the audio is not slipped).
+    """
+    item_id = p.get("timeline_item_id") or p.get("timelineItemId") or p.get("clip_id")
+    if not item_id:
+        return _err("replace_source_range requires timeline_item_id",
+                    code="MISSING_TIMELINE_ITEM_ID", category="invalid_input")
+    item = _find_timeline_item_by_id(tl, item_id)
+    if item is None:
+        return _err(f"No timeline item with id {item_id!r}", code="ITEM_NOT_FOUND", category="invalid_input")
+    track_info, track_err = _timeline_item_track_info(item)
+    if track_err:
+        return track_err
+    if track_info[0] != "video":
+        return _err("replace_source_range slips video items only",
+                    code="UNSUPPORTED_TRACK_TYPE", category="unsupported")
+    track_index = track_info[1]
+    mpi = _timeline_item_media_pool_item(item)
+    if not mpi:
+        return _err("The item has no Media Pool clip (a title or generator), so it cannot be re-appended",
+                    code="NO_MEDIA_POOL_ITEM", category="unsupported")
+    mpi_id = _safe_media_pool_item_id(mpi)
+    start, end = _frame_int(item.GetStart()), _frame_int(item.GetEnd())
+    duration = _timeline_item_duration(item, start, end)
+    old_source_start = _timeline_item_source_start(item)
+    if start is None or end is None or not duration or old_source_start is None:
+        return _err("Could not read the item's record or source range",
+                    code="ITEM_UNREADABLE", category="api_error")
+    if p.get("source_start") is not None:
+        source_start = _frame_int(p["source_start"])
+    elif p.get("slip_frames") is not None:
+        source_start = old_source_start + int(p["slip_frames"])
+    else:
+        return _err("Pass source_start (file-relative source frame) or slip_frames",
+                    code="MISSING_SOURCE_RANGE", category="invalid_input")
+    if source_start is None or source_start < 0:
+        return _err(f"source_start must be a non-negative frame; got {source_start!r}",
+                    code="INVALID_SOURCE_RANGE", category="invalid_input")
+    tl_fps, _fps_err = _timeline_fps(tl)
+    media_fps = _media_item_source_fps(mpi)
+    ratio = (media_fps / tl_fps) if (tl_fps and media_fps) else 1.0
+    if p.get("source_end") is not None:
+        source_end = _frame_int(p["source_end"])
+    else:
+        source_end = source_start + int(round(duration * ratio))
+    if source_end is None or source_end <= source_start:
+        return _err("source_end must be after source_start (it is exclusive)",
+                    code="INVALID_SOURCE_RANGE", category="invalid_input")
+
+    blockers = []
+    linked_audio = []
+    get_linked = getattr(item, "GetLinkedItems", None)
+    if callable(get_linked):
+        try:
+            for linked in get_linked() or []:
+                info, _ = _timeline_item_track_info(linked)
+                if info and info[0] == "audio":
+                    linked_audio.append(_safe_timeline_item_id(linked))
+        except Exception:
+            pass
+    if linked_audio and not _coerce_bool(p.get("ignore_linked")):
+        blockers.append("the item has linked audio, which would not be slipped "
+                        "(pass ignore_linked=true to slip the video alone)")
+    try:
+        comps = int(item.GetFusionCompCount() or 0) if _has_method(item, "GetFusionCompCount") else 0
+    except Exception:
+        comps = 0
+    if comps:
+        blockers.append(f"the item carries {comps} Fusion comp(s), which this rebuild does not carry")
+    locked = _timeline_locked_tracks(tl, [track_info])
+    unlock = _coerce_bool(p.get("unlock_track"))
+    original_props = _slip_property_snapshot(item)
+    plan = {
+        "timeline_item_id": str(item_id),
+        "track": f"video:{track_index}",
+        "record": {"start": start, "end": end, "duration": duration},
+        "source_before": {"start": old_source_start},
+        "source_after": {"start": source_start, "end_exclusive": source_end},
+        "source_fps": media_fps, "timeline_fps": tl_fps,
+        "carried": ["grades"] + list(_SLIP_COPY_GROUPS),
+        "not_carried": ["retime", "Inspector keyframes", "Fusion comps", "transitions"],
+        "track_locked": bool(locked),
+        "linked_audio": linked_audio,
+        "blockers": blockers,
+    }
+    if locked and not unlock:
+        return _track_locked_refusal(
+            locked, "replace_source_range",
+            extra_remediation="Or pass unlock_track=true: the track is unlocked for the swap "
+                              "and locked again afterwards.")
+    if _coerce_bool(p.get("dry_run")):
+        return {"success": not blockers, "dry_run": True, "plan": plan}
+    if blockers:
+        return _err("; ".join(blockers), code="SLIP_BLOCKED", category="precondition",
+                    state={"plan": plan})
+    refused = _playback_refusal(p, "replace_source_range", tl=tl)
+    if refused:
+        return refused
+    if "confirm_token" not in p and "confirmToken" not in p and _confirm_token_required():
+        return _issue_confirm_token(
+            action="timeline.replace_source_range", params=p,
+            preview={"operation": "timeline.replace_source_range",
+                     "warning": "Deletes the item and re-appends it with the new source range; "
+                                "grade and sizing are carried, retime and Inspector keyframes are not.",
+                     **plan})
+    blocked = _consume_confirm_token(action="timeline.replace_source_range", params=p)
+    if blocked:
+        return blocked
+
+    mp = proj.GetMediaPool()
+    if not mp:
+        return _err("Failed to get MediaPool")
+    base_info = {"mediaPoolItem": mpi, "startFrame": source_start, "endFrame": source_end,
+                 "recordFrame": start, "mediaType": 1}
+    report: Dict[str, Any] = {"plan": plan, "steps": {}}
+    steps = report["steps"]
+    unlocked = False
+    temp_index = None
+    temp_item = None
+    page_guard = _edit_page_for_timeline_edits(resolve) if resolve is not None else contextlib.nullcontext()
+    try:
+        with page_guard:
+            count_before = _timeline_track_count(tl, "video")
+            if not tl.AddTrack("video") or _timeline_track_count(tl, "video") != count_before + 1:
+                return _err("Could not add a temporary video track", code="ADD_TRACK_FAILED",
+                            category="api_error", state=report)
+            temp_index = count_before + 1
+            # 1. new range on the temporary track
+            temp_item, info, steps["temp_append"] = _slip_append(
+                mp, tl, {**base_info, "trackIndex": temp_index},
+                duration=duration, ratio=ratio, mpi_id=mpi_id, resolve=resolve)
+            if temp_item is None:
+                report["temp_track_removed"] = bool(tl.DeleteTrack("video", temp_index))
+                temp_index = None
+                return _err("The new source range could not be placed at the item's record frame; "
+                            "nothing was changed",
+                            code="SLIP_APPEND_FAILED", category="api_error", state=report)
+            # 2. grade and sizing onto the temporary copy
+            steps["grades_to_temp"] = _copy_grades_checked(item, temp_item, resolve)
+            steps["props_to_temp"] = _copy_duplicate_item_state(item, temp_item, list(_SLIP_COPY_GROUPS))
+            # 3. the original goes
+            if locked:
+                unlocked = bool(tl.SetTrackLock("video", track_index, False))
+                steps["unlocked"] = unlocked
+            if not _timeline_delete_clips_verified(tl, [item], False, resolve=resolve):
+                report["temp_removed"] = bool(
+                    _timeline_delete_clips_verified(tl, [temp_item], False, resolve=resolve))
+                report["temp_track_removed"] = bool(tl.DeleteTrack("video", temp_index))
+                temp_index = temp_item = None
+                return _err("DeleteClips refused the original; the timeline is as it was",
+                            code="SLIP_DELETE_FAILED", category="api_error", state=report)
+            steps["original_deleted"] = True
+            # 4. the final copy on the original track
+            final_item, info, steps["final_append"] = _slip_append(
+                mp, tl, {**info, "trackIndex": track_index},
+                duration=duration, ratio=ratio, mpi_id=mpi_id, resolve=resolve)
+            if final_item is None:
+                return _err(
+                    "The original was deleted but the final copy could not be placed. The "
+                    f"temporary copy on video track {temp_index} carries the new range with the "
+                    "grade and sizing: move it down, or restore the archived timeline version.",
+                    code="SLIP_FINAL_APPEND_FAILED", category="api_error", retryable=False,
+                    state={**report, "recovery": {"temp_track": temp_index,
+                                                  "temp_item_id": _safe_timeline_item_id(temp_item)}},
+                )
+            # 5. grade and sizing onto the final copy
+            steps["grades_to_final"] = _copy_grades_checked(temp_item, final_item, resolve)
+            steps["props_to_final"] = _copy_duplicate_item_state(temp_item, final_item, list(_SLIP_COPY_GROUPS))
+            # 6. the temporary copy and its track go
+            steps["temp_removed"] = bool(_timeline_delete_clips_verified(tl, [temp_item], False, resolve=resolve))
+            steps["temp_track_removed"] = bool(tl.DeleteTrack("video", temp_index))
+            if steps["temp_track_removed"]:
+                temp_index = None
+    finally:
+        if unlocked:
+            report["track_relocked"] = bool(tl.SetTrackLock("video", track_index, True))
+
+    final_start, final_end = _frame_int(final_item.GetStart()), _frame_int(final_item.GetEnd())
+    final_duration = _timeline_item_duration(final_item, final_start, final_end)
+    final_source = _timeline_item_source_start(final_item)
+    timing = {"start": final_start, "end": final_end, "duration": final_duration,
+              "source_start": final_source, "source_end_exclusive": info["endFrame"]}
+    timing_ok = (final_start, final_end, final_duration) == (start, end, duration)
+    mismatches = _slip_property_mismatches(original_props, final_item)
+    warnings = []
+    if not timing_ok:
+        warnings.append(f"Record timing moved: expected {start}..{end} ({duration}), "
+                        f"got {final_start}..{final_end} ({final_duration}).")
+    if final_source is not None and final_source != source_start:
+        warnings.append(f"Source start reads {final_source}, not {source_start}.")
+    if mismatches:
+        warnings.append(f"Properties that did not come back: {sorted(mismatches)}.")
+    for step in ("grades_to_temp", "grades_to_final"):
+        if not steps[step]["success"]:
+            warnings.append(f"CopyGrades failed at {step}; check the grade on the new item.")
+    if not steps.get("temp_removed") or not steps.get("temp_track_removed"):
+        warnings.append(f"The temporary copy or its track (video {temp_index}) was not removed.")
+    if unlocked and not report.get("track_relocked"):
+        warnings.append(f"video track {track_index} was unlocked for the swap and could not be locked again.")
+    return _ok(
+        timeline_item_id=_safe_timeline_item_id(final_item),
+        replaced_timeline_item_id=str(item_id),
+        verified=timing_ok and not mismatches and final_source in (None, source_start),
+        timing=timing, property_mismatches=mismatches, warnings=warnings,
+        note="Prove the new range with timeline_frame capture at the item's frames.",
+        **report,
+    )
 
 
 def _timeline_ripple_insert_impl(proj, tl, p: Dict[str, Any], *, resolve=None) -> Dict[str, Any]:
@@ -14551,7 +15278,37 @@ def _append_to_timeline_verified_operation(requested: Dict[str, Any], verificati
     )
 
 
-def _append_to_timeline_failed(message: str, result, requested: Dict[str, Any], verification: Dict[str, Any], before):
+def _append_target_locked_tracks(proj, clip_infos=None) -> List[str]:
+    """Locked tracks an AppendToTimeline could have been refused by.
+
+    clipInfos name their tracks (mediaType 1 video, 2 audio; absent = both).
+    A plain clip append names none, so every locked video/audio track counts.
+    """
+    try:
+        tl = proj.GetCurrentTimeline()
+    except Exception:
+        tl = None
+    if tl is None:
+        return []
+    tracks = []
+    if clip_infos:
+        for ci in clip_infos:
+            if not isinstance(ci, dict):
+                continue
+            index = ci.get("trackIndex", 1)
+            kinds = {1: ("video",), 2: ("audio",)}.get(ci.get("mediaType"), ("video", "audio"))
+            try:
+                tracks.extend((kind, int(index)) for kind in kinds)
+            except (TypeError, ValueError):
+                continue
+    else:
+        for kind in ("video", "audio"):
+            tracks.extend((kind, i) for i in range(1, _timeline_track_count(tl, kind) + 1))
+    return _timeline_locked_tracks(tl, tracks)
+
+
+def _append_to_timeline_failed(message: str, result, requested: Dict[str, Any], verification: Dict[str, Any], before,
+                               locked_tracks: Optional[List[str]] = None):
     """AppendToTimeline answered None/False/[]: an error that keeps the readback.
 
     The answer alone does not prove nothing landed, so the call is retryable only
@@ -14576,6 +15333,14 @@ def _append_to_timeline_failed(message: str, result, requested: Dict[str, Any], 
             "item_count_delta": delta,
         },
     )
+    if locked_tracks:
+        # Not measured as the cause for an append; named because a locked
+        # target is the first thing to rule out and Resolve gives no reason.
+        out["error"]["state"]["locked_tracks"] = list(locked_tracks)
+        out["error"]["remediation"] = (
+            f"Locked target track(s): {', '.join(locked_tracks)}. Unlock them with "
+            "timeline(action='set_track_lock', ...) and retry. " + out["error"]["remediation"]
+        )
     out["verified_operation"] = _append_to_timeline_verified_operation(requested, verification, before)
     return out
 
@@ -15313,10 +16078,13 @@ def _timeline_subtitle_count(tl) -> int:
 
 def _playhead_frame_render(proj, tl, p: Dict[str, Any],
                            teardown: Optional[List[str]] = None):
-    """Render exactly one frame — the only frame-accurate capture route.
+    """Render exactly one frame — quality='render', used only when asked for.
 
-    The two cheaper routes cannot do this job (both measured on Studio 19.1.3.7,
-    recorded in api_truth):
+    The default route is now _playhead_frame_export (ExportCurrentFrameAsStill):
+    on a real project on Studio 19.1.3.7 this render route failed every call
+    with "AddRenderJob returned nothing" while the export worked every time.
+    Two other cheap routes cannot do this job at all (both measured on Studio
+    19.1.3.7, recorded in api_truth):
       - GetCurrentClipThumbnailImage returns the CLIP's thumbnail. Seeking within
         a clip returns byte-identical data; it changes only at a clip boundary.
       - ExportStills returns bare False unless the Gallery panel is open, which
@@ -15518,7 +16286,11 @@ def _playhead_frame_render(proj, tl, p: Dict[str, Any],
             )
         job = proj.AddRenderJob()
         if not job:
-            return _err("AddRenderJob returned nothing", code="RENDER_JOB_FAILED", category="api_error")
+            return _err(
+                "AddRenderJob returned nothing", code="RENDER_JOB_FAILED", category="api_error",
+                remediation="Capture with quality='frame' (the default), which exports the "
+                            "viewer's frame with ExportCurrentFrameAsStill and needs no render job.",
+            )
         # The parent is shared (every sandbox path redirects to one
         # ~/Documents/resolve-stills) and each capture's cleanup removes it
         # when it empties. Measured 2026-09-09, when captures still shared the
@@ -15845,13 +16617,217 @@ def _playhead_frame_full(proj, tl, p: Dict[str, Any]):
                 pass
 
 
-# quality -> capture route. "frame" renders and is the only frame-accurate one,
-# so it is the default; the aliases exist because issue #146 proposed
-# preview/full, and both of those mean "the frame", just at different sizes.
+#: How long to wait for ExportCurrentFrameAsStill's file to appear. Measured at
+#: ~0.2 s for a 3840x2160 frame on Studio 19.1.3.7; the margin is for a cold
+#: cache or a slow volume, not for a call that already failed.
+_EXPORT_STILL_WAIT_SECONDS = 10.0
+
+
+def _timeline_frame_of(tl, timecode) -> Optional[int]:
+    """Absolute frame for a timecode Resolve reported, or None."""
+    if not isinstance(timecode, str) or not timecode:
+        return None
+    frame, err = _timeline_timecode_to_frame_id(tl, timecode)
+    return None if err else frame
+
+
+def _seek_and_confirm(tl, target: str, *, attempts: int = 8, delay: float = 0.1):
+    """SetCurrentTimecode(target) and read the playhead back until it lands.
+
+    Returns (landed_timecode, error). The return value of SetCurrentTimecode is
+    not the evidence: a True that left the playhead where it was has been
+    measured on Studio 19.1.3.7 straight after a page switch. The readback is
+    compared by FRAME, not by string, so a drop-frame ';' or a different
+    separator cannot fail a seek that landed.
+    """
+    want = _timeline_frame_of(tl, target)
+    try:
+        moved = bool(tl.SetCurrentTimecode(target))
+    except Exception as exc:
+        return None, _err(f"Failed to move the playhead: {exc}", code="SEEK_FAILED", category="api_error")
+    if not moved:
+        return None, _err(
+            f"Resolve refused the timecode {target!r}",
+            code="SEEK_FAILED", category="invalid_input",
+            remediation="Pass a timecode inside the timeline, as absolute ('01:00:15:12') "
+                        "or elapsed ('00:00:15:12') time.",
+        )
+    landed = None
+    for attempt in range(attempts):
+        try:
+            landed = tl.GetCurrentTimecode()
+        except Exception:
+            landed = None
+        if want is None or _timeline_frame_of(tl, landed) == want:
+            return landed, None
+        if attempt < attempts - 1:
+            time.sleep(delay)
+    return None, _err(
+        f"SetCurrentTimecode({target!r}) returned True but the playhead reads {landed!r}",
+        code="SEEK_UNCONFIRMED", category="api_error", retryable=True,
+        reason="Exporting now would capture the wrong frame under the requested timecode.",
+        remediation="Retry. If it persists, open the Edit or Color page: the Media and "
+                    "Fusion pages do not report or accept a timeline playhead.",
+        state={"requested": target, "playhead": landed},
+    )
+
+
+def _playhead_frame_export(proj, tl, p: Dict[str, Any], teardown: Optional[List[str]] = None):
+    """Frame-accurate capture via Project.ExportCurrentFrameAsStill.
+
+    The default route since the render route failed every time on a real
+    project ("AddRenderJob returned nothing", Studio 19.1.3.7, 2026-10-20)
+    while this call, after a seek and a timecode read-back, wrote the frame
+    every time: 3840x2160 in about 0.2 s. It is processed output (grade,
+    Fusion, titles), needs no page switch, no Gallery panel and no render
+    settings, so there is nothing project-level to put back. The only state it
+    touches is the playhead, which is restored.
+
+    Two things are checked rather than trusted. The seek is read back by frame
+    before the export (a True from SetCurrentTimecode that did not move has
+    been measured). And the playhead is read again after the export: if it
+    moved on its own, the transport is running and the file holds some frame
+    other than the one named, so the capture is refused.
+    """
+    if teardown is None:
+        teardown = []
+    fmt = str(p.get("format", "jpg")).lower().lstrip(".")
+    if fmt == "jpeg":
+        fmt = "jpg"
+    if fmt not in ("jpg", "png", "tif"):
+        return _err(
+            f"format must be jpg, png or tif; got {fmt!r}",
+            code="INVALID_FORMAT", category="invalid_input",
+        )
+    max_width = p.get("max_width", p.get("maxWidth"))
+    if (max_width or fmt == "tif") and not shutil.which("ffmpeg"):
+        return _err(
+            ("max_width needs ffmpeg to rescale" if max_width
+             else "format='tif' needs ffmpeg to convert into displayable image content")
+            + ", and ffmpeg is not on PATH",
+            code="FFMPEG_REQUIRED", category="precondition",
+            remediation="Install ffmpeg, or drop max_width / use jpg or png.",
+        )
+
+    # Which frame? A named one is sought and confirmed; otherwise the playhead.
+    target = None
+    frame = p.get("frame")
+    timecode = p.get("timecode")
+    if frame is not None:
+        try:
+            frame = int(frame)
+        except (TypeError, ValueError):
+            return _err("frame must be an integer", code="INVALID_FRAME", category="invalid_input")
+        target, tc_err = _timeline_frame_id_to_timecode(tl, frame)
+        if tc_err:
+            return tc_err
+    elif timecode is not None:
+        target = _playhead_absolute_timecode(tl, timecode)
+    try:
+        original_tc = tl.GetCurrentTimecode()
+    except Exception:
+        original_tc = None
+    if not isinstance(original_tc, str) or not original_tc:
+        return _err(
+            "The timeline playhead cannot be read on this page",
+            code="PLAYHEAD_UNREADABLE", category="precondition",
+            remediation="Open the Edit or Color page (the Media and Fusion pages report no "
+                        "timeline playhead), or use quality='render'.",
+        )
+    moved = False
+    if target is not None and _timeline_frame_of(tl, target) != _timeline_frame_of(tl, original_tc):
+        landed, seek_err = _seek_and_confirm(tl, target)
+        if seek_err:
+            if not _restore_playhead(tl, original_tc, what="a refused export-still seek"):
+                teardown.append(
+                    f"The playhead was not put back to {original_tc}. Restore it with "
+                    f"timeline_markers(action='set_current_timecode', params={{'timecode': {original_tc!r}}})."
+                )
+            return seek_err
+        moved = True
+        at_tc = landed
+    else:
+        at_tc = original_tc
+
+    base = _resolve_safe_dir(os.path.join(tempfile.gettempdir(), "resolve-frame-captures"))
+    folder = os.path.join(base, f"{STILL_STAGING_PREFIX}{_uuid.uuid4().hex}")
+    try:
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, f"frame.{fmt}")
+        try:
+            exported = bool(proj.ExportCurrentFrameAsStill(path))
+        except Exception as exc:
+            return _err(f"ExportCurrentFrameAsStill raised: {exc}",
+                        code="EXPORT_FRAME_FAILED", category="api_error")
+        waited = 0.0
+        # Only a True earns the wait: a False has written nothing, ever.
+        while exported and not os.path.isfile(path) and waited < _EXPORT_STILL_WAIT_SECONDS:
+            time.sleep(0.05)
+            waited += 0.05
+        if not os.path.isfile(path):
+            return _err(
+                f"ExportCurrentFrameAsStill returned {exported!r} and wrote no file",
+                code="EXPORT_FRAME_FAILED", category="api_error",
+                remediation="Make sure a video item sits under the playhead, then retry, "
+                            "or capture through a single-frame render with quality='render'.",
+                state={"timecode": at_tc, "path": path},
+            )
+        # Read the playhead once more. A frame the transport ran past is not the
+        # frame the caller named, and the file gives no way to tell.
+        try:
+            after_tc = tl.GetCurrentTimecode()
+        except Exception:
+            after_tc = None
+        if isinstance(after_tc, str) and after_tc and \
+                _timeline_frame_of(tl, after_tc) != _timeline_frame_of(tl, at_tc):
+            detail = _playback_guard.refusal_detail(
+                "a frame-accurate capture", {"timecodes": [at_tc, after_tc]})
+            return _err(
+                "The playhead moved during the export, so the still is not the "
+                f"frame at {at_tc}. " + detail["message"],
+                code="PLAYBACK_ACTIVE", category="precondition", retryable=True,
+                remediation=detail["remediation"], state=detail["state"],
+            )
+        out_format = "jpg" if fmt == "jpg" else "png"
+        if max_width or fmt == "tif":
+            data, ff_err = _ffmpeg_scale_to_bytes(path, int(max_width) if max_width else None, out_format)
+            if ff_err:
+                return _err(f"Failed to rescale the exported frame: {ff_err}",
+                            code="RESCALE_FAILED", category="api_error")
+        else:
+            with open(path, "rb") as handle:
+                data = handle.read()
+        if _timeline_subtitle_count(tl):
+            teardown.append(
+                "This still may not include the subtitle track: ExportCurrentFrameAsStill "
+                "follows the viewer, and whether it burns subtitles in has not been measured."
+            )
+        return Image(data=data, format=out_format)
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
+        try:
+            if os.path.isdir(base) and not os.listdir(base):
+                os.rmdir(base)
+        except OSError:
+            pass
+        if moved and not _restore_playhead(tl, original_tc, what="the export-still capture"):
+            teardown.append(
+                f"The playhead was not put back to {original_tc}. Restore it with "
+                f"timeline_markers(action='set_current_timecode', params={{'timecode': {original_tc!r}}})."
+            )
+
+
+# quality -> capture route. "frame" exports the viewer's processed frame with
+# ExportCurrentFrameAsStill: frame-accurate, no page switch, no render settings.
+# "render" is the older single-frame render, kept for when it is asked for by
+# name. The preview/full aliases exist because issue #146 proposed them; both
+# mean "the frame", just at different sizes.
 _PLAYHEAD_QUALITY_ALIASES = {
     "frame": "frame",
     "full": "frame",
     "preview": "frame",
+    "export": "frame",
+    "render": "render",
     "thumbnail": "thumbnail",
     "still": "still",
 }
@@ -15901,7 +16877,16 @@ def _playhead_frame_capture(p: Dict[str, Any]):
     # read, so a restore that failed is part of the answer, not just of the log.
     teardown: List[str] = []
     try:
-        if quality == "thumbnail":
+        # The export route switches no page and checks the transport itself
+        # (it reads the playhead after the export). Every other route switches
+        # pages, which is the move that has hung Resolve during playback.
+        refused = None if quality == "frame" else _playback_refusal(
+            p, f"a quality={requested!r} capture", tl=tl)
+        if refused:
+            result = refused
+        elif quality == "frame":
+            result = _playhead_frame_export(proj, tl, p, teardown)
+        elif quality == "thumbnail":
             result = _playhead_frame_preview(tl, p)
         elif quality == "still":
             result = _playhead_frame_full(proj, tl, p)
@@ -15925,6 +16910,30 @@ def _playhead_frame_capture(p: Dict[str, Any]):
                     f"{restore_err['error']['message']}"
                 )
     return _capture_with_teardown(result, teardown)
+
+
+def _playback_refusal(p: Optional[Dict[str, Any]], what: str, *, tl=None, resolve=None):
+    """A PLAYBACK_ACTIVE error when the transport is running, else None.
+
+    For calls that switch pages: a Color-page visit while playback was engaged
+    left Resolve's main thread in a viewer render loop on Studio 19.1.3.7, and
+    every scripting call after it hung (see src/utils/playback_guard.py and the
+    api_truth entry 'Resolve.OpenPage (during playback)'). An unreadable
+    playhead is "unknown" and is let through. `allow_during_playback=true`
+    overrides.
+    """
+    if _coerce_bool((p or {}).get(_playback_guard.OVERRIDE_PARAM)):
+        return None
+    if tl is None:
+        tl = _playback_guard.current_timeline(resolve if resolve is not None else get_resolve())
+    probe = _playback_guard.playhead_moving(tl)
+    if not probe["playing"]:
+        return None
+    detail = _playback_guard.refusal_detail(what, {"timecodes": probe["timecodes"]})
+    return _err(
+        detail["message"], code="PLAYBACK_ACTIVE", category="precondition", retryable=True,
+        remediation=detail["remediation"], state=detail["state"],
+    )
 
 
 def _capture_with_teardown(result, teardown: List[str]):
@@ -17215,7 +18224,9 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
       list_jobs() -> {jobs}  — compact status of every known background job
         (no connection needed).
       get_page() -> {page}
-      open_page(page) -> {success}  — page: edit, cut, color, fusion, fairlight, deliver
+      open_page(page, allow_during_playback?) -> {success}  — page: edit, cut, color, fusion, fairlight, deliver.
+        Refuses with PLAYBACK_ACTIVE while the transport is running: a Color-page
+        visit during playback has hung Resolve's main thread (Studio 19.1.3.7).
       get_keyframe_mode() -> {mode}
       set_keyframe_mode(mode) -> {success}
       quit() -> {success}
@@ -17261,7 +18272,8 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
       close_control_panel() -> {success, was_running}
       save_state() -> {state_token, page, current_timeline_id, current_timecode, selected_clip_ids}
         — Captures the current Resolve UI state so it can be restored after a preview.
-      restore_state(state_token) -> {success, restored: {...}}
+      restore_state(state_token, allow_during_playback?) -> {success, restored: {...}}
+        — refuses with PLAYBACK_ACTIVE while playback runs; stop it first.
         — Returns Resolve to a previously-saved state.
       get_execution_trace(execution_id?) -> {success, trace}
         — Correlated agent execution trace by execution_id, or most recent if omitted (no connection needed).
@@ -17664,6 +18676,16 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         })
         if err:
             return _err(err)
+        # A switch during playback has hung Resolve's main thread (Studio
+        # 19.1.3.7, after a Color-page visit); staying on the page is free.
+        try:
+            current_page = r.GetCurrentPage()
+        except Exception:
+            current_page = None
+        if current_page != clean["page"]:
+            refused = _playback_refusal(p, f"the switch to the {clean['page']!r} page", resolve=r)
+            if refused:
+                return refused
         # Serialize page switches so concurrent agents can't flip the single
         # globally-active page underneath each other.
         return {"success": bool(_open_page_serialized(r, clean["page"]))}
@@ -18630,6 +19652,17 @@ def _resolve_restore_state(p: Dict[str, Any]) -> Dict[str, Any]:
     r = get_resolve()
     if r is None:
         return _err("Not connected to DaVinci Resolve.")
+    # This is the call that timed out during playback after a Color-page
+    # visit, and left every later scripting call hung (Studio 19.1.3.7). It
+    # switches the page and then seeks, so it refuses while the transport runs.
+    try:
+        current_page = r.GetCurrentPage()
+    except Exception:
+        current_page = None
+    if state.get("page") and current_page != state.get("page"):
+        refused = _playback_refusal(p, "restore_state", resolve=r)
+        if refused:
+            return refused
     restored: Dict[str, Any] = {}
 
     # Restore page first so subsequent ops land in the right context
@@ -22119,7 +23152,8 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
             )
             if not result:
                 return _append_to_timeline_failed(
-                    "Failed to append clip_infos to timeline", result, requested, verification, before)
+                    "Failed to append clip_infos to timeline", result, requested, verification, before,
+                    locked_tracks=_append_target_locked_tracks(proj, built))
             items_out = []
             for i, item in enumerate(result):
                 item_out, item_err = _serialize_appended_timeline_item(item, i)
@@ -22156,7 +23190,8 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
         )
         if not result:
             return _append_to_timeline_failed(
-                "Failed to append clip_ids to timeline", result, requested, verification, before)
+                "Failed to append clip_ids to timeline", result, requested, verification, before,
+                locked_tracks=_append_target_locked_tracks(proj))
         out = _ok(count=len(result))
         out["verified_operation"] = _append_to_timeline_verified_operation(
             requested,
@@ -26082,7 +27117,7 @@ _TIMELINE_ACTIONS = [
     "add_track", "delete_track", "get_track_sub_type", "set_track_enable",
     "get_track_enabled", "set_track_lock", "get_track_locked", "get_track_name",
     "set_track_name", "get_items", "delete_clips", "set_clips_linked", "duplicate",
-    "duplicate_clips", "copy_clips", "move_clips", "ripple_insert", "copy_range", "duplicate_range",
+    "duplicate_clips", "copy_clips", "move_clips", "ripple_insert", "replace_source_range", "copy_range", "duplicate_range",
     "overwrite_range", "lift_range", "story_spine_report", "create_variant_from_ranges",
     "bulk_set_item_properties", "apply_look_to_items", "thumbnail_contact_sheet",
     "marker_thumbnail_review", "edit_kernel_capabilities", "probe_edit_kernel_item",
@@ -26156,7 +27191,9 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         Find clips on the current timeline matching named filters (AND). Pass filters
         inline or as a `filters` dict. Live filters: track_type, track_index,
         name_contains, duration_lt, duration_gt (frames). No clip enumeration needed.
-      delete_clips(clip_ids, ripple?) -> {success}  — clip_ids: list of unique IDs
+      delete_clips(clip_ids, ripple?) -> {success}  — clip_ids: list of unique IDs.
+        Refuses with TRACK_LOCKED (naming the tracks) when a target sits on a locked
+        track: Resolve answers that with a bare False, and SetProperty still writes there.
         DESTRUCTIVE. ripple=True is CATASTROPHIC (closes the gap; cannot be selectively undone).
       set_clips_linked(clip_ids, linked) -> {success}
       duplicate(name?) -> {success, name}
@@ -26175,6 +27212,14 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         Sources whose duplicate cannot be re-verified on the timeline are NOT deleted
         (AppendToTimeline can return null-id items, e.g. into an occupied span).
         NEVER use move_clips to open a gap for an insert — that is what ripple_insert is for.
+      replace_source_range(timeline_item_id, source_start|slip_frames, source_end?, unlock_track?, ignore_linked?, dry_run?, confirm_token?) -> {success, verified, timing, steps}
+        Slip a video item to a new source range at the same record frame, keeping grade,
+        transform, crop, composite and scaling. 19.x has no slip/trim API, so it rebuilds:
+        temp-track append -> CopyGrades -> delete original -> final append -> CopyGrades ->
+        re-apply properties -> drop temp. Start/end/duration verified exactly; a length a frame
+        off (mixed-fps) is corrected and retried. Locked track: TRACK_LOCKED unless
+        unlock_track=true (re-locked after). Confirm-token gated, timeline archived first.
+        Not carried: retime, Inspector keyframes, Fusion comps (refused), linked audio.
       ripple_insert(clip_infos, record_frame|record_timecode, record_frame_mode?, dry_run?, confirm_token?) -> {success, plan | readback}
         Insert media-pool source ranges at a record point and shift ALL later video/audio
         items right by the inserted duration. DRY-RUN by default (returns the full plan);
@@ -26569,6 +27614,9 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
                 for it in (tl.GetItemListInTrack(tt, ti) or []):
                     if it.GetUniqueId() in ids_set:
                         found.append(it)
+        locked = _timeline_locked_tracks(tl, _items_tracks(found))
+        if locked:
+            return _track_locked_refusal(locked, "DeleteClips")
         # B2 — ripple=True is catastrophic; require confirmation.
         ripple = _coerce_bool(p.get("ripple"))
         if ripple:
@@ -26606,6 +27654,8 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         return _timeline_duplicate_clips_impl(proj, tl, p, delete_sources=True, resolve=get_resolve())
     elif action == "ripple_insert":
         return _timeline_ripple_insert_impl(proj, tl, p, resolve=get_resolve())
+    elif action == "replace_source_range":
+        return _timeline_replace_source_range_impl(proj, tl, p, resolve=get_resolve())
     elif action in {"copy_range", "duplicate_range"}:
         return _timeline_copy_range_impl(proj, tl, p)
     elif action == "overwrite_range":
@@ -27214,28 +28264,42 @@ def timeline_frame(action: str, params: Optional[Dict[str, Any]] = None) -> Any:
       timecode     Absolute ('01:00:15:12') or elapsed ('00:00:15:12') timeline
                    timecode. Omit to capture the current playhead.
       frame        Alternative to timecode: absolute timeline frame number.
-      quality      'frame' (default) renders exactly that frame — the only
-                   frame-accurate route, full resolution, ~1s, works headless.
-                   'preview' is the same render bounded to max_width 1280.
-                   'thumbnail' is instant and touches nothing, but returns the
-                   CLIP's thumbnail (see below). 'still' uses a Gallery still.
-      max_width    Cap the width in pixels to conserve context. Needs ffmpeg on
-                   the render path; without it the call fails rather than
-                   quietly returning a full-size frame.
+      quality      'frame' (default) exports exactly that frame with
+                   Project.ExportCurrentFrameAsStill: frame-accurate, full
+                   resolution, ~0.2 s, no page switch, no render settings.
+                   'preview' is the same export bounded to max_width 1280.
+                   'render' renders the frame as a one-frame render job — only
+                   when asked for by name. 'thumbnail' is instant and touches
+                   nothing, but returns the CLIP's thumbnail (see below).
+                   'still' uses a Gallery still.
+      max_width    Cap the width in pixels to conserve context. Needs ffmpeg;
+                   without it the call fails rather than quietly returning a
+                   full-size frame.
       format       jpg (default), png, or tif.
       timeline_name  Capture from a different timeline; it is made current for
                    the read and the original is restored afterwards.
+      allow_during_playback  The page-switching routes ('render', 'thumbnail',
+                   'still') refuse while playback is running (PLAYBACK_ACTIVE):
+                   a page switch during playback has hung Resolve. true
+                   overrides. 'frame' switches no page; it refuses instead when
+                   the playhead moved during the export, since the still would
+                   not be the frame named.
 
     Choosing a quality — the trade-off is accuracy against side effects:
 
-      'frame'/'preview'  Frame-exact. Renders one frame, so it changes
-                   project-level render settings, and puts them back: render
-                   mode, format, codec, mark range and output folder
-                   (TargetDir). The file name (CustomName) is never touched.
-                   One exception: a project that has never had an output
-                   folder has none to put back, and Resolve cannot clear one,
-                   so it is left on the capture's temporary folder. Refuses
-                   while another render is running.
+      'frame'/'preview'  Frame-exact, and the only state touched is the
+                   playhead, which is sought, read back by frame before the
+                   export, and put back after. Measured on Studio 19.1.3.7
+                   (2026-10-20): it worked on every call on a real project
+                   where the render route failed every time with
+                   "AddRenderJob returned nothing".
+      'render'     Frame-exact. Renders one frame, so it changes project-level
+                   render settings, and puts them back: render mode, format,
+                   codec, mark range and output folder (TargetDir). The file
+                   name (CustomName) is never touched. One exception: a project
+                   that has never had an output folder has none to put back,
+                   and Resolve cannot clear one, so it is left on the capture's
+                   temporary folder. Refuses while another render is running.
       'thumbnail'  Changes nothing and returns instantly, but it is NOT frame
                    accurate: GetCurrentClipThumbnailImage returns the clip's
                    thumbnail, identical for every frame of that clip (measured
@@ -27248,7 +28312,7 @@ def timeline_frame(action: str, params: Optional[Dict[str, Any]] = None) -> Any:
 
     The playhead, the page you were on, the current timeline and the Gallery
     are all restored; a capture is a read of the picture, not an edit of the
-    cut. The render calls pull Resolve onto the Deliver page, so the render
+    cut. The render calls pull Resolve onto the Deliver page, so the 'render'
     route switches back and reads the page to confirm it. If any restore does
     not take, the image is followed by {"warnings": [...]} naming what was left
     changed and the call that puts it back (an error result carries the same
@@ -27266,14 +28330,19 @@ def timeline_frame(action: str, params: Optional[Dict[str, Any]] = None) -> Any:
         except Exception:
             current_page = None
         payload = {
-            "quality_modes": ["frame", "preview", "thumbnail", "still"],
+            "quality_modes": ["frame", "preview", "render", "thumbnail", "still"],
             "default_quality": "frame",
-            "frame_accurate": {"frame": True, "preview": True, "thumbnail": False, "still": True},
+            "default_route": "Project.ExportCurrentFrameAsStill",
+            "frame_accurate": {"frame": True, "preview": True, "render": True,
+                               "thumbnail": False, "still": True},
+            "switches_page": {"frame": False, "preview": False, "render": True,
+                              "thumbnail": True, "still": True},
             "formats": ["jpg", "png", "tif"],
             "ffmpeg": bool(shutil.which("ffmpeg")),
             "max_width_supported": bool(shutil.which("ffmpeg")),
             "current_page": current_page,
-            # What the render route ('frame'/'preview') leaves as it found it.
+            # What the 'render' route leaves as it found it. The default
+            # 'frame' route writes no render settings at all.
             # TargetDir is read off a throwaway render job and written back;
             # CustomName is never written. The one gap is a project with no
             # TargetDir yet: there is none to read and Resolve cannot clear it.
@@ -27445,7 +28514,12 @@ def timeline_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
       get_retime(...) -> {process, motion_estimation}
       set_retime(process?, motion_estimation?, ...) -> {success}  — process: nearest, frame_blend, optical_flow (or 0-3); motion_estimation: 0-6
       get_transform(...) -> {Pan, Tilt, ZoomX, ZoomY, RotationAngle, ...}
-      set_transform(Pan?, Tilt?, ZoomX?, ZoomY?, RotationAngle?, AnchorPointX?, AnchorPointY?, Pitch?, Yaw?, FlipX?, FlipY?, ...) -> {success}
+      set_transform(Pan?, Tilt?, ZoomX?, ZoomY?, RotationAngle?, AnchorPointX?, AnchorPointY?, Pitch?, Yaw?, FlipX?, FlipY?, pan_px?, tilt_px?, ...) -> {success, pixel_conversion?}
+        Units: Zoom is relative to the FITTED image; Pan moves Pan x fittedW / timelineW px,
+        Tilt moves Tilt x fittedH / timelineH px, +up — not timeline pixels unless the
+        fitted width equals the timeline's. pan_px / tilt_px (+up) are converted for
+        scale-to-fit input scaling; other modes need fitted_width / fitted_height.
+        Optional source_width/height, timeline_width/height override the readbacks.
       get_crop(...) -> {CropLeft, CropRight, CropTop, CropBottom, CropSoftness, CropRetain}
       set_crop(CropLeft?, CropRight?, CropTop?, CropBottom?, CropSoftness?, CropRetain?, ...) -> {success}
       get_composite(...) -> {Opacity, CompositeMode}
@@ -27460,6 +28534,14 @@ def timeline_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
       modify_keyframe(property, frame, new_value?, new_frame?, ...) -> {success}
       delete_keyframe(property, frame, ...) -> {success}
       set_keyframe_interpolation(property, frame, interpolation, ...) -> {success}  — Linear, Bezier, EaseIn, EaseOut, EaseInOut
+        The five keyframe actions need TimelineItem keyframe methods that 19.x does
+        not have; there they return KEYFRAME_API_UNAVAILABLE instead of crashing.
+      probe_keyframe_override(property?, frame?, allow_during_playback?, ...) -> {verdict, null_diff, change_diff, ...}
+        — whether a SetProperty reaches the render. On a clip with Inspector
+          keyframes, SetProperty returns True and reads back yet the render never
+          changes. Exports the frame twice (null control), nudges property
+          (default ZoomX), exports again, restores it. verdict: override,
+          writes_render or inconclusive.
 
     Default: track_type="video", track_index=1, item_index=0
     """
@@ -27650,11 +28732,32 @@ def timeline_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
         return {k: item.GetProperty(k) for k in keys}
     elif action == "set_transform":
         valid = {"Pan", "Tilt", "ZoomX", "ZoomY", "ZoomGang", "RotationAngle", "AnchorPointX", "AnchorPointY", "Pitch", "Yaw", "FlipX", "FlipY"}
+        conversion = None
+        if p.get("pan_px") is not None or p.get("tilt_px") is not None:
+            clash = [k for k, px in (("Pan", "pan_px"), ("Tilt", "tilt_px"))
+                     if k in p and p.get(px) is not None]
+            if clash:
+                return _err(f"Pass either {clash[0]} or its pixel form, not both",
+                            code="CONFLICTING_PARAMS", category="invalid_input")
+            conversion, conv_err = _edit_transform_pixel_units(tl, item, p)
+            if conv_err:
+                return conv_err
+            p = dict(p)
+            if p.get("pan_px") is not None:
+                p["Pan"] = float(p["pan_px"]) / conversion["pan_px_per_unit"]
+            if p.get("tilt_px") is not None:
+                p["Tilt"] = float(p["tilt_px"]) / conversion["tilt_px_per_unit"]
+            conversion = {**conversion, "Pan": p.get("Pan"), "Tilt": p.get("Tilt")}
         results = {}
         for k, v in p.items():
             if k in valid:
                 results[k] = bool(item.SetProperty(k, v))
-        return _ok(**results) if results else _err(f"Specify one or more of: {', '.join(sorted(valid))}")
+        if not results:
+            return _err(f"Specify one or more of: {', '.join(sorted(valid))}, or pan_px / tilt_px")
+        out = _ok(**results)
+        if conversion:
+            out["pixel_conversion"] = conversion
+        return out
 
     # ── Crop ──
     elif action == "get_crop":
@@ -27699,7 +28802,16 @@ def timeline_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
             out["known_limitation"] = limitation
         return out
 
+    elif action == "probe_keyframe_override":
+        proj, _, perr = _get_tl()
+        if perr:
+            return perr
+        return _timeline_item_probe_keyframe_override(proj, tl, item, p)
+
     # ── Keyframes ──
+    elif action in _TIMELINE_ITEM_KEYFRAME_METHODS and \
+            not _has_method(item, _TIMELINE_ITEM_KEYFRAME_METHODS[action]):
+        return _timeline_item_keyframe_api_missing(_TIMELINE_ITEM_KEYFRAME_METHODS[action])
     elif action == "get_keyframes":
         prop = p["property"]
         count = item.GetKeyframeCount(prop)
@@ -27728,7 +28840,7 @@ def timeline_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
             return _err(f"Invalid interpolation. Must be one of: {', '.join(valid)}")
         return {"success": bool(item.SetKeyframeInterpolation(p["property"], p["frame"], p["interpolation"]))}
 
-    return _unknown(action, ["set_output_blanking","set_use_timeline_for_output_blanking","flatten_multicam","add_transition","set_speed","set_fades","get_speed","get_fades","get_type","get_output_blanking","get_use_timeline_for_output_blanking","get_name","get_property","set_property","get_duration","get_start","get_end","get_source_start_frame","get_source_end_frame","get_source_start_time","get_source_end_time","get_left_offset","get_right_offset","set_clip_enabled","get_clip_enabled","update_sidecar","get_unique_id","get_media_pool_item","get_stereo_convergence","get_stereo_left_window","get_stereo_right_window","get_linked_items","get_track_type_and_index","get_source_audio_mapping","load_burnin_preset","set_name","get_voice_isolation_state","set_voice_isolation_state","get_retime","set_retime","get_transform","set_transform","get_crop","set_crop","get_composite","set_composite","get_audio","set_audio","get_keyframes","add_keyframe","modify_keyframe","delete_keyframe","set_keyframe_interpolation"])
+    return _unknown(action, ["set_output_blanking","set_use_timeline_for_output_blanking","flatten_multicam","add_transition","set_speed","set_fades","get_speed","get_fades","get_type","get_output_blanking","get_use_timeline_for_output_blanking","get_name","get_property","set_property","get_duration","get_start","get_end","get_source_start_frame","get_source_end_frame","get_source_start_time","get_source_end_time","get_left_offset","get_right_offset","set_clip_enabled","get_clip_enabled","update_sidecar","get_unique_id","get_media_pool_item","get_stereo_convergence","get_stereo_left_window","get_stereo_right_window","get_linked_items","get_track_type_and_index","get_source_audio_mapping","load_burnin_preset","set_name","get_voice_isolation_state","set_voice_isolation_state","get_retime","set_retime","get_transform","set_transform","get_crop","set_crop","get_composite","set_composite","get_audio","set_audio","get_keyframes","add_keyframe","modify_keyframe","delete_keyframe","set_keyframe_interpolation","probe_keyframe_override"])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -29954,7 +31066,8 @@ def gallery_stills(action: str, params: Optional[Dict[str, Any]] = None) -> Dict
       set_label(still_index, label, album_index?) -> {success}
       import_stills(paths, album_index?) -> {success}
       export_stills(folder_path, prefix?, format?, album_index?) -> {success}
-      grab_and_export(folder_path, prefix?, format?, album_index?, delete_after?, cleanup?) -> {files}
+      grab_and_export(folder_path, prefix?, format?, album_index?, delete_after?, cleanup?, allow_during_playback?) -> {files}
+        — refuses with PLAYBACK_ACTIVE while playback runs.
       delete_stills(still_indices, album_index?) -> {success}
 
     album_index defaults to current album. still_index is 0-based.
@@ -30060,6 +31173,12 @@ def gallery_stills(action: str, params: Optional[Dict[str, Any]] = None) -> Dict
         if err2:
             _discard_still_staging(staging)
             return err2
+        # It runs on the Color page, the page whose visit during playback hung
+        # Resolve (Studio 19.1.3.7), and a moving playhead grabs some other frame.
+        refused = _playback_refusal(p, "grab_and_export", tl=tl)
+        if refused:
+            _discard_still_staging(staging)
+            return refused
         still = tl.GrabStill()
         if not still:
             _discard_still_staging(staging)

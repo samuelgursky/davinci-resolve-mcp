@@ -146,6 +146,7 @@ DESTRUCTIVE_ACTIONS_BY_TOOL: Dict[str, FrozenSet[str]] = {
         "duplicate_clips",
         "copy_clips",
         "ripple_insert",
+        "replace_source_range",
         "copy_range",
         "duplicate_range",
         "overwrite_range",
@@ -194,6 +195,9 @@ DESTRUCTIVE_ACTIONS_BY_TOOL: Dict[str, FrozenSet[str]] = {
     }),
     "timeline_item": frozenset({
         "delete_keyframe",
+        # Writes a nudged value and then the original back; a probe, but a
+        # write every gate must see.
+        "probe_keyframe_override",
         "set_output_blanking",
         "set_use_timeline_for_output_blanking",
         "set_clip_enabled",
@@ -371,6 +375,7 @@ NATIVE_DRY_RUN_ACTIONS: frozenset = frozenset({
     ("media_pool", "setup_multicam_timeline"),
     ("timeline", "apply_cuts"),
     ("timeline", "ripple_insert"),
+    ("timeline", "replace_source_range"),
     ("timeline_ai", "create_subtitles"),
     ("timeline_ai", "set_subtitle_preset"),
     ("script_plugin", "safe_install_extension"),

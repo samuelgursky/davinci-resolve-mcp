@@ -168,6 +168,10 @@ class RiskClassificationHook(LifecycleHook):
         # rewire what the timeline points at.
         ("timeline", "move_clips"),
         ("timeline", "ripple_insert"),
+        # A slip deletes the original item and re-appends it with a new source
+        # range; grade and sizing are carried, retime and Inspector keyframes
+        # are not. Same rebuild shape as move_clips.
+        ("timeline", "replace_source_range"),
         ("timeline", "create_compound_clip"),
         ("timeline", "create_fusion_clip"),
         # ImportIntoTimeline lays an external edit over the timeline;
@@ -243,6 +247,9 @@ class RiskClassificationHook(LifecycleHook):
         ("timeline_item", "set_name"),
         ("timeline_item", "set_crop"),
         ("timeline_item", "set_transform"),
+        # Nudges one property for a frame comparison and sets it back in a
+        # finally; the result says whether the restore read back.
+        ("timeline_item", "probe_keyframe_override"),
         ("timeline_item", "set_composite"),
         ("timeline_item", "set_audio"),
         # Cache toggles and node *labels* — not grades.

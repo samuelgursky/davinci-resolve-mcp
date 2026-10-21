@@ -391,21 +391,25 @@ class _RenderCapture:
             os.makedirs(base, exist_ok=True)
             with open(os.path.join(base, filename), "wb") as fh:
                 fh.write(b"someone else's file")
+        # The render route is no longer the default (quality='frame' exports
+        # the viewer's frame); this fixture drives it by name.
+        params = {"quality": "render", **params}
         with mock.patch.object(s, "get_resolve", return_value=resolve), \
              mock.patch.object(s, "_get_tl", return_value=(proj, tl, None)), \
              mock.patch.object(s, "_resolve_safe_dir", return_value=base), \
              mock.patch.object(s.shutil, "which", return_value=ffmpeg), \
              mock.patch.object(s, "_ffmpeg_scale_to_bytes", return_value=(b"\xff\xd8scaled", None)), \
-             mock.patch.object(page_lock.time, "sleep"):
+             mock.patch.object(page_lock.time, "sleep"), \
+             mock.patch.object(s._playback_guard.time, "sleep"):
             out = s.timeline_frame("capture", params)
         return out, proj, calls
 
 
 class CaptureRenderTest(_RenderCapture, unittest.TestCase):
-    """quality='frame' — the default, and the only frame-accurate route."""
+    """quality='render' — the single-frame render, used only when asked for."""
 
-    def test_render_is_the_default_quality(self):
-        out, proj, _ = self._capture({})
+    def test_render_route_runs_when_asked_for_by_name(self):
+        out, proj, _ = self._capture({"quality": "render"})
         self.assertIsInstance(out, Image)
         proj.StartRendering.assert_called_once()
 
@@ -572,18 +576,6 @@ class CaptureRenderTest(_RenderCapture, unittest.TestCase):
         out, _, _ = self._capture({"max_width": 640}, ffmpeg=None)
         self.assertEqual(out["error"]["code"], "FFMPEG_REQUIRED")
 
-    def test_preview_alias_bounds_the_width(self):
-        # 'preview' from the issue's schema means a fast downscaled frame, not
-        # the clip thumbnail — it must still render, just bounded.
-        out, proj, _ = self._capture({"quality": "preview"})
-        self.assertIsInstance(out, Image)
-        proj.StartRendering.assert_called_once()
-        self.assertEqual(out.data, b"\xff\xd8scaled")
-
-    def test_full_alias_maps_to_the_render_route(self):
-        out, proj, _ = self._capture({"quality": "full"})
-        self.assertIsInstance(out, Image)
-        proj.StartRendering.assert_called_once()
 
 
 class CaptureRenderPageRestoreTest(_RenderCapture, unittest.TestCase):

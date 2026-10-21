@@ -3754,6 +3754,167 @@ API_TRUTH: List[Dict[str, Any]] = [
                     "INPB_Passive true, INPI_LabelControl_NumInputs 6 / 5 / 2.",
         "mitigation": ["fusion_comp.add_keyframe", "fusion_comp.add_modifier"],
     },
+    {
+        "symbol": "Project.ExportCurrentFrameAsStill (frame-accurate capture)",
+        "object": "Project",
+        "signature": "(filePath) -> Bool",
+        "reality": "After Timeline.SetCurrentTimecode and a timecode read-back, it "
+                   "writes the viewer's processed frame (grade, Fusion, titles) at "
+                   "full timeline resolution: 3840x2160 in about 0.2 s, on every "
+                   "call, on a real project where the one-frame render route "
+                   "failed on every call with AddRenderJob returning nothing. It "
+                   "needs no page switch, no Gallery panel and no render settings, "
+                   "so there is no project state to put back. The image format "
+                   "follows the file extension. Not measured: whether a subtitle "
+                   "track is burned in. The Media and Fusion pages report no "
+                   "timeline playhead, so a named frame cannot be sought there.",
+        "recommended": "Use it for frame evidence: timeline_frame capture "
+                       "(quality='frame', the default) seeks, reads the playhead "
+                       "back BY FRAME before exporting (a True from "
+                       "SetCurrentTimecode that did not move has been measured), "
+                       "reads it again after (a moving playhead means the still "
+                       "is some other frame), and restores it. Keep the "
+                       "single-frame render (quality='render') for when it is "
+                       "asked for.",
+        "tags": ["frame-capture", "timeline", "readback"],
+        "verified_on": "DaVinci Resolve Studio 19.1.3.7",
+        "measured": "2026-10-20/21, a 16-clip conform session on a real project; "
+                    "the render route failed every time, this call worked every time.",
+        "mitigation": ["_playhead_frame_export", "_seek_and_confirm"],
+    },
+    {
+        "symbol": "TimelineItem.SetProperty (Inspector-keyframed property)",
+        "object": "TimelineItem",
+        "signature": "(propertyKey, propertyValue) -> Bool",
+        "reality": "On a clip that carries Edit-page (Inspector) keyframes for a "
+                   "transform property, as clips from an AAF import can, "
+                   "SetProperty('ZoomX', v) returns True and GetProperty reads v "
+                   "back, but the rendered frame never changes: the keyframes "
+                   "win at render time. Nothing in the return or the readback "
+                   "says so. On 19.x it cannot be detected or fixed from the API "
+                   "either: dir() of a live TimelineItem lists no keyframe "
+                   "methods (GetKeyframeCount, AddKeyframe and the rest are "
+                   "absent, and not in the scripting README), so the attribute "
+                   "is None and a call dies as \"'NoneType' object is not "
+                   "callable\".",
+        "recommended": "Prove a transform with frames, never with the return or "
+                       "the readback. timeline_item probe_keyframe_override "
+                       "exports the frame twice (null control), nudges the "
+                       "property, exports again and restores it; verdict "
+                       "'override' means keyframes are winning. Then remove them "
+                       "in the Inspector, or rebuild the item from the Media Pool "
+                       "(timeline replace_source_range re-appends it; a fresh "
+                       "append should carry no Inspector keyframes, which is not "
+                       "yet verified by render). The timeline_item keyframe "
+                       "actions return KEYFRAME_API_UNAVAILABLE on builds without "
+                       "the methods.",
+        "tags": ["silent-failure", "unreliable-return", "keyframes", "transform",
+                 "timeline", "missing-method"],
+        "submit": "bug",
+        "verified_on": "DaVinci Resolve Studio 19.1.3.7",
+        "mitigation": ["_timeline_item_probe_keyframe_override",
+                       "_timeline_item_keyframe_api_missing"],
+    },
+    {
+        "symbol": "Timeline.DeleteClips (locked track)",
+        "object": "Timeline",
+        "signature": "([TimelineItem], ripple) -> bool",
+        "reality": "On a locked track DeleteClips returns a bare False and "
+                   "deletes nothing, with nothing to say the lock is why. The "
+                   "lock does not stop SetProperty: transform and other property "
+                   "writes on items of the same locked track still succeed, so a "
+                   "property edit that worked is no evidence the track is "
+                   "unlocked. Separate from the Edit-page gate in 'Timeline."
+                   "DeleteClips (requires the Edit page; flaky first attempt)'.",
+        "recommended": "Read Timeline.GetIsTrackLocked for every track the "
+                       "targets sit on before deleting. timeline delete_clips "
+                       "refuses with TRACK_LOCKED naming the tracks; "
+                       "replace_source_range unlocks only with unlock_track=true "
+                       "and locks the track again afterwards; media_pool "
+                       "append_to_timeline names locked target tracks in its "
+                       "failure.",
+        "tags": ["silent-failure", "timeline", "edit", "track-lock"],
+        "submit": "bug",
+        "verified_on": "DaVinci Resolve Studio 19.1.3.7",
+        "mitigation": ["_timeline_locked_tracks", "_track_locked_refusal"],
+    },
+    {
+        "symbol": "TimelineItem Pan / Tilt / ZoomX / ZoomY (Edit Inspector transform units)",
+        "object": "TimelineItem",
+        "signature": "GetProperty/SetProperty('Pan'|'Tilt'|'ZoomX'|'ZoomY', value)",
+        "reality": "Zoom is relative to the FITTED image, not the source: with "
+                   "input scaling 'scale entire image to fit' the clip is first "
+                   "fitted inside the timeline frame, and ZoomX 1.0 is that "
+                   "fitted size. Pan and Tilt are not timeline pixels either: "
+                   "Pan moves the image Pan x fittedW / timelineW pixels and "
+                   "Tilt moves it Tilt x fittedH / timelineH pixels, +Tilt up. "
+                   "Measured: a 720x1280 portrait clip in a 4096x1716 timeline "
+                   "fits at 965x1716, and Pan -500 moved it 117 px left (500 x "
+                   "965 / 4096 = 117.8). The 'Pan = timeline pixels' rule of "
+                   "thumb holds only when fittedW = timelineW, i.e. a clip whose "
+                   "aspect is at least as wide as the timeline's. Not measured: "
+                   "whether a Zoom other than 1.0 changes the Pan/Tilt scale, "
+                   "and the fill/stretch/crop scaling modes.",
+        "recommended": "Convert pixel offsets with the fitted size: Pan = px x "
+                       "timelineW / fittedW, Tilt = px_up x timelineH / fittedH. "
+                       "timeline_item set_transform takes pan_px / tilt_px and "
+                       "does this for scale-to-fit (or with fitted_width/"
+                       "fitted_height given), reporting the factors it used.",
+        "tags": ["transform", "units", "timeline", "edit"],
+        "verified_on": "DaVinci Resolve Studio 19.1.3.7",
+        "mitigation": ["_edit_transform_pixel_units"],
+    },
+    {
+        "symbol": "Resolve.OpenPage (during playback)",
+        "object": "Resolve",
+        "signature": "(pageName) -> Bool",
+        "reality": "With playback engaged, a visit to the Color page followed by "
+                   "a page/playhead restore (resolve_control restore_state) "
+                   "timed out, and from then on EVERY scripting call hung, "
+                   "including a brand-new scriptapp() connection: Resolve's main "
+                   "thread was stuck in a viewer render loop until playback was "
+                   "dealt with in the GUI. The 19.x scripting API has no "
+                   "transport control (no Play, Stop or IsPlaying), so a script "
+                   "can neither stop playback first nor ask whether it is "
+                   "running.",
+        "recommended": "Detect playback by reading Timeline.GetCurrentTimecode "
+                       "twice ~0.2 s apart; a playhead that moved means the "
+                       "transport is running. resolve_control open_page / "
+                       "restore_state, gallery_stills grab_and_export and the "
+                       "page-switching timeline_frame routes refuse with "
+                       "PLAYBACK_ACTIVE (allow_during_playback=true overrides). "
+                       "Stop playback in the GUI (Space or K) before retrying.",
+        "tags": ["hang", "page-dependent", "playback", "missing-method"],
+        "submit": "bug",
+        "verified_on": "DaVinci Resolve Studio 19.1.3.7",
+        "mitigation": ["_playback_refusal"],
+    },
+    {
+        "symbol": "Timeline slip / trim of an existing item (no API on 19.x)",
+        "object": "Timeline",
+        "reality": "There is no call to slip an item's source range or trim its "
+                   "edges in place: no SetProperty key moves the source in-point "
+                   "and no Timeline method takes a new range. The only route is "
+                   "to delete the item and append the new range at the same "
+                   "record frame, which loses its grade, transform, crop and "
+                   "composite unless they are carried over by hand. With a "
+                   "source rate different from the timeline's, the appended "
+                   "length can come out a frame off (the AppendToTimeline "
+                   "mixed-fps floor) and needed a corrected endFrame and a "
+                   "second append.",
+        "recommended": "timeline replace_source_range: append the new range on a "
+                       "temporary track at the same record frame, CopyGrades "
+                       "onto it, carry transform/crop/composite/scaling, delete "
+                       "the original, append the final copy on the original "
+                       "track, CopyGrades from the temporary copy, re-apply the "
+                       "properties, delete the temporary copy, restore the track "
+                       "lock. Start, end and duration are verified exactly; an "
+                       "endFrame that lands a frame off is corrected and retried.",
+        "tags": ["missing-method", "timeline", "edit", "mixed-fps"],
+        "submit": "missing",
+        "verified_on": "DaVinci Resolve Studio 19.1.3.7",
+        "mitigation": ["_timeline_replace_source_range_impl"],
+    },
 
 ]
 
