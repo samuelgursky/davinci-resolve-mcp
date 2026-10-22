@@ -2,52 +2,13 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
-## Unreleased — doctor checks the Python environment
-
-Users who cannot connect usually have a Python problem, and the error rarely
-says so. Not yet versioned or released.
-
-### Added
-
-- **`scripts/doctor.py` checks the interpreter the server runs on.** The checks
-  live in `scripts/doctor_python_env.py`. Each problem is reported as WARN or
-  FAIL with a `Fix:` line (a `fix` key under `--json`) that gives the exact
-  command.
-  - *Python bitness.* A 32-bit Python fails, because Resolve's scripting
-    library is 64-bit only. So does a Python whose architecture the
-    `fusionscript` library was not built for. The library header (ELF, thin
-    or universal Mach-O, PE) is read directly. An Intel Python under Rosetta
-    against an arm64-only library is named as such.
-  - *Python version for Resolve.* Below 3.10 fails. 3.13+ warns unless Resolve
-    answered on this interpreter or the build is 20.3.2 or later. The build is
-    read from the live probe or, on macOS, the app bundle. 3.13+ fails when
-    the scripting module is present but will not import.
-  - *Which Python.* It reads the Claude Desktop and Codex configs. It warns
-    when a config starts the server as a bare `python3`, which a GUI app
-    resolves through a PATH that is not your shell's. It also warns when a
-    config runs a different interpreter from the one doctor checked. It lists
-    every Python on PATH and marks the server's. A venv and its base
-    interpreter count as different Pythons, because they share a binary but
-    not `sys.prefix`. It also states where `fusionscript` loads: external
-    scripting loads it into the server's interpreter, and Resolve's own
-    Scripts menu uses the Python it finds itself.
-  - The fix for a wrong interpreter moves the venv aside before re-running the
-    installer, because `install.py` reuses an existing venv.
-- **The `SCRIPTING_UNAVAILABLE` remediation points at doctor** for the case
-  where Studio is already set to Local and the cause is the server's Python.
-
-### Tests
-
-- `tests/test_doctor_python_env.py` runs every check against fakes: a scripted
-  runner per interpreter path, and synthetic library headers. A clean 64-bit
-  3.12 setup must produce no WARN or FAIL (the null control). Each failure
-  mode is asserted by its specific diagnosis, so a neighbouring check firing
-  instead fails the test.
-
-## Unreleased — Conform-session fixes for Studio 19.1
+## What's New in v4.15.0 — Conform-session fixes, Python doctor, restart hint
 
 Six gaps a real conform session hit on Resolve Studio 19.1.3.7, each measured
-live with rendered frames. Not yet versioned or released.
+live with rendered frames; `scripts/doctor.py` now checks the Python the
+server runs on; and a refused scripting connection with the preference already
+Local now says to restart Resolve instead of changing a setting that is
+already correct.
 
 ### Fixed
 
@@ -75,6 +36,19 @@ live with rendered frames. Not yet versioned or released.
   `restore_state`, `gallery_stills grab_and_export`, and the page-switching
   capture routes detect a moving playhead and refuse with `PLAYBACK_ACTIVE`.
   `allow_during_playback=true` overrides.
+- **A refused connection with scripting already set to Local now says to
+  restart Resolve.** When Resolve was running but refused scripting
+  connections, `SCRIPTING_UNAVAILABLE` always said to set Preferences >
+  General > External scripting = Local, and implied the free edition was the
+  cause. A running Studio can refuse every connection with the preference
+  already Local until it is relaunched. The server now reads
+  `System.Scripting.Mode` from Resolve's `config.dat`, and when it is Local
+  the error leads with "Quit and relaunch DaVinci Resolve", then the existing
+  guidance. When the preference is not Local or cannot be read, the message is
+  unchanged. The error `state` has a new `scripting_preference_local` field
+  (true, false or null). The macOS `config.dat` path was checked on a real
+  Mac; the Windows and Linux paths are untested, and a wrong path reads as
+  unknown, which keeps the old message.
 
 ### Added
 
@@ -100,6 +74,32 @@ live with rendered frames. Not yet versioned or released.
   action computes the fitted size from the clip and timeline resolutions and
   reports the factors it used. Other scaling modes need `fitted_width` /
   `fitted_height`.
+- **`scripts/doctor.py` checks the interpreter the server runs on.** The checks
+  live in `scripts/doctor_python_env.py`. Each problem is reported as WARN or
+  FAIL with a `Fix:` line (a `fix` key under `--json`) that gives the exact
+  command.
+  - *Python bitness.* A 32-bit Python fails, because Resolve's scripting
+    library is 64-bit only. So does a Python whose architecture the
+    `fusionscript` library was not built for. The library header (ELF, thin
+    or universal Mach-O, PE) is read directly. An Intel Python under Rosetta
+    against an arm64-only library is named as such.
+  - *Python version for Resolve.* Below 3.10 fails. 3.13+ warns unless Resolve
+    answered on this interpreter or the build is 20.3.2 or later. The build is
+    read from the live probe or, on macOS, the app bundle. 3.13+ fails when
+    the scripting module is present but will not import.
+  - *Which Python.* It reads the Claude Desktop and Codex configs. It warns
+    when a config starts the server as a bare `python3`, which a GUI app
+    resolves through a PATH that is not your shell's. It also warns when a
+    config runs a different interpreter from the one doctor checked. It lists
+    every Python on PATH and marks the server's. A venv and its base
+    interpreter count as different Pythons, because they share a binary but
+    not `sys.prefix`. It also states where `fusionscript` loads: external
+    scripting loads it into the server's interpreter, and Resolve's own
+    Scripts menu uses the Python it finds itself.
+  - The fix for a wrong interpreter moves the venv aside before re-running the
+    installer, because `install.py` reuses an existing venv.
+- **The `SCRIPTING_UNAVAILABLE` remediation points at doctor** for the case
+  where Studio is already set to Local and the cause is the server's Python.
 
 ### Documentation
 
@@ -115,12 +115,17 @@ live with rendered frames. Not yet versioned or released.
 
 ### Validation
 
-- Offline: new `tests/test_conform_session_gaps.py` (45 tests) and an updated
-  `tests/test_playhead_frame_capture.py`. Full Python suite: 4,174 tests, zero
-  failures, 5 skipped. No advanced-server (Node) code changed.
-- Live: the behaviour these fixes encode was measured in the conform session
-  itself. A live pass of the new code paths on a scratch project has not run
-  yet, because Resolve was in use by that session.
+- Full Python suite: 4,221 tests, zero failures, 5 skipped. New
+  `tests/test_conform_session_gaps.py` (45 tests), an updated
+  `tests/test_playhead_frame_capture.py`, `tests/test_doctor_python_env.py`
+  (every check against fakes, with a clean 64-bit 3.12 setup as the null
+  control), and `ScriptingPreferenceTests` in `tests/test_resolve_bridge.py`.
+  No advanced-server (Node) code changed.
+- Live: the conform behaviour these fixes encode was measured in the conform
+  session itself. A live pass of the new code paths on a scratch project has
+  not run, because Resolve was in use by that session. The restart hint was
+  checked by reading this Mac's real `config.dat` (Local) and producing the
+  restart message.
 
 ## What's New in v4.14.4 — Compatible dependency updates
 
