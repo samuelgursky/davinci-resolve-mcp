@@ -80,8 +80,9 @@ _SANDBOX_MARKER = "com.blackmagic-design."
 #: NOT used outside a sandbox: on a normal install this is genuinely Fusion's
 #: own tree and has nothing to do with Resolve.
 _SANDBOX_FALLBACK_SUFFIX = "Library/Application Support/Fusion/Scripts/Utility"
-#: Containers that are not Resolve (RAW Player, Speed Test, the IO XPC helper).
-_NON_RESOLVE_CONTAINERS = ("BlackmagicRaw", "IOXPC")
+#: Containers that are not Resolve (RAW Player, RAW Speed Test, Disk Speed Test,
+#: the IO XPC helper).
+_NON_RESOLVE_CONTAINERS = ("BlackmagicRaw", "DiskSpeedTest", "IOXPC")
 
 #: Windows Scripts/Utility trees, per Blackmagic's own README
 #: (docs/reference/resolve_scripting_api.txt, "Specific user"/"All users").

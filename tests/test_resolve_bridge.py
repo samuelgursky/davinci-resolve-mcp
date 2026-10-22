@@ -941,13 +941,19 @@ class InstallerTargetTests(unittest.TestCase):
         from unittest import mock
 
         home = pathlib.Path(tempfile.mkdtemp(prefix="fake_home_"))
-        for name in ("com.blackmagic-design.BlackmagicRawPlayer", "com.blackmagic-design.IOXPC"):
+        names = (
+            "com.blackmagic-design.BlackmagicRawPlayer",
+            "com.blackmagic-design.BlackmagicRawSpeedTest",
+            "com.blackmagic-design.DiskSpeedTest",
+            "com.blackmagic-design.IOXPC",
+        )
+        for name in names:
             (home / "Library/Containers" / name / "Data").mkdir(parents=True)
         with mock.patch.object(sys, "platform", "darwin"), \
                 mock.patch.object(pathlib.Path, "home", staticmethod(lambda: home)):
             targets = self.installer.script_targets()
         self.assertFalse(
-            [t for t in targets if "RawPlayer" in str(t) or "IOXPC" in str(t)],
+            [t for t in targets if any(name in str(t) for name in names)],
             f"a non-Resolve Blackmagic container was targeted: {targets}",
         )
 
