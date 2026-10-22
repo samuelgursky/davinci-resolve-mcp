@@ -1129,7 +1129,10 @@ def _not_connected_error():
                         "(DAVINCI_RESOLVE_BRIDGE=1 only forces it and disables this fallback). "
                         "On free 21.1+ Blackmagic moved Python scripting to Studio and the "
                         "Scripts menu no longer lists Python scripts (issue #203), so the bridge "
-                        "may have no launch path there.",
+                        "may have no launch path there. If Studio is already set to Local, the "
+                        "server's Python may be the cause (32-bit, the wrong architecture for "
+                        "fusionscript, or 3.13+ on an older Resolve): run "
+                        "`python scripts/doctor.py` in the MCP checkout for the exact fix.",
             # Which Resolve is refusing matters to the reader: a headless render
             # worker and the editor the user is looking at warrant different
             # responses, and the in-app bridge is not an option for the former.

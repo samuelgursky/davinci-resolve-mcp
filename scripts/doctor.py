@@ -3,7 +3,10 @@
 
 Checks the checkout, Python interpreter, Resolve app and scripting-API paths,
 MCP client configs, and probes the DaVinciResolveScript bridge without
-mutating anything. Prints OK/WARN/FAIL lines (or JSON with --json) and exits
+mutating anything. The Python-environment checks (bitness against the
+fusionscript library, a Python too new for the Resolve build, several Pythons
+on PATH) live in doctor_python_env.py. Prints OK/WARN/FAIL lines, each problem
+with a `Fix:` line (or JSON with --json, where it is a `fix` key), and exits
 nonzero only when a FAIL is present.
 
 Run: `python3 scripts/doctor.py`
@@ -506,6 +509,32 @@ def extras_checks() -> list[dict[str, str]]:
     return results
 
 
+def python_env_checks(probe: dict[str, Any]) -> list[dict[str, str]]:
+    """Bitness, version-for-this-Resolve, and which-Python checks (C56).
+
+    Kept in their own module because they are the ones worth testing against
+    fakes: every input is a probe result or a file header, never the machine.
+    """
+    try:
+        sys.path.insert(0, str(REPO / "scripts"))
+        import doctor_python_env  # type: ignore
+    except Exception as exc:
+        return [{"status": "WARN", "name": "Python environment", "detail": f"checks unavailable: {exc!r}"}]
+    try:
+        return doctor_python_env.collect(
+            server_python=PYTHON,
+            lib_path=RESOLVE_LIB,
+            app_path=RESOLVE_APP,
+            repo=REPO,
+            probe=probe,
+            claude_config=CLAUDE_CONFIG,
+            codex_config=CODEX_CONFIG,
+        )
+    except Exception as exc:
+        # Never let a diagnostic tool be the thing that crashes.
+        return [{"status": "WARN", "name": "Python environment", "detail": f"checks failed: {exc!r}"}]
+
+
 def collect(
     resolve_host: str | None = None,
     resolve_timeout: float | None = None,
@@ -571,6 +600,8 @@ def collect(
             "(see 'Free-edition bridge' below).",
         )
 
+    results.extend(python_env_checks(probe))
+
     results.extend(bridge_checks(probe))
 
     results.extend(extras_checks())
@@ -601,6 +632,8 @@ def main() -> int:
     else:
         for item in results:
             print(f"[{item['status']}] {item['name']}: {item['detail']}")
+            if item.get("fix"):
+                print(f"       Fix: {item['fix']}")
 
     return 1 if any(item["status"] == "FAIL" for item in results) else 0
 

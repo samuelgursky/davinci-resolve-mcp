@@ -449,6 +449,7 @@ Extension authoring references live in [docs/authoring](docs/authoring/). Resolv
 
 - DaVinci Resolve 18.5+ on macOS, Windows, or Linux. **Studio** supports external scripting directly. The **free edition** does not — Blackmagic gates external scripting to Studio — but it is still reachable through the [in-app bridge](#free-edition-in-app-bridge), which runs inside Resolve from the ungated **Workspace ▸ Scripts** menu.
 - Python 3.10+ (3.10-3.12 is the lowest-risk range). Python 3.13/3.14 also work on recent Resolve builds (verified on Studio 20.3.2); older builds may fail to connect on 3.13+, in which case use 3.10-3.12.
+- Not connecting? `python3 scripts/doctor.py` checks the Python the server runs on and prints the exact fix for each problem: 32-bit or wrong-architecture Python, a Python too new for your Resolve build, or several Pythons where the MCP client starts the wrong one. See [Checking the Python environment](docs/install.md#checking-the-python-environment).
 - Resolve external scripting set to **Local** (Studio). On the free edition this
   preference has no effect — use the [in-app bridge](#free-edition-in-app-bridge)
   instead.

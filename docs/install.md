@@ -53,6 +53,32 @@ Model weights carry their own licences, separate from the code that loads them.
 > (`brew install python@3.12`, `pyenv install 3.12`, or python.org on Windows) and
 > point the launcher at it with `DAVINCI_RESOLVE_MCP_PYTHON=/path/to/python3.12`.
 
+### Checking the Python environment
+
+Most connection failures that are not Resolve's preferences are Python. Run the
+read-only doctor from the checkout, with any Python:
+
+```bash
+python3 scripts/doctor.py          # add --json for machine-readable output
+```
+
+Besides paths and client configs, it checks the interpreter the server runs on.
+Each problem is reported as `WARN` or `FAIL` with a `Fix:` line giving the exact
+command:
+
+| Check | Fails or warns when |
+|---|---|
+| **Python bitness** | The server's Python is 32-bit (Resolve's scripting library is 64-bit only), or its architecture is not one the `fusionscript` library is built for. The common case is an Intel Python running under Rosetta on an Apple silicon Mac. The library header is read directly, so a universal build counts as both. |
+| **Python version for Resolve** | Below 3.10 (`FAIL`, the SDK floor). On 3.13+ it warns unless Resolve answered on this interpreter or the Resolve build is 20.3.2 or later. It fails if the scripting module is present but will not import. |
+| **Client interpreter** | An MCP client config starts the server as a bare `python3` (resolved through the PATH the GUI app sees, not your shell's), or runs a different interpreter from the one doctor checked. |
+| **Pythons on PATH** | Several are installed and the first is not the server's. This is `INFO` unless a bare client command or a 32-bit or too-old Python first on PATH makes it matter. |
+| **Where fusionscript loads** | Never; this is `INFO`. External scripting loads `fusionscript` into the *server's* interpreter. Resolve's own Scripts menu, which the free-edition bridge runs from, uses a Python it finds itself. On macOS that is `PYTHON3HOME`, then `/usr/local/bin/python3`. The two need not match. |
+
+`install.py` reuses an existing venv, so the fix for a wrong interpreter moves
+the venv aside before re-running the installer with a 64-bit Python 3.12.
+`npx davinci-resolve-mcp doctor` is the installer's dry run. It does not run
+these checks.
+
 Validated live coverage is based on **DaVinci Resolve 19.1.3 Studio** for the original API surface, plus **DaVinci Resolve 20.3.2 Studio** for the Resolve 20.0-20.2.2 scripting additions. Resolve 21 beta APIs are intentionally deferred until a stable release.
 
 ## Quick Start
