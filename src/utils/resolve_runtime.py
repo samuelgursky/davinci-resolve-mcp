@@ -491,6 +491,71 @@ def launch_command(headless: bool) -> Optional[List[str]]:
     return None
 
 
+#: Where each platform keeps the user's `config.dat`. macOS verified on Studio
+#: 19.1.3 and 21.x, which share this one file when both are installed. Windows
+#: and Linux follow Blackmagic's documented layout and are unverified here; a
+#: wrong guess only reads as "unknown", never as a wrong answer.
+CONFIG_DAT_PATHS = {
+    "darwin": ("~/Library/Preferences/Blackmagic Design/DaVinci Resolve/config.dat",),
+    "windows": ("%APPDATA%/Blackmagic Design/DaVinci Resolve/Preferences/config.dat",),
+    "linux": ("~/.local/share/DaVinciResolve/configs/config.dat",),
+}
+
+#: The External scripting preference as Resolve writes it. Only `1` (Local) is
+#: established; a fresh config has no such key at all (docs/reference/headless-cli.md).
+SCRIPTING_MODE_KEY = "System.Scripting.Mode"
+SCRIPTING_MODE_LOCAL = "1"
+
+
+def config_dat_path(env: Optional[Dict[str, str]] = None) -> Optional[str]:
+    """The `config.dat` the running Resolve reads, or None if none exists.
+
+    BMD_RESOLVE_CONFIG_DIR wins when set: an isolated instance builds its own
+    `config.dat` directly in that directory.
+    """
+    source = env if env is not None else os.environ
+    override = str(source.get("BMD_RESOLVE_CONFIG_DIR", "")).strip()
+    if override:
+        candidates: tuple = (os.path.join(override, "config.dat"),)
+    else:
+        candidates = CONFIG_DAT_PATHS.get(platform.system().lower(), ())
+    for raw in candidates:
+        path = os.path.expanduser(os.path.expandvars(raw))
+        if os.path.isfile(path):
+            return path
+    return None
+
+
+def scripting_preference(env: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+    """`{path, value, local}` for the External scripting preference.
+
+    `local` is True only when the file says `System.Scripting.Mode = 1`, False
+    when the file was read and says anything else (including no key), and None
+    when there is no file to read. None must not be read as False: "not set"
+    sends the user to a preference that may already be right.
+
+    This is what lets a refusal be told apart. With the preference already
+    Local, a running Studio that will not answer needs a restart, not a trip to
+    Preferences — observed on Studio 19.1.3, where the listener stayed bound on
+    port 15000, refused every connection, and answered again after a relaunch
+    with no setting changed.
+    """
+    path = config_dat_path(env)
+    if path is None:
+        return {"path": None, "value": None, "local": None}
+    try:
+        with open(path, "r", encoding="ascii", errors="replace") as handle:
+            text = handle.read()
+    except OSError:
+        return {"path": path, "value": None, "local": None}
+    value = None
+    for line in text.splitlines():
+        key, sep, rest = line.partition("=")
+        if sep and key.strip() == SCRIPTING_MODE_KEY:
+            value = rest.strip()
+    return {"path": path, "value": value, "local": value == SCRIPTING_MODE_LOCAL}
+
+
 #: What an agent should do differently in each mode. Returned alongside the mode
 #: so the advice travels with the fact, instead of living in a doc the agent has
 #: to already know to read.

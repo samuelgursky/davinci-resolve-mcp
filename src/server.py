@@ -1063,6 +1063,13 @@ def get_resolve():
         # it was traced.
         already_running = resolve_is_running()
         if already_running:
+            if _resolve_runtime.scripting_preference()["local"]:
+                logger.error(
+                    "DaVinci Resolve is already running but is not answering the scripting API, "
+                    "so it will NOT be launched again. External scripting is already set to "
+                    "Local, so quit and relaunch Resolve; the preference needs no change."
+                )
+                return None
             logger.error(
                 "DaVinci Resolve is already running but is not answering the scripting API, "
                 "so it will NOT be launched again. Either enable Preferences > General > "
@@ -1114,15 +1121,31 @@ def _not_connected_error():
             state={"resolve_running": running, "bridge_enabled": True},
         ))
     if running:
+        # With the preference already Local, "go set it to Local" is advice the
+        # user has already followed. A running Studio can stop answering until
+        # it is relaunched, so that leads; the edition and Python causes follow.
+        preference = _resolve_runtime.scripting_preference()
+        if preference["local"]:
+            reason = ("External scripting is already set to Local "
+                      f"({_resolve_runtime.SCRIPTING_MODE_KEY} = 1 in {preference['path']}), "
+                      "yet Resolve refused the connection. A running Resolve can stop "
+                      "answering until it is restarted. Resolve was NOT launched again.")
+            first_step = ("Quit and relaunch DaVinci Resolve, then retry; the preference needs "
+                          "no change. If it still refuses after a restart, check the rest: ")
+        else:
+            reason = ("External scripting is a Studio feature; the free edition refuses it "
+                      "regardless of the preference. Resolve was NOT launched again.")
+            first_step = ""
         return _with_offline_alternative(_err(
             "DaVinci Resolve is running but is not answering the scripting API.",
             code="SCRIPTING_UNAVAILABLE", category="not_connected",
-            # Not retryable: a preference has to change, or the bridge has to be
-            # started. Retrying the same call cannot make either happen.
+            # Not retryable: Resolve has to be restarted, a preference has to
+            # change, or the bridge has to be started. Retrying the same call
+            # cannot make any of those happen.
             retryable=False,
-            reason="External scripting is a Studio feature; the free edition refuses it "
-                   "regardless of the preference. Resolve was NOT launched again.",
-            remediation="On Studio: Preferences > General > 'External scripting using' = Local. "
+            reason=reason,
+            remediation=first_step +
+                        "On Studio: Preferences > General > 'External scripting using' = Local. "
                         "On the free edition: install the in-app bridge and run "
                         "Workspace > Scripts > resolve_bridge — once it is running it is used "
                         "automatically, no environment variable needed "
@@ -1137,7 +1160,8 @@ def _not_connected_error():
             # worker and the editor the user is looking at warrant different
             # responses, and the in-app bridge is not an option for the former.
             state={"resolve_running": True, "bridge_enabled": False,
-                   "headless": _resolve_runtime.is_headless()},
+                   "headless": _resolve_runtime.is_headless(),
+                   "scripting_preference_local": preference["local"]},
         ))
     return _with_offline_alternative(_err(
         "DaVinci Resolve is not running and could not be started.",

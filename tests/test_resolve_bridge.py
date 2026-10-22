@@ -2744,6 +2744,93 @@ class NotConnectedMessageTests(unittest.TestCase):
         )
 
 
+class ScriptingPreferenceTests(unittest.TestCase):
+    """A refusal with the preference already Local is a restart, not a setting.
+
+    Observed on Studio 19.1.3: External scripting was Local, the listener was
+    bound on port 15000, every connection was refused, and the error sent the
+    user to Preferences to set what was already set. A relaunch fixed it.
+    """
+
+    def _server(self):
+        import importlib
+
+        return importlib.import_module("src.server")
+
+    def _config_dir(self, text):
+        import tempfile
+
+        directory = tempfile.mkdtemp()
+        if text is not None:
+            with open(os.path.join(directory, "config.dat"), "w", encoding="ascii") as handle:
+                handle.write(text)
+        return directory
+
+    def test_reads_local_from_config_dat(self) -> None:
+        from src.utils import resolve_runtime
+
+        directory = self._config_dir("Local.RemoteStream.Enable = 0\nSystem.Scripting.Mode = 1\n")
+        pref = resolve_runtime.scripting_preference({"BMD_RESOLVE_CONFIG_DIR": directory})
+        self.assertTrue(pref["local"])
+        self.assertEqual(pref["value"], "1")
+
+    def test_a_config_without_the_key_is_not_local(self) -> None:
+        """A fresh config has no key, and that instance is unreachable."""
+        from src.utils import resolve_runtime
+
+        directory = self._config_dir("Local.RemoteStream.Enable = 0\n")
+        pref = resolve_runtime.scripting_preference({"BMD_RESOLVE_CONFIG_DIR": directory})
+        self.assertIs(pref["local"], False)
+        self.assertIsNone(pref["value"])
+
+    def test_another_value_is_not_local(self) -> None:
+        from src.utils import resolve_runtime
+
+        directory = self._config_dir("System.Scripting.Mode = 0\n")
+        pref = resolve_runtime.scripting_preference({"BMD_RESOLVE_CONFIG_DIR": directory})
+        self.assertIs(pref["local"], False)
+
+    def test_no_file_is_unknown_not_false(self) -> None:
+        from src.utils import resolve_runtime
+
+        directory = self._config_dir(None)
+        pref = resolve_runtime.scripting_preference({"BMD_RESOLVE_CONFIG_DIR": directory})
+        self.assertIsNone(pref["local"])
+        self.assertIsNone(pref["path"])
+
+    def _error_with_preference(self, local):
+        from unittest import mock
+
+        server = self._server()
+        pref = {"path": "/x/config.dat", "value": "1" if local else None, "local": local}
+        with mock.patch.object(server, "resolve_is_running", return_value=True), \
+                mock.patch.object(server, "_bridge_requested", return_value=False), \
+                mock.patch.object(server._resolve_runtime, "scripting_preference",
+                                  return_value=pref):
+            return server._not_connected_error()["error"]
+
+    def test_preference_already_local_leads_with_a_restart(self) -> None:
+        error = self._error_with_preference(True)
+        self.assertEqual(error["code"], "SCRIPTING_UNAVAILABLE")
+        self.assertTrue(error["remediation"].startswith("Quit and relaunch DaVinci Resolve"))
+        self.assertIn("already set to Local", error["reason"])
+        self.assertNotIn("free edition refuses", error["reason"])
+        self.assertTrue(error["state"]["scripting_preference_local"])
+        self.assertFalse(error["retryable"])
+        # The other causes still follow, in case a restart does not do it.
+        self.assertIn("External scripting", error["remediation"])
+        self.assertIn("DAVINCI_RESOLVE_BRIDGE", error["remediation"])
+
+    def test_preference_not_local_or_unknown_does_not_suggest_a_restart(self) -> None:
+        for local in (False, None):
+            with self.subTest(local=local):
+                error = self._error_with_preference(local)
+                self.assertNotIn("relaunch", error["remediation"].lower())
+                self.assertTrue(error["remediation"].startswith(
+                    "On Studio: Preferences > General"))
+                self.assertIn("free edition refuses", error["reason"])
+
+
 class NotConnectedRetryabilityTests(unittest.TestCase):
     """A failure the caller must act on is not retryable.
 
