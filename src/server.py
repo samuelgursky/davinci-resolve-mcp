@@ -28116,7 +28116,10 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
 # TOOL 16: timeline_markers
 # ═══════════════════════════════════════════════════════════════════════════════
 
-@mcp.tool()
+# structured_output=False: these tools return an MCP Image. On Python 3.10 FastMCP
+# infers a {"result": ...} schema from `-> Any` and fails to serialize the Image
+# (issue #314); 3.11+ infers none, which hides the bug.
+@mcp.tool(structured_output=False)
 @_guard_missing_params
 @_destructive_op("timeline_markers")
 def timeline_markers(action: str, params: Optional[Dict[str, Any]] = None) -> Any:
@@ -28265,7 +28268,10 @@ def timeline_markers(action: str, params: Optional[Dict[str, Any]] = None) -> An
 # TOOL 17: timeline_frame
 # ═══════════════════════════════════════════════════════════════════════════════
 
-@mcp.tool()
+# structured_output=False: these tools return an MCP Image. On Python 3.10 FastMCP
+# infers a {"result": ...} schema from `-> Any` and fails to serialize the Image
+# (issue #314); 3.11+ infers none, which hides the bug.
+@mcp.tool(structured_output=False)
 @_guard_missing_params
 def timeline_frame(action: str, params: Optional[Dict[str, Any]] = None) -> Any:
     """See what Resolve is rendering — capture a timeline frame as a viewable image.
