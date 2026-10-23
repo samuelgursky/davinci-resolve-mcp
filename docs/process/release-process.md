@@ -137,6 +137,22 @@ Resolve validation before release. Use disposable projects and synthetic media
 only. Never modify, transcode, proxy, or create derivatives of source media
 unless the user explicitly requests it.
 
+### Explicitly authorized feedback releases
+
+When a maintainer explicitly authorizes a feedback release because the required
+Resolve host is unavailable, the live-validation requirement may be deferred for
+that release. Automated checks remain required. Record the authorization and
+state prominently in the release notes and feature documentation which builds
+were tested, which behavior remains unverified, and how users can report results.
+Do not describe structural readback or an unsuccessful render as live acceptance.
+
+Prefer a prerelease on npm's `next` channel, marked prerelease on GitHub, unless
+the maintainer explicitly selects stable publication with a warning. Prereleases
+must not change npm's `latest` tag or GitHub's latest stable release. Keep the
+originating issue open while requesting feedback, and leave unsupported parts
+of the request open even when a tested subset works. A merged implementation PR
+can close independently of that issue.
+
 **Changes to the offline `.drp` authoring tier must run the round-trip harness,
 and a structural readback is NOT sufficient evidence on its own:**
 

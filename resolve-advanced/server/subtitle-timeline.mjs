@@ -41,11 +41,12 @@ export async function inspectSubtitleTimeline({ source, track = 1 }) {
   if (!current) throw new Error('No animation preset on subtitle track');
   return current.decoded;
 }
-export async function editSubtitleTimeline({ source, output, track = 1, inputs = {}, preset, preset_reference, reference_track = 1, title_reference, template_id }) {
+export async function editSubtitleTimeline({ source, output, track = 1, inputs = {}, literal_inputs = {}, preset, preset_reference, reference_track = 1, title_reference, template_id }) {
   // Reuse the DB codec's exact input validation, without invoking a DB action.
   const parsed = subtitleSchemas.set_subtitle_preset.parse({ timeline: 'export', track, inputs });
   if (preset != null && !Object.hasOwn(REFERENCES, preset) && !title_reference) throw new Error('Unsupported subtitle preset');
-  if (!Object.keys(parsed.inputs).length && !preset_reference && !preset && !title_reference) throw new Error('Supply inputs, preset, or preset_reference');
+  if (!literal_inputs || typeof literal_inputs !== 'object' || Array.isArray(literal_inputs)) throw new Error('literal_inputs must be an object');
+  if (!Object.keys(parsed.inputs).length && !Object.keys(literal_inputs).length && !preset_reference && !preset && !title_reference) throw new Error('Supply inputs, literal_inputs, preset, or preset_reference');
   if (source === output || preset_reference === output || title_reference === output) throw new Error('Output must be a new file');
   const exported = await readTimeline(source), target = selectedTrack(exported.xml, track);
   const before = holder(target.text);
@@ -63,8 +64,8 @@ export async function editSubtitleTimeline({ source, output, track = 1, inputs =
     chosen = { ...matches[0], text: scaffold.text.replace(scaffold.hex, matches[0].hex) };
   }
   if (!chosen) throw new Error('No animation preset: supply a native preset_reference DRT or apply Word Highlight through the live Effects UI');
-  const patched = Object.keys(parsed.inputs).length
-    ? setPresetInputs(Buffer.from(chosen.hex, 'hex'), parsed.inputs) : Buffer.from(chosen.hex, 'hex');
+  const patched = Object.keys(parsed.inputs).length || Object.keys(literal_inputs).length
+    ? setPresetInputs(Buffer.from(chosen.hex, 'hex'), parsed.inputs, literal_inputs) : Buffer.from(chosen.hex, 'hex');
   const section = freshIds(chosen.text.replace(chosen.hex, patched.toString('hex')));
   let text;
   if (before) text = target.text.replace(before.text, section);
@@ -78,6 +79,7 @@ export async function editSubtitleTimeline({ source, output, track = 1, inputs =
   await fs.writeFile(output, buffer, { flag: 'wx' });
   const decoded = decodePreset(patched);
   return { output, templateId: chosen.decoded.templateId, before: before?.decoded.inputs ?? null, after: decoded.inputs,
+    literalAfter: Object.fromEntries(Object.keys(literal_inputs).map(name => [name, decoded.literalInputs.find(e => e.name === name)?.value])),
     editableInputs: decoded.editableInputs,
     verification: 'exported_preset_readback', restart_required: false };
 }

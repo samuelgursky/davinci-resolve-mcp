@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 377-tool granular server instead
 """
 
-VERSION = "4.15.2"
+VERSION = "4.16.0-beta.1"
 
 import base64
 import os
@@ -51,6 +51,7 @@ from src.utils.resolve211_alignment import auto_align
 from src.utils.resolve211_dctl import native_dctl_result
 from src.utils.resolve211_normalization import normalize_audio
 from src.utils.subtitle_live import set_subtitle_preset as _set_live_subtitle_preset
+from src.utils.subtitle_live import list_subtitle_preset_inputs as _list_subtitle_preset_inputs
 from src.utils.title_library import list_title_presets as _list_installed_title_presets
 from src.utils.title_controls import title_text_targets as _title_text_targets
 from src.utils.title_controls import title_text_keys as _title_text_keys
@@ -28423,13 +28424,21 @@ def timeline_ai(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
         These are long ops: background=true returns a job_id immediately; poll
         resolve_control(action="job_status", params={"job_id": ...}).
       list_title_presets(templates_archive?) -> installed native titles/subtitle presets (inventory, not live acceptance).
-      set_subtitle_preset(track?, inputs?, preset?, preset_reference?, reference_track?, revision_name?, dry_run?, templates_archive?)
+      list_subtitle_preset_inputs(track?) -> mapped controls plus persisted literal Fusion inputs on the current subtitle preset.
+        Lists writable values and reasons for refusing connected/nonliteral/protected controls.
+        Omitted native defaults are not enumerated. Exports only; no timeline import.
+      set_subtitle_preset(track?, inputs?, literal_inputs?, preset?, preset_reference?, reference_track?, revision_name?, dry_run?, templates_archive?)
         Apply an installed subtitle preset and common literal font/style, size,
         position and text RGBA controls with Resolve kept open. Word Highlight
         also supports mapped highlight/outline colours and thickness, its drop
         shadow (shadowEnabled, shadowRed/Green/Blue, shadowOffset, shadowSoftness
         and the X/Y pair) and horizontalAlign/verticalAlign justification
-        integers (the centred reference stores 3). Per-word scale and cue
+        integers. baseOutlineEnabled/Red/Green/Blue/Thickness add an independent
+        all-word stroke on shading element 4; enabling sets baseOutlineShape=1.
+        literal_inputs opts into explicit Fusion names returned writable by
+        list_subtitle_preset_inputs. Only existing literals of the same type;
+        caption text, unknown fields, connections and animation remain protected.
+        The centred reference stores justification 3. Per-word scale and cue
         in/out transitions are not literal inputs and are refused. Native
         export -> codec -> native import as a selected revision; original retained.
         Word Highlight and Lollipop have bundled references; other installed
@@ -28463,6 +28472,8 @@ def timeline_ai(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
         return _run_maybe_background(
             "timeline_ai.create_subtitles", p, lambda: _safe_create_subtitles(tl, p)
         )
+    elif action == "list_subtitle_preset_inputs":
+        return _list_subtitle_preset_inputs(get_resolve(), tl, p, _resolve_safe_dir)
     elif action == "set_subtitle_preset":
         # Match the safety decorator's boolean interpretation before any capture/import.
         return _set_live_subtitle_preset(get_resolve(), proj, tl,
@@ -28491,7 +28502,7 @@ def timeline_ai(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
     elif action == "grab_all_stills":
         stills = tl.GrabAllStills(p.get("source", 1))
         return {"count": len(stills) if stills else 0}
-    return _unknown(action, ["list_title_presets","create_subtitles","set_subtitle_preset","detect_scene_cuts","analyze_dolby_vision","grab_still","grab_all_stills"])
+    return _unknown(action, ["list_title_presets","create_subtitles","list_subtitle_preset_inputs","set_subtitle_preset","detect_scene_cuts","analyze_dolby_vision","grab_still","grab_all_stills"])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

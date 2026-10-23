@@ -2,6 +2,32 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.16.0-beta.1 — Subtitle styling feedback prerelease
+
+### Added
+
+- `timeline_ai.list_subtitle_preset_inputs` discovers persisted Fusion inputs and identifies writable literals versus protected/connected controls.
+- `set_subtitle_preset` accepts opt-in `literal_inputs`, verifies requested values through native re-export, and retains the original timeline.
+- Word Highlight gains independent base-outline controls on shading element 4.
+
+### Studio 21.1 render validation missing — feedback requested
+
+**This is a feedback prerelease. The new subtitle styling has not been visually validated on Resolve Studio 21.1.** Automated tests pass, and native Text+ input names were probed on Studio 19.1.3.7. The local free 21.1.0.15 build imported and re-exported a synthetic timeline, but rendering raised a Studio limitation and produced a black frame. Structural readback does not establish that the intended styling renders correctly.
+
+The maintainer explicitly authorized this feedback release with the limitation disclosed. Per-word pop/scale and cue in/out transitions remain unsupported. This release does not resolve all of #295.
+
+### Try it and report results
+
+Install explicitly with `npx davinci-resolve-mcp@next setup` (or pin `@4.16.0-beta.1`). The stable npm `latest` channel remains unchanged.
+
+Please test in a disposable project or backed-up duplicate timeline. On [#295](https://github.com/samuelgursky/davinci-resolve-mcp/issues/295), report your Resolve edition/build, OS and MCP version; whether the base outline appears across words while highlighting remains correct; whether caption text/timing and caption-free gaps are preserved; and whether the original timeline remains intact. Before/after rendered frames and action output are useful. #295 remains open pending feedback and the outstanding animation requests.
+
+### Validation
+
+- Focused subtitle codec/orchestration tests, full offline suite (with sandbox-blocked cases passing outside the sandbox), and release static/drift checks pass.
+- Advanced Node suite passed with 1,139 passing and 60 skipped before an additional parser test; the updated focused suite passes all 26 cases.
+- CLI/package checks pass. No source media changed.
+- Studio 21.1 animated-subtitle render acceptance was not completed; see the warning above.
 ## What's New in v4.15.2 — Bridge installer and large marker blobs
 
 Two contributor fixes.

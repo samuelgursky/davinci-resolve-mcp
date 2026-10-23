@@ -2,7 +2,7 @@
 
 [English](README.md) | 简体中文
 
-[![Version](https://img.shields.io/badge/version-4.15.2-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
+[![Version](https://img.shields.io/badge/version-4.16.0--beta.1-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![npm](https://img.shields.io/npm/v/davinci-resolve-mcp.svg?label=npm&color=CB3837)](https://www.npmjs.com/package/davinci-resolve-mcp)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](docs/reference/api-coverage.md)
 [![Tools](https://img.shields.io/badge/MCP%20Tools-37%20(390%20full)-blue.svg)](#服务器模式)
@@ -12,13 +12,24 @@
 [![Python](https://img.shields.io/badge/python-3.10+-green.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
-> 本翻译对应 v4.15.2 版 README。如与英文原版有出入，以 [英文原版](README.md) 为准。
+> 本翻译对应 v4.16.0-beta.1 版 README。如与英文原版有出入，以 [英文原版](README.md) 为准。
 
 一个 Model Context Protocol (MCP) 服务器，让 AI 助手通过官方脚本 API 控制 DaVinci Resolve Studio（达芬奇）。它提供完整的 API 覆盖，外加带护栏的工作流助手，涵盖剪辑、媒体池整理、渲染设置、审阅标记、调色、Fusion、Fairlight、项目生命周期任务、扩展开发，以及不碰源媒体的媒体分析。
 
 [![本地控制面板](https://raw.githubusercontent.com/samuelgursky/davinci-resolve-mcp/main/docs/images/control-panel/01-overview.png)](docs/guides/control-panel.md)
 
 服务器自带一个本地浏览器控制面板，用于查看 Resolve 状态、运行源媒体安全的分析、深入查看已分析的片段与镜头、以及在线编辑分析结果。完整导览见 [控制面板指南](docs/guides/control-panel.md)。
+
+## 字幕样式反馈预发布版
+
+`4.16.0-beta.1` 新增字幕输入发现、显式 Fusion 字面量输入编辑，以及 Word Highlight
+独立基础描边控件。**尚未验证 Studio 21.1 的实际渲染效果。** 自动化测试通过；本机免费版
+21.1 显示 Studio 功能限制并输出黑帧。逐词弹出/缩放和字幕入场/退场过渡仍不受支持。
+
+使用 `npx davinci-resolve-mcp@next setup` 主动试用。在一次性测试项目或已备份的时间线副本中
+测试，并在 [#295](https://github.com/samuelgursky/davinci-resolve-mcp/issues/295)
+反馈 Resolve 版本与版本类型、操作系统、MCP 版本及修改前后的渲染结果。
+详情见[字幕指南](docs/guides/subtitle-track-editing.md#input-discovery-and-explicit-literal-edits-issue-295)。
 
 ## 快速开始
 

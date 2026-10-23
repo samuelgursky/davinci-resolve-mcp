@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import JSZip from 'jszip';
-import { editSubtitleTimeline } from '../server/subtitle-timeline.mjs';
+import { editSubtitleTimeline, inspectSubtitleTimeline } from '../server/subtitle-timeline.mjs';
 
 const native = await fs.readFile(new URL('../assets/word-highlight-track.xml', import.meta.url), 'utf8');
 const section = /<FusionCompHolderItems>[\s\S]*?<\/FusionCompHolderItems>/.exec(native)[0];
@@ -107,5 +107,57 @@ test('Word Highlight lists and sets its drop shadow; per-word scale is refused',
       editSubtitleTimeline({ source, output: path.join(dir, 'scale.drt'), inputs: { highlightScale: 1.1 } }),
       /highlightScale/,
     );
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+test('independent base stroke and opt-in literals survive readback without changing captions', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'subtitle-inputs-'));
+  try {
+    const source = await fixture(dir, 'source.drt'), output = path.join(dir, 'outlined.drt');
+    const before = await inspectSubtitleTimeline({ source });
+    assert.equal(before.literalInputs.find(e => e.name === 'StyledText').writable, false);
+    assert.equal(before.literalInputs.find(e => e.name === 'Red1').writable, false);
+    const result = await editSubtitleTimeline({ source, output,
+      inputs: { baseOutlineEnabled: 1, baseOutlineThickness: 0.08,
+        baseOutlineRed: 0, baseOutlineGreen: 0, baseOutlineBlue: 0 },
+      literal_inputs: { Size: 0.09, Font: 'Helvetica', Center: [0.5, 0.4] } });
+    assert.equal(result.after.baseOutlineShape, 1);
+    assert.equal(result.after.baseOutlineEnabled, 1);
+    assert.equal(result.after.baseOutlineThickness, 0.08);
+    assert.equal(result.after.outlineEnabled, before.inputs.outlineEnabled);
+    assert.equal(result.after.shadowEnabled, before.inputs.shadowEnabled);
+    assert.deepEqual(result.literalAfter, { Size: 0.09, Font: 'Helvetica', Center: [0.5, 0.4] });
+    const back = await inspectSubtitleTimeline({ source: output });
+    assert.deepEqual(back.inputs, result.after);
+    assert.equal(back.literalInputs.find(e => e.name === 'Size').value, 0.09);
+    const a = await JSZip.loadAsync(await fs.readFile(source)), b = await JSZip.loadAsync(await fs.readFile(output));
+    const entry = Object.keys(a.files).find(n => /^SeqContainer\/.*\.xml$/.test(n));
+    const strip = s => s.replace(/<FusionCompHolderItems>[\s\S]*?<\/FusionCompHolderItems>/g, '<holder/>');
+    assert.equal(strip(await a.file(entry).async('string')), strip(await b.file(entry).async('string')));
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+test('literal editing refuses absent, connected, protected, ill-typed and conflicting inputs', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'subtitle-input-refusals-'));
+  try {
+    const source = await fixture(dir, 'source.drt');
+    const cases = [
+      { literal_inputs: { StyledText: 'Replace captions' } },
+      { literal_inputs: { highlightScale: 1.1 } },
+      { literal_inputs: { Red1: 0.5 } },
+      { literal_inputs: { 'Size = Input': 1 } },
+      { literal_inputs: { Font: 1 } },
+      { literal_inputs: { Size: Infinity } },
+      { literal_inputs: { Center: [0.5, 0.5, 0] } },
+      { literal_inputs: { Size: {} } },
+      { literal_inputs: [] },
+      { inputs: { size: 0.1 }, literal_inputs: { Size: 0.12 } },
+      { preset: 'Lollipop', inputs: { baseOutlineEnabled: 1 } },
+    ];
+    for (let i = 0; i < cases.length; i++) {
+      const output = path.join(dir, `refused-${i}.drt`);
+      await assert.rejects(editSubtitleTimeline({ source, output, ...cases[i] }));
+      assert.equal(await fs.stat(output).catch(() => null), null);
+    }
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });
