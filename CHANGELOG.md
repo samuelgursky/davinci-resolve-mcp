@@ -2,6 +2,27 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.15.1 — Frame captures arrive as images on Python 3.10
+
+### Fixed
+
+- **`timeline_frame` and `timeline_markers get_thumbnail_image` return their
+  image again on Python 3.10** (#314). Both tools are declared `-> Any`. On
+  Python 3.10, FastMCP inferred a `{"result": ...}` output schema from that
+  annotation and then failed to serialize the image, so every capture
+  succeeded in Resolve and reached the client as "Unable to serialize unknown
+  type". Python 3.11 and later infer no schema, which hid the bug from CI and
+  the direct-call unit tests. Both tools now opt out of structured output;
+  their dict results still arrive as JSON text. Reported by @jo-nike.
+
+### Validation
+
+- New `tests/test_image_tool_structured_output.py` calls both tools through
+  `mcp.call_tool`. One case imports the server with Python 3.10's schema
+  inference forced, so it fails without the fix on any Python.
+- Full offline suite and release static checks. No Resolve scripting
+  behaviour changed; live Resolve test not required.
+
 ## What's New in v4.15.0 — Conform-session fixes, Python doctor, restart hint
 
 Six gaps a real conform session hit on Resolve Studio 19.1.3.7, each measured
