@@ -20,6 +20,15 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      # Report every version, not just the first to fail.
+      fail-fast: false
+      matrix:
+        # 3.10 is the declared floor and the only place some breakage shows:
+        # FastMCP inferred a broken output schema from `-> Any` on 3.10 alone
+        # (issue #314), and a 3.11-only CI shipped it.
+        python-version: ["3.10", "3.11"]
+    name: test (Python ${{ matrix.python-version }})
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
@@ -27,7 +36,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python-version }}
 
       - name: Set up Node
         uses: actions/setup-node@v5
@@ -115,3 +124,42 @@ jobs:
 
       - name: Check for whitespace damage
         run: git diff --check
+
+  advanced-node:
+    # The advanced server's own suite. The job above only installs
+    # resolve-advanced's production deps for the Python fallback tier; it never
+    # ran `npm test`, so code needing Node 22.15+ zlib zstd passed a green
+    # check while failing on the declared >=20.9 floor (PR #312).
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 20 = the engines.node floor, 22 = current LTS.
+        node-version: ["20", "22"]
+    name: advanced suite (Node ${{ matrix.node-version }})
+    defaults:
+      run:
+        working-directory: resolve-advanced
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: Install ffmpeg
+        # Audio and conform frame tests shell out to ffmpeg/ffprobe and skip
+        # without them.
+        working-directory: .
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Install dependencies
+        # A clean `npm ci` per Node version, with no dependency cache:
+        # better-sqlite3 is a native addon built for one Node ABI, and a
+        # node_modules from another version fails to load (ERR_DLOPEN_FAILED).
+        run: npm ci --no-audit --no-fund
+
+      - name: Run the advanced test suite
+        run: npm test
