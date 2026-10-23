@@ -2,6 +2,30 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.15.3 — CI covers the version floors
+
+No server behavior changed. Pull requests are now tested on the oldest Python
+and Node versions the project supports, not only on newer ones.
+
+### Changed
+
+- **CI runs the Python job on Python 3.10 as well as 3.11.** 3.10 is the
+  declared floor. The bug fixed in v4.15.1 (#314) appeared only on 3.10, and
+  CI ran 3.11 alone, so it passed every check.
+- **CI runs the advanced server's own test suite on Node 20 and Node 22.**
+  The suite in `resolve-advanced/` had never run in CI. A contributor PR
+  (#312) whose code needs Node 22.15+ had a green check while 4 of its tests
+  fail on Node 20, the declared floor (`>=20.9`). Each Node version gets a
+  clean `npm ci`, because `better-sqlite3` is built for one Node version.
+
+### Validation
+
+- The first CI run with the new jobs passed on Python 3.10 and 3.11 and on
+  Node 20 and 22. Advanced suite: 1,202 tests, 0 failures on both Node
+  versions (61 skipped on Node 20, 60 on Node 22; the extra one needs a Node
+  22.16+ SQLite API).
+- No Resolve behavior changed; a live test is not required.
+
 ## What's New in v4.15.2 — Bridge installer and large marker blobs
 
 Two contributor fixes.
