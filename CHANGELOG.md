@@ -2,6 +2,41 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.15.2 — Bridge installer and large marker blobs
+
+Two contributor fixes.
+
+### Fixed
+
+- **The bridge installer no longer writes into Blackmagic Disk Speed Test's
+  sandbox container** (#315, thanks @gatezh). The macOS installer treats every
+  `com.blackmagic-design.*` container as a possible sandboxed Resolve and
+  excludes the known helpers by name, but Disk Speed Test was missing from
+  that list. The installer copied the bridge scripts and a copy of
+  `bridge.json`, auth token included, into a container Resolve never reads,
+  and the inflated canary count told users to expect 4 Scripts-menu entries
+  where Resolve shows 2. Files already written there are harmless apart from
+  the token copy and can be deleted by hand from
+  `~/Library/Containers/com.blackmagic-design.DiskSpeedTest/Data/Library/Application Support/`.
+- **Marker blobs over 128 KiB are now valid zstd** (#313, thanks
+  @Dev-next-gen). `drt.assemble` wrote timeline and clip markers as one raw
+  zstd block. The format caps a block at 128 KiB, so past that size the
+  reference decoder rejected the frame, and past 2 MiB assemble threw. The
+  writer now splits the payload into blocks of at most 128 KiB. Output up to
+  128 KiB is byte-identical to before. The same writer also builds the bin
+  registry blob, which gets the same fix.
+
+### Validation
+
+- Each PR was tested with `main` merged in: the full Python suite for #315
+  (only the 4 known worktree path artifacts failed), and the advanced Node
+  suite from a fresh `npm ci` for #313 (1,202 tests, 0 failures).
+- #313's frames checked against the reference `zstd` decoder: rejected above
+  128 KiB before the fix, accepted at every size up to 2.3 MB after it.
+- How Resolve's own importer treats a marker blob over 128 KiB was not
+  measured. The fix makes the frames spec-valid; it is reported, not
+  live-verified.
+
 ## What's New in v4.15.1 — Frame captures arrive as images on Python 3.10
 
 ### Fixed
