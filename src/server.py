@@ -32535,6 +32535,32 @@ def _fusion_input_spline(inp):
         return None
 
 
+def _fusion_remove_stray_keys(inp, stray: List[float]) -> Dict[str, Any]:
+    """Delete the keys Fusion added when add_keyframe attached a spline.
+
+    The result is read back rather than trusted: a key that is still there is
+    reported, so a caller is never told the curve holds only what it wrote.
+    """
+    spline = _fusion_input_spline(inp)
+    if spline is not None and _has_method(spline, "DeleteKeyFrames"):
+        for frame in stray:
+            try:
+                spline.DeleteKeyFrames(frame)
+            except Exception:
+                pass
+    remaining = [f for f in _fusion_keyframe_frames(inp)
+                 if any(abs(f - s) < 1e-6 for s in stray)]
+    removed = [s for s in stray if not any(abs(s - f) < 1e-6 for f in remaining)]
+    if not remaining:
+        return _ok(removed_stray_keys=removed)
+    return _ok(
+        removed_stray_keys=removed,
+        stray_keys_remaining=remaining,
+        warning=(f"Attaching the spline also keyed frame(s) {remaining} with the old value "
+                 "and they could not be removed; remove them with delete_keyframe."),
+    )
+
+
 def _fusion_delete_keyframe(tool, p: Dict[str, Any]) -> Dict[str, Any]:
     """Remove one keyframe from an animated Fusion input. (issue #155)
 
@@ -32953,6 +32979,7 @@ def fusion_comp(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
                 _already_animated = inp.GetConnectedOutput() is not None
             except Exception:
                 _already_animated = False
+            _stray = []
             if not _already_animated:
                 _is_nest, _members = _fusion_nest_members(tool, p["input_name"])
                 if _is_nest:
@@ -32986,8 +33013,21 @@ def fusion_comp(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
                                     "attach it with add_modifier, then drive the "
                                     "modifier tool it returns.",
                     )
+                # Attaching an empty spline keys the comp's CURRENT time with the
+                # input's old value (measured on Studio 21.0.2.4: keying 10 and 20
+                # left [0, 10, 20]). Note it now; it is removed after the real key
+                # lands, since DeleteKeyFrames will not remove a spline's only key.
+                # Only a spline holds keys; a text Follower answers GetKeyFrames
+                # with its +/-1e9 render-range bounds, which are not keys.
+                _spline = _fusion_input_spline(tool[p["input_name"]])
+                if _spline is not None and _has_method(_spline, "DeleteKeyFrames"):
+                    _stray = [f for f in _fusion_keyframe_frames(tool[p["input_name"]])
+                              if abs(f) < 1e8]
             tool[p["input_name"]][p["time"]] = p["value"]
-            return _ok()
+            _stray = [f for f in _stray if abs(f - float(p["time"])) >= 1e-6]
+            if not _stray:
+                return _ok()
+            return _fusion_remove_stray_keys(tool[p["input_name"]], _stray)
         finally:
             comp.EndUndo(True)
 

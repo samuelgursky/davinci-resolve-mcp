@@ -98,6 +98,11 @@ ALLOWED: dict[tuple[str, str, str], str] = {
         "measured on a live build to return None whether or not it removed anything; "
         "verified by re-reading the keyframe list (v2.98.3)"
     ),
+    ("server.py", "_fusion_remove_stray_keys", "DeleteKeyFrames"): (
+        "same call as _fusion_delete_keyframe, returns None either way; verified by "
+        "re-reading the keyframe list, and a surviving key is returned as "
+        "stray_keys_remaining with a warning"
+    ),
 
     # --- teardown ----------------------------------------------------------
     ("server.py", "_playhead_frame_render", "DeleteRenderJob"): TEARDOWN,
