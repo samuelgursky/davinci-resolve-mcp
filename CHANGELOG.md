@@ -2,6 +2,54 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.15.5 — DRX applies say which graph changed
+
+`graph.apply_grade_from_drx` and `timeline_item_color.safe_apply_drx` no
+longer report a bare `success` from `ApplyGradeFromDRX`. They read the graphs
+back, and they refuse a timeline apply that would load no timeline grade.
+
+### Fixed
+
+- **A timeline apply of a .drx with no timeline grade is refused** (#318).
+  A .drx keeps the clip grade in `<pClipFullVer>` and the timeline grade in
+  `<pTrackVer>`. `drx generate`'s single-node path writes no `<pTrackVer>`,
+  and native stills and the multi-node path write one with
+  `HasCorrection false`. On Studio 21.1.1.10 such an apply was reported to
+  return True, add nothing and empty the timeline graph. With
+  `source="timeline"`, both actions now return `DRX_NO_TIMELINE_GRADE` before
+  the confirm token is issued and before Resolve is called.
+- **DRX applies read back every graph the grade could land in** (#319).
+  The node count, labels and LUTs of the clip graph, the clip's color-group
+  pre- and post-clip graphs and the timeline graph are read before and
+  after. The result carries `changed_graphs`, a per-graph before/after count
+  and a `verification` block, so the result no longer says
+  `readback_checked: false`. When only a graph you did not target changed,
+  the call fails with `DRX_APPLIED_TO_OTHER_GRAPH`. When no graph changed it
+  still reports success, with a `warning`: a grade with the same node
+  structure changes only parameters, which no readback reaches.
+
+### Documentation
+
+- Two `api_truth` entries for the reported behaviour, mapped to both apply
+  actions, with what Studio 19.1.3.7 did when we measured it.
+- New live harness `tests/live_drx_apply_readback_validation.py`.
+
+### Validation
+
+- Full offline suite: 4,242 tests, OK. 12 new unit tests cover the file
+  check, both refusals, the group pre-clip landing case, a verified change,
+  the no-change warning, a color-group target and `safe_apply_drx`.
+- Live on Studio 19.1.3.7, disposable project, one synthetic clip, a grade
+  from `drx generate`: 0 failures. The refusal fired and left the timeline
+  graph alone; the clip apply was detected through the node label
+  (`changed_graphs: ["item"]`); the same-structure re-apply warned; a
+  grouped clip's readback covered both group graphs.
+- Neither reported behaviour reproduces on 19.1.3.7. Every timeline-graph
+  apply returned False and changed nothing, with or without a timeline
+  grade, so a successful timeline apply was not observed. A grouped clip took
+  the grade in its own graph. Both were reported on Studio 21.1.1.10, which
+  was not available for this release.
+
 ## What's New in v4.15.4 — add_keyframe no longer leaves a stray key
 
 ### Fixed
