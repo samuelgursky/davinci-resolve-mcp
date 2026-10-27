@@ -2,6 +2,36 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.15.4 — add_keyframe no longer leaves a stray key
+
+### Fixed
+
+- **`fusion_comp(action="add_keyframe")` removes the key Fusion adds when an
+  input is first animated** (#317, thanks @assassin007-hub). Attaching an
+  empty BezierSpline keys the comp's current time with the input's old value,
+  so keying frames 10 and 20 left keys `[0, 10, 20]` and the curve ramped from
+  the old value instead of holding until the first intended key. The first
+  call on an input now deletes that key after the real one is written, reads
+  the keys back, and returns `removed_stray_keys`, or `stray_keys_remaining`
+  with a `warning` pointing to `delete_keyframe` if a key survives. A key
+  written at the current time simply overwrites it. Text Follower range
+  bounds (±1e9) are not treated as keys.
+
+### Documentation
+
+- Two measured `api_truth` entries: BezierSpline LH/RH handles are offsets
+  from their key, not absolute points; and the stray key an empty spline
+  attach leaves, now attached to `fusion_comp add_keyframe`.
+
+### Validation
+
+- CI passed on Python 3.10 and 3.11 and on the advanced Node suite under
+  Node 20 and 22. Full offline suite run against main: 4,230 tests, with only
+  the 4 `source_media_guard` failures that always occur in a scratch worktree.
+- Live behavior was measured by the contributor on Studio 21.0.2.4 (keys
+  `[0, 10, 20]` before, `[10, 20]` after `DeleteKeyFrames`). It was not
+  re-run on 19.1.3.7 for this release.
+
 ## What's New in v4.15.3 — CI covers the version floors
 
 No server behavior changed. Pull requests are now tested on the oldest Python
