@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 377-tool granular server instead
 """
 
-VERSION = "4.15.4"
+VERSION = "4.15.5"
 
 import base64
 import os
@@ -29221,6 +29221,160 @@ def _color_graph_from_params(proj, item, p: Dict[str, Any]):
     return None, source, _err(f"Unknown color graph source: {source}")
 
 
+def _drx_track_grade_state(path) -> str:
+    """What a .drx holds for a TIMELINE apply: "present", "empty", "missing" or "unreadable".
+
+    A .drx keeps the clip grade in <pClipFullVer> and the timeline grade in
+    <pTrackVer>. A timeline ApplyGradeFromDRX loads <pTrackVer>, and when that
+    block has HasCorrection false it replaces the timeline graph with an empty
+    one and still returns True (issue #318).
+    """
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    except OSError:
+        return "unreadable"
+    block = re.search(r"<pTrackVer>(.*?)</pTrackVer>", text, re.DOTALL)
+    if not block:
+        return "missing"
+    has = re.search(r"<HasCorrection>\s*(true|false)\s*</HasCorrection>", block.group(1), re.IGNORECASE)
+    return "present" if has and has.group(1).lower() == "true" else "empty"
+
+
+def _refuse_empty_track_grade(path, source):
+    """Error envelope when a timeline apply would load no timeline grade, else None."""
+    if source != "timeline":
+        return None
+    state = _drx_track_grade_state(path)
+    if state not in ("missing", "empty"):
+        return None
+    return _err(
+        "This .drx carries no timeline grade (<pTrackVer> is "
+        f"{'absent' if state == 'missing' else 'empty, HasCorrection false'}). Applying it to the "
+        "timeline graph would change nothing and replace the existing timeline graph with an empty one.",
+        code="DRX_NO_TIMELINE_GRADE", category="invalid_input",
+        remediation="Apply it to a clip (source='item') instead, or use a .drx exported from a "
+                    "timeline grade. To clear the timeline graph on purpose, use reset_all_grades.",
+        state={"path": path, "track_grade": state},
+    )
+
+
+def _graph_fingerprint(g):
+    """Node count plus each node's label and LUT; None when the graph can't be read.
+
+    GetToolsInNode is left out on purpose: it crashes Resolve 19.1.3 on some graphs.
+    """
+    if not g:
+        return None
+    try:
+        count = int(g.GetNumNodes() or 0)
+    except Exception:
+        return None
+    nodes = []
+    for node_index in range(1, count + 1):
+        row = {}
+        for key, method_name in (("label", "GetNodeLabel"), ("lut", "GetLUT")):
+            if _has_method(g, method_name):
+                try:
+                    row[key] = _ser(getattr(g, method_name)(node_index))
+                except Exception:
+                    row[key] = None
+        nodes.append(row)
+    return {"num_nodes": count, "nodes": nodes}
+
+
+def _drx_candidate_graphs(source, *, item=None, tl=None, group=None, layer_index=None):
+    """{name: getter} for every graph a .drx apply could land in, the target included.
+
+    The clip graph, its color group's pre/post-clip graphs and the timeline graph
+    are all candidates: on a clip in a group the grade can land in the group's
+    pre-clip graph instead of the clip's (issue #319).
+    """
+    out = {}
+    if item is not None:
+        out["item"] = lambda: item.GetNodeGraph(layer_index) if layer_index is not None else item.GetNodeGraph()
+        if group is None:
+            try:
+                group = item.GetColorGroup()
+            except Exception:
+                group = None
+    if group is not None:
+        out["color_group_pre"] = group.GetPreClipNodeGraph
+        out["color_group_post"] = group.GetPostClipNodeGraph
+    if tl is None:
+        try:
+            _, tl, _tl_err = _get_tl()
+        except Exception:
+            tl = None
+    if tl is not None:
+        out["timeline"] = tl.GetNodeGraph
+    if source not in out:
+        out[source] = None
+    return out
+
+
+def _apply_drx_with_readback(graph, source, path, grade_mode, candidates):
+    """ApplyGradeFromDRX, with every candidate graph read before and after.
+
+    The native True does not say where the grade went or whether anything
+    changed, so the result reports which graphs changed. A grade that lands only
+    in another graph is a failure. Nothing changing is reported but not failed:
+    a same-structure apply changes only parameters, which the API cannot read.
+    """
+    def read(getter):
+        try:
+            return _graph_fingerprint(getter()) if getter else None
+        except Exception:
+            return None
+
+    if candidates.get(source) is None:
+        candidates = {**candidates, source: lambda: graph}
+    before = {name: read(getter) for name, getter in candidates.items()}
+    native = bool(graph.ApplyGradeFromDRX(path, grade_mode))
+    after = {name: read(getter) for name, getter in candidates.items()}
+
+    graphs = {}
+    changed, unreadable = [], []
+    for name in candidates:
+        b, a = before[name], after[name]
+        if b is None or a is None:
+            unreadable.append(name)
+            graphs[name] = {"readable": False}
+            continue
+        graphs[name] = {"num_nodes_before": b["num_nodes"], "num_nodes_after": a["num_nodes"],
+                        "changed": b != a}
+        if b != a:
+            changed.append(name)
+
+    landed_elsewhere = bool(changed) and source not in changed
+    verification = {
+        "verified": source in changed,
+        "contradiction": landed_elsewhere,
+        "method": "node count, labels and LUTs of each graph before and after",
+    }
+    result = {"success": native, "path": path, "source": source, "changed_graphs": changed,
+              "graphs": graphs, "verification": verification}
+    if unreadable:
+        result["unreadable_graphs"] = unreadable
+    if landed_elsewhere:
+        err = _err(
+            f"The grade was applied to the {', '.join(changed)} graph, not the {source} graph that "
+            "was targeted. Resolve returned " + ("True" if native else "False") + ".",
+            code="DRX_APPLIED_TO_OTHER_GRAPH", category="resolve_api_failed", retryable=False,
+            remediation="Check the Node Editor's graph dropdown (Clip / Group Pre-Clip / Group "
+                        "Post-Clip / Timeline) on the Color page, then restore the changed graph "
+                        "from a still or grade version before retrying.",
+            state={"targeted": source, "changed_graphs": changed},
+        )
+        return {**result, **err, "success": False}
+    if native and not changed:
+        result["warning"] = (
+            "No graph changed its node count, labels or LUTs. Either the grade has the same node "
+            "structure as before (only parameters changed, which the API cannot read back) or "
+            "nothing was applied; confirm with a rendered frame or the scopes.")
+    return result
+
+
 def _grade_version_snapshot(item, p: Dict[str, Any]):
     out = {"current": None, "local": [], "remote": [], "errors": []}
     try:
@@ -29487,6 +29641,9 @@ def _safe_apply_drx(proj, item, p: Dict[str, Any]):
     if not _has_method(graph, "ApplyGradeFromDRX"):
         return _err(f"{source} graph does not expose ApplyGradeFromDRX",
                     code="APPLY_DRX_UNSUPPORTED", category="unsupported")
+    refused = _refuse_empty_track_grade(path, source)
+    if refused:
+        return refused
     if _coerce_bool(p.get("dry_run")):
         return _ok(path=path, source=source, grade_mode=p.get("grade_mode", p.get("mode", 0)), would_apply=True)
     # B2 — Whole-grade replacement is catastrophic; require confirmation.
@@ -29503,8 +29660,13 @@ def _safe_apply_drx(proj, item, p: Dict[str, Any]):
     blocked = _consume_confirm_token(action="safe_apply_drx", params=p)
     if blocked:
         return blocked
-    success = bool(graph.ApplyGradeFromDRX(path, p.get("grade_mode", p.get("mode", 0))))
-    return {"success": success, "path": path, "source": source}
+    group = None
+    if source in ("color_group_pre", "color_group_post"):
+        group = next((g for g in proj.GetColorGroupsList() or [] if g.GetName() == p.get("group_name")), None)
+    candidates = _drx_candidate_graphs(
+        source, item=item, group=group,
+        layer_index=p.get("layer_index") if source == "item" else None)
+    return _apply_drx_with_readback(graph, source, path, p.get("grade_mode", p.get("mode", 0)), candidates)
 
 
 # ── color_trace apply driver ─────────────────────────────────────────────────
@@ -29920,7 +30082,7 @@ _ACTION_HELP: Dict[str, Dict[str, Dict[str, Any]]] = {
         "safe_apply_drx": {
             "summary": "Apply a .drx grade. REPLACES the target graph; gated by confirm_token.",
             "params": "path: str, source?, grade_mode? (0=no keyframes, 1=source TC aligned, 2=start aligned), require_temp_path?, confirm_token?",
-            "returns": "{success, path, source}",
+            "returns": "{success, path, source, changed_graphs, graphs, verification, warning?} (same readback and refusals as graph.apply_grade_from_drx)",
             "example": (
                 'timeline_item_color(action="safe_apply_drx", params={\n'
                 '  "track_type": "video", "track_index": 1, "item_index": 0,\n'
@@ -30110,7 +30272,7 @@ _ACTION_HELP: Dict[str, Dict[str, Dict[str, Any]]] = {
         "apply_grade_from_drx": {
             "summary": "REPLACES the entire node graph from a .drx. Confirm_token required.",
             "params": "path, grade_mode? (0/1/2), source?",
-            "returns": "{success}",
+            "returns": "{success, path, source, changed_graphs, graphs, verification, warning?} — changed_graphs names every graph whose node count, labels or LUTs changed; DRX_APPLIED_TO_OTHER_GRAPH when only a graph you did not target changed; DRX_NO_TIMELINE_GRADE when source=timeline and the .drx has no timeline grade",
             "example": (
                 'graph(action="apply_grade_from_drx", params={\n'
                 '  "path": "/tmp/look.drx", "grade_mode": 0, "source": "item"\n'
@@ -30726,7 +30888,7 @@ def timeline_item_color(action: str, params: Optional[Dict[str, Any]] = None) ->
     propose_grade       -> {accepted: bool, validation, plan_id?, preview_path?, error?}
     safe_set_cdl        -> {success, validation, normalized, node_preflight, diagnosis?}
     safe_copy_grade     -> {success, targets, missing}
-    safe_apply_drx      -> {success, path, source}  # first call may return confirm_token
+    safe_apply_drx      -> {success, path, source, changed_graphs, graphs, verification, warning?}  # first call may return confirm_token
     apply_trace_plan    -> {success, timeline, applied, failed, skipped, summary}  # dry_run → {resolution}; first live call returns confirm_token
     grade_capabilities  -> {item_methods, graph_sources, lut_export_types, guards}
     grade_boundary_report -> {capabilities, item, color_groups, gallery}
@@ -30766,7 +30928,7 @@ def timeline_item_color(action: str, params: Optional[Dict[str, Any]] = None) ->
       safe_copy_grade(target_ids, dry_run?, ...) -> {success, targets, missing}
         Copies grade to N items; dry_run reports targets without mutating.
         # example: action_help(name='<action_name>')
-      safe_apply_drx(path, source?, grade_mode?, require_temp_path?) -> {success}
+      safe_apply_drx(path, source?, grade_mode?, require_temp_path?) -> {success, path, source, changed_graphs, graphs, verification, warning?}
         REPLACES the target graph. Captures a version snapshot first; require_temp_path defaults True.
         # example: action_help(name='<action_name>')
       apply_trace_plan(plan_path|plan, dry_run?, min_confidence?=0.8, start_tolerance?=0, grade_mode?=0, version_name?, require_temp_path?=True, allow_timeline_mismatch?, max_rows?=40, verbose?, report_path?, confirm_token?) -> {success, applied, failed, skipped, attention, summary, report_path}
@@ -31332,7 +31494,10 @@ def graph(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any
         UNSAFE. Assigns a LUT to an existing node. No snapshot/dry_run.
       set_node_cache(node_index, cache_value, source?, ...) -> {success}
       set_node_enabled(node_index, enabled, source?, ...) -> {success}
-      apply_grade_from_drx(path, grade_mode?, source?, ...) -> {success}
+      apply_grade_from_drx(path, grade_mode?, source?, ...) -> {success, path, source, changed_graphs, graphs, verification, warning?}
+        Reads the clip, color-group pre/post and timeline graphs before and after and
+        reports changed_graphs; fails if the grade landed only in a graph not targeted.
+        source="timeline" refuses a .drx whose <pTrackVer> has no correction.
         CATASTROPHIC. REPLACES the entire node graph. Prefer timeline_item_color.safe_apply_drx
         (confirm-token gated + validated; it does NOT snapshot — grab a still/.drx backup
         first, and ALWAYS pass track_type/track_index/item_index explicitly: the default
@@ -31359,6 +31524,7 @@ def graph(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any
 
     # Get the graph object based on source
     g = None
+    item = group = None
     if source == "timeline":
         _, tl, err = _get_tl()
         if err:
@@ -31376,6 +31542,7 @@ def graph(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any
         groups = proj.GetColorGroupsList() or []
         for cg in groups:
             if cg.GetName() == p.get("group_name"):
+                group = cg
                 g = cg.GetPreClipNodeGraph() if source == "color_group_pre" else cg.GetPostClipNodeGraph()
                 break
         if g is None:
@@ -31429,6 +31596,9 @@ def graph(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any
     elif action == "set_node_enabled":
         return {"success": bool(g.SetNodeEnabled(p["node_index"], p["enabled"]))}
     elif action == "apply_grade_from_drx":
+        refused = _refuse_empty_track_grade(p["path"], source)
+        if refused:
+            return refused
         if "confirm_token" not in p and "confirmToken" not in p and _confirm_token_required():
             return _issue_confirm_token(
                 action="graph.apply_grade_from_drx",
@@ -31440,7 +31610,9 @@ def graph(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any
         blocked = _consume_confirm_token(action="graph.apply_grade_from_drx", params=p)
         if blocked:
             return blocked
-        return {"success": bool(g.ApplyGradeFromDRX(p["path"], p.get("grade_mode", p.get("mode", 0))))}
+        candidates = _drx_candidate_graphs(source, item=item, group=group,
+                                           layer_index=p.get("layer_index"))
+        return _apply_drx_with_readback(g, source, p["path"], p.get("grade_mode", p.get("mode", 0)), candidates)
     elif action == "apply_arri_cdl_lut":
         return {"success": bool(g.ApplyArriCdlLut())}
     elif action == "reset_all_grades":

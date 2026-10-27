@@ -2017,6 +2017,62 @@ API_TRUTH: List[Dict[str, Any]] = [
         "tags": ["silent-failure", "color", "grade", "page", "drx", "version"],
     },
     {
+        "symbol": "Graph.ApplyGradeFromDRX (timeline graph, empty pTrackVer)",
+        "object": "Graph",
+        "signature": "Timeline.GetNodeGraph().ApplyGradeFromDRX(path, gradeMode) -> bool",
+        "reality": "A .drx holds the clip grade in <pClipFullVer> (VerType 0) and the "
+                   "timeline grade in <pTrackVer> (VerType 1); a timeline-graph apply "
+                   "loads <pTrackVer>. When that block has HasCorrection false, which is "
+                   "what drx generate (direct) writes and what a clip still carries, "
+                   "the apply returns True, adds no grade and replaces the existing "
+                   "timeline graph with an empty one, deleting any node on it. Copying "
+                   "the clip <Body> into <pTrackVer> with HasCorrection true applied as "
+                   "expected (0 -> 1 node, no other graph changed).",
+        "recommended": "Check the file's <pTrackVer> before a timeline apply. "
+                       "graph.apply_grade_from_drx and timeline_item_color.safe_apply_drx "
+                       "with source='timeline' refuse a .drx whose <pTrackVer> is absent or "
+                       "has HasCorrection false (DRX_NO_TIMELINE_GRADE). Clear the "
+                       "timeline graph on purpose with reset_all_grades.",
+        "tags": ["silent-failure", "color", "grade", "drx", "node-graph", "timeline"],
+        "issue": 318,
+        "mitigation": ["_refuse_empty_track_grade"],
+        "verified_on": "DaVinci Resolve Studio 21.1.1.10 (issue #318; not re-measured here)",
+        "measured": "2026-10-27 on Studio 19.1.3.7 (tests/live_drx_apply_readback_validation.py): "
+                    "every Timeline.GetNodeGraph().ApplyGradeFromDRX returned False and left the "
+                    "timeline graph at 0 nodes, with the timeline grade present or empty, so "
+                    "the empty-graph replacement does not reproduce on that build. drx "
+                    "generate's single-node path writes no <pTrackVer> at all; the multi-node "
+                    "path writes one with HasCorrection false.",
+    },
+    {
+        "symbol": "Graph.ApplyGradeFromDRX (grade lands in another graph)",
+        "object": "Graph",
+        "signature": "TimelineItem.GetNodeGraph().ApplyGradeFromDRX(path, gradeMode) -> bool",
+        "reality": "The True return does not say which graph took the grade. On a clip "
+                   "in a color group, applying to the clip's graph replaced node 1 of "
+                   "the group's pre-clip graph instead (removing the LUT the group "
+                   "shared) and left the clip graph at one empty node. The manual says "
+                   "the Node Editor's graph dropdown (Clip / Group Pre-Clip / Group "
+                   "Post-Clip / Timeline) decides where a still's grade lands; whether "
+                   "the API follows the same rule has not been confirmed.",
+        "recommended": "Read every graph the grade could land in before and after the "
+                       "apply. graph.apply_grade_from_drx and "
+                       "timeline_item_color.safe_apply_drx compare node count, labels and "
+                       "LUTs of the clip, group pre/post and timeline graphs, return "
+                       "changed_graphs, and fail with DRX_APPLIED_TO_OTHER_GRAPH when only "
+                       "an untargeted graph changed. No change at all is reported, not "
+                       "failed: a same-structure grade changes only parameters, which no "
+                       "readback reaches, so confirm with a rendered frame.",
+        "tags": ["silent-failure", "color", "grade", "drx", "node-graph", "readback"],
+        "issue": 319,
+        "mitigation": ["_apply_drx_with_readback"],
+        "verified_on": "DaVinci Resolve Studio 21.1.1.10 (issue #319; not re-measured here)",
+        "measured": "2026-10-27 on Studio 19.1.3.7 (tests/live_drx_apply_readback_validation.py): "
+                    "a clip assigned to a color group took the grade in its own graph; the "
+                    "group pre/post graphs did not change. The readback detected the clip "
+                    "change through the node label.",
+    },
+    {
         "symbol": "MediaPool.AppendToTimeline clipInfo endFrame (exclusive bound)",
         "object": "MediaPool",
         "signature": "([{mediaPoolItem, startFrame, endFrame, recordFrame, "
@@ -4031,6 +4087,14 @@ ACTION_SYMBOLS: Dict[Tuple[str, str], List[str]] = {
     ("timeline", "apply_look_to_items"): ["TimelineItem.CopyGrades"],
     ("timeline_item_color", "export_lut"): ["TimelineItem.ExportLUT"],
     ("timeline_item_color", "safe_export_lut"): ["TimelineItem.ExportLUT"],
+    ("graph", "apply_grade_from_drx"): [
+        "Graph.ApplyGradeFromDRX (timeline graph, empty pTrackVer)",
+        "Graph.ApplyGradeFromDRX (grade lands in another graph)",
+    ],
+    ("timeline_item_color", "safe_apply_drx"): [
+        "Graph.ApplyGradeFromDRX (timeline graph, empty pTrackVer)",
+        "Graph.ApplyGradeFromDRX (grade lands in another graph)",
+    ],
     ("timeline", "duplicate"): ["Timeline.DuplicateTimeline"],
     ("project_manager", "archive"): ["ProjectManager.ArchiveProject"],
     ("fusion_comp", "add_modifier"): ["Tool.AddModifier", "Tool.AddModifier (NestControl inputs)"],
