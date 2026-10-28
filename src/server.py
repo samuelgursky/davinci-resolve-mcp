@@ -27517,7 +27517,7 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         track: Resolve answers that with a bare False, and SetProperty still writes there.
         DESTRUCTIVE. ripple=True is CATASTROPHIC (closes the gap; cannot be selectively undone).
       set_clips_linked(clip_ids, linked) -> {success}
-      duplicate(name?) -> {success, name}
+      duplicate(name?, make_current?) -> {success, name, id, current}  (original stays current unless make_current)
       duplicate_clips(clip_ids?, selected?, target_track_index?, track_offset?, placement?, record_frame?, record_frame_offset?, copy_properties?, include_linked?) -> {results, count}
       — Video clips only. Re-places the same MediaPool media with the same source trim on the
         current timeline (like Alt-drag) via AppendToTimeline. clip_ids: timeline item unique IDs
@@ -27966,8 +27966,27 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
                         found.append(it)
         return {"success": bool(tl.SetClipsLinked(found, p["linked"]))}
     elif action == "duplicate":
+        # Resolve makes the copy current. Callers duplicate to keep a backup and
+        # then edit the original, so the original stays current unless asked
+        # (#322); `current` says which timeline is current afterwards.
         dup = tl.DuplicateTimeline(p.get("name", tl.GetName() + " Copy"))
-        return _ok(name=dup.GetName()) if dup else _err("Failed to duplicate")
+        if not dup:
+            return _err("Failed to duplicate")
+        warnings = []
+        if not _coerce_bool(p.get("make_current"), False):
+            now = proj.GetCurrentTimeline()
+            if now is None or now.GetUniqueId() != tl.GetUniqueId():
+                proj.SetCurrentTimeline(tl)
+                now = proj.GetCurrentTimeline()
+                if now is None or now.GetUniqueId() != tl.GetUniqueId():
+                    warnings.append("Could not make the original timeline current again; the copy may be current.")
+        elif proj.GetCurrentTimeline() is None or proj.GetCurrentTimeline().GetUniqueId() != dup.GetUniqueId():
+            proj.SetCurrentTimeline(dup)
+        now = proj.GetCurrentTimeline()
+        result = _ok(name=dup.GetName(), id=dup.GetUniqueId(), current=now.GetName() if now else None)
+        if warnings:
+            result["warnings"] = warnings
+        return result
     elif action == "duplicate_clips":
         return _timeline_duplicate_clips_impl(proj, tl, p)
     elif action == "copy_clips":
