@@ -150,6 +150,11 @@ def extract_warnings(raw: Any) -> List[str]:
     if ignored:
         add(f"Ignored unsupported options: {ignored}")
 
+    # Params the action never read (issue #320); see `_CallScope.report`.
+    unread = raw.get("ignored_params")
+    if unread:
+        add(f"Ignored params this action does not read: {', '.join(map(str, unread))}")
+
     return out
 
 

@@ -32,6 +32,7 @@ import threading
 import time
 import zlib
 import contextlib
+import contextvars
 from typing import Dict, Any, Optional, List, Tuple
 
 # ─── Path Setup ───────────────────────────────────────────────────────────────
@@ -1609,6 +1610,68 @@ class _Params(dict):
     def __missing__(self, key):
         raise _MissingParam(key)
 
+    # ── Read tracking (issue #320) ──────────────────────────────────────────
+    # A key the action never reads used to vanish without a word, so a caller
+    # passing `timeline_id` believed the call was pinned when it wasn't. The
+    # dict records which keys were read; the tool wrapper reports the rest as
+    # `ignored_params`. Anything that hands out the whole dict (iteration, a
+    # copy, `dict(p)`, `{**p}`) counts as reading every key: the copy may be
+    # read anywhere, and a false "ignored" would be worse than a missed one.
+    # State lives in `__dict__` via setdefault so instances built without
+    # `__init__` (copy, pickle) still work.
+
+    def _mark(self, key):
+        self.__dict__.setdefault("_read_keys", set()).add(key)
+
+    def _mark_all(self):
+        self.__dict__["_read_all"] = True
+
+    def read_keys(self):
+        """The keys read so far, or None when the whole dict was handed out."""
+        if self.__dict__.get("_read_all"):
+            return None
+        return set(self.__dict__.get("_read_keys", ()))
+
+    def __getitem__(self, key):
+        self._mark(key)
+        return super().__getitem__(key)
+
+    def __contains__(self, key):
+        self._mark(key)
+        return super().__contains__(key)
+
+    def get(self, key, default=None):
+        self._mark(key)
+        return super().get(key, default)
+
+    def pop(self, key, *default):
+        self._mark(key)
+        return super().pop(key, *default)
+
+    def setdefault(self, key, default=None):
+        self._mark(key)
+        return super().setdefault(key, default)
+
+    def __iter__(self):
+        self._mark_all()
+        return super().__iter__()
+
+    def keys(self):
+        self._mark_all()
+        return super().keys()
+
+    def items(self):
+        self._mark_all()
+        return super().items()
+
+    def values(self):
+        self._mark_all()
+        return super().values()
+
+    def copy(self):
+        self._mark_all()
+        return super().copy()
+
 
 def _params(params: Optional[Dict[str, Any]]) -> "_Params":
     """Every tool body starts here, so every action gets the diagnosable dict.
@@ -1616,8 +1679,11 @@ def _params(params: Optional[Dict[str, Any]]) -> "_Params":
     Note `_Params(params or {})` rather than a truthiness dance: an empty
     `_Params` is falsy like any empty dict, so `p = params or {}` would have
     quietly handed back a *plain* dict in exactly the no-arguments case this
-    exists to serve.
+    exists to serve. A `_Params` the tool wrapper already built is returned as
+    is, so its read tracking sees the action's reads.
     """
+    if isinstance(params, _Params):
+        return params
     return _Params(params or {})
 
 
@@ -1696,6 +1762,210 @@ def _record_execution_step(
         logger.debug("Failed to record execution step: %s", exc)
 
 
+# ─── Call scope: timeline pinning, ignored params, acted-on timeline (#320) ──
+#
+# Timeline-scoped actions act on `Project.GetCurrentTimeline()`. Nothing let a
+# caller name the target, and a `timeline_id` the action did not read was
+# dropped, so the write landed on whatever was current (including a timeline
+# the user had just clicked) while the response said success.
+#
+# `timeline_id` / `timeline_name` now pin a call: the wrapper makes that
+# timeline current for the call and restores the caller's timeline afterwards.
+# Switching rather than passing a Timeline object around is deliberate. About
+# fifty sites read the current timeline, and several Resolve calls only act on
+# the current one (playhead, current video item, render range), so a pin that
+# skipped the switch would silently not apply to them. `_playhead_frame_capture`
+# already switched and restored the same way for its own `timeline_name`.
+
+#: Tools whose actions act on the current timeline.
+_TIMELINE_SCOPED_TOOLS = frozenset({
+    "timeline", "timeline_item", "timeline_item_markers", "timeline_item_color",
+    "timeline_item_fusion", "timeline_item_takes", "timeline_markers",
+    "timeline_frame", "timeline_ai", "graph", "render",
+})
+#: Actions that read a pin key with a meaning of their own: set_current selects
+#: by `timeline_id`, and the imports use `timeline_name` for the new timeline.
+_TIMELINE_PIN_EXEMPT = frozenset({
+    ("timeline", "list"), ("timeline", "set_current"),
+    ("timeline", "import_timeline_checked"), ("timeline", "import_from_drp"),
+})
+_PIN_ID_KEYS = ("timeline_id", "timelineId")
+_PIN_NAME_KEYS = ("timeline_name", "timelineName")
+#: Keys the wrapper and the envelope read, never the action.
+_ENVELOPE_PARAM_KEYS = frozenset({"envelope", "_envelope", "execution_id", "_execution_id", "trace_id"})
+
+_call_depth = contextvars.ContextVar("resolve_mcp_call_depth", default=0)
+_acted_timeline = contextvars.ContextVar("resolve_mcp_acted_timeline", default=None)
+
+
+def _note_timeline(tl):
+    """Record the timeline this call acted on (the first one resolved wins)."""
+    if tl is not None and _acted_timeline.get() is None:
+        _acted_timeline.set(tl)
+
+
+def _timeline_ref(tl) -> Optional[Dict[str, Any]]:
+    try:
+        return {"name": str(tl.GetName()), "id": str(tl.GetUniqueId())}
+    except Exception as exc:  # a stale handle must not fail the call it describes
+        logger.debug("Could not describe timeline: %s", exc)
+        return None
+
+
+class _CallScope:
+    """Per-call state for the outermost tool call (nested tool calls pass through).
+
+    Only the outermost call is scoped: internal code that chains one tool into
+    another passes its own params, and pinning or reporting those would be
+    about the server's plumbing, not the caller's request.
+    """
+
+    def __init__(self, tool_name: str, action: str, args, kwargs):
+        self.tool_name, self.action = tool_name, action
+        self.outer = _call_depth.get() == 0
+        self._depth_token = _call_depth.set(_call_depth.get() + 1)
+        self._timeline_token = _acted_timeline.set(None) if self.outer else None
+        self.params = None
+        self.pin = None  # (project, timeline to restore or None, pinned timeline)
+        self.error = None
+        self.args, self.kwargs = args, kwargs
+        if not self.outer:
+            return
+        raw = _guarded_params(args, kwargs)
+        if raw is not None:
+            self.params = raw if isinstance(raw, _Params) else _Params(raw)
+            if isinstance(kwargs.get("params"), dict):
+                self.kwargs = {**kwargs, "params": self.params}
+            else:
+                self.args = (args[0], self.params, *args[2:])
+        if (self.params and tool_name in _TIMELINE_SCOPED_TOOLS
+                and (tool_name, action) not in _TIMELINE_PIN_EXEMPT):
+            self.error = self._pin()
+
+    def _pin(self):
+        p = self.params
+        want_id = next((p[k] for k in _PIN_ID_KEYS if p.get(k)), None)
+        want_name = next((p[k] for k in _PIN_NAME_KEYS if p.get(k)), None)
+        if not (want_id or want_name):
+            return None
+        _, proj, err = _check()
+        if err:
+            return err
+        target = None
+        if want_id:
+            target = _find_timeline_by_id(proj, want_id)[0]
+            if target is None:
+                return _err(
+                    f"No timeline with id {want_id!r} in this project",
+                    code="TIMELINE_NOT_FOUND", category="invalid_input",
+                    remediation="List timelines with timeline(action='list') and pass one of their ids.",
+                    state={"timeline_id": str(want_id)},
+                )
+        if want_name:
+            named = [
+                tl for tl in (proj.GetTimelineByIndex(i) for i in range(1, int(proj.GetTimelineCount() or 0) + 1))
+                if tl and str(tl.GetName()) == str(want_name)
+            ]
+            if target is not None and str(target.GetName()) != str(want_name):
+                return _err(
+                    f"timeline_id {want_id!r} is {target.GetName()!r}, not {want_name!r}",
+                    code="TIMELINE_SELECTOR_MISMATCH", category="invalid_input",
+                    remediation="Pass either timeline_id or timeline_name, or a pair that names the same timeline.",
+                )
+            if target is None:
+                if not named:
+                    return _err(
+                        f"No timeline named {want_name!r} in this project",
+                        code="TIMELINE_NOT_FOUND", category="invalid_input",
+                        remediation="List timelines with timeline(action='list') and pass an exact name or id.",
+                        state={"timeline_name": str(want_name)},
+                    )
+                if len(named) > 1:
+                    return _err(
+                        f"{len(named)} timelines are named {want_name!r}",
+                        code="TIMELINE_NAME_AMBIGUOUS", category="invalid_input",
+                        remediation="Pass timeline_id instead; timeline(action='list') returns each id.",
+                        state={"ids": [tl.GetUniqueId() for tl in named]},
+                    )
+                target = named[0]
+        current = proj.GetCurrentTimeline()
+        if current is not None and current.GetUniqueId() == target.GetUniqueId():
+            self.pin = (proj, None, target)
+            return None
+        if not proj.SetCurrentTimeline(target):
+            return _err(
+                f"Could not make timeline {target.GetName()!r} current to act on it",
+                code="TIMELINE_PIN_FAILED", category="resolve_api_failed",
+            )
+        self.pin = (proj, current, target)
+        return None
+
+    def restore(self):
+        """Give the caller back their current timeline. Safe to call twice."""
+        if getattr(self, "_restored_done", False):
+            return
+        self._restored_done = True
+        restored = None
+        if self.pin:
+            proj, original, target = self.pin
+            if original is not None:
+                try:
+                    now = proj.GetCurrentTimeline()
+                    # An action that moved the current timeline elsewhere on
+                    # purpose (create, duplicate) keeps that; only undo our switch.
+                    if now is not None and now.GetUniqueId() == target.GetUniqueId():
+                        proj.SetCurrentTimeline(original)
+                        # Verified by readback: SetCurrentTimeline can answer
+                        # True and stay put, and an unverified restore would
+                        # leave the caller's next unpinned write on our target.
+                        after = proj.GetCurrentTimeline()
+                        if after is not None and after.GetUniqueId() == original.GetUniqueId():
+                            restored = original
+                        else:
+                            self.restore_failed = True
+                except Exception as exc:
+                    self.restore_failed = True
+                    logger.warning("Could not restore the current timeline after a pinned call: %s", exc)
+        self.restored = restored
+
+    def report(self, result):
+        """Add `ignored_params` to a successful result: keys no code read."""
+        if not self.outer or self.params is None or not isinstance(result, dict) or result.get("error"):
+            return result
+        read = self.params.read_keys()
+        if read is None:
+            return result
+        ignored = sorted(str(k) for k in set(dict.keys(self.params)) - read - _ENVELOPE_PARAM_KEYS)
+        return {**result, "ignored_params": ignored} if ignored else result
+
+    def annotate(self, enveloped):
+        """Name the timeline acted on in the envelope (#320)."""
+        if not self.outer or self.tool_name not in _TIMELINE_SCOPED_TOOLS or not isinstance(enveloped, dict):
+            return enveloped
+        acted = self.pin[2] if self.pin else _acted_timeline.get()
+        ref = _timeline_ref(acted) if acted is not None else None
+        if ref is None:
+            return enveloped
+        if self.pin:
+            ref["pinned"] = True
+            restored = getattr(self, "restored", None)
+            if restored is not None:
+                ref["restored_current"] = _timeline_ref(restored)
+            if getattr(self, "restore_failed", False):
+                ref["restore_failed"] = True
+        envelope = enveloped.get(_operation_result.ENVELOPE_KEY)
+        if isinstance(envelope, dict):
+            envelope["timeline"] = ref
+        elif "operation" in enveloped and "status" in enveloped:  # pure mode
+            enveloped["timeline"] = ref
+        return enveloped
+
+    def close(self):
+        if self._timeline_token is not None:
+            _acted_timeline.reset(self._timeline_token)
+        _call_depth.reset(self._depth_token)
+
+
 def _guard_missing_params(fn):
     """Tool decorator: report a missing parameter instead of leaking a KeyError.
 
@@ -1726,62 +1996,84 @@ def _guard_missing_params(fn):
         @functools.wraps(fn)
         async def wrapper(*args, **kwargs):
             action = _guarded_action_name(args, kwargs)
-            params = _guarded_params(args, kwargs)
-            lifecycle = _execution_lifecycle.get_lifecycle_pipeline()
-            ctx = _execution_lifecycle.ToolCallContext(
-                tool_name=tool_name,
-                action=action,
-                params=params or {},
-            )
-            decision = lifecycle.run_before(ctx)
-            if decision and not decision.proceed and decision.short_circuit_result is not None:
-                return _build_operation_envelope(tool_name, action, params, decision.short_circuit_result, duration_ms=0)
-
-            t0 = time.perf_counter()
+            scope = _CallScope(tool_name, action, args, kwargs)
             try:
-                result = await fn(*args, **kwargs)
-            except _MissingParam as exc:
-                result = _missing_param_error(exc, action)
-            except Exception as exc:
+                args, kwargs = scope.args, scope.kwargs
+                params = _guarded_params(args, kwargs)
+                if scope.error is not None:
+                    return _build_operation_envelope(tool_name, action, params, scope.error, duration_ms=0)
+                lifecycle = _execution_lifecycle.get_lifecycle_pipeline()
+                ctx = _execution_lifecycle.ToolCallContext(
+                    tool_name=tool_name,
+                    action=action,
+                    params=params or {},
+                )
+                decision = lifecycle.run_before(ctx)
+                if decision and not decision.proceed and decision.short_circuit_result is not None:
+                    return _build_operation_envelope(tool_name, action, params, decision.short_circuit_result, duration_ms=0)
+
+                t0 = time.perf_counter()
+                try:
+                    result = await fn(*args, **kwargs)
+                except _MissingParam as exc:
+                    result = _missing_param_error(exc, action)
+                except Exception as exc:
+                    duration_ms = max(0, int((time.perf_counter() - t0) * 1000))
+                    lifecycle.run_on_error(ctx, exc, duration_ms)
+                    raise
+                finally:
+                    scope.restore()
                 duration_ms = max(0, int((time.perf_counter() - t0) * 1000))
-                lifecycle.run_on_error(ctx, exc, duration_ms)
-                raise
-            duration_ms = max(0, int((time.perf_counter() - t0) * 1000))
-            enveloped = _build_operation_envelope(
-                tool_name, action, params, result, duration_ms=duration_ms)
-            enveloped = lifecycle.run_after(ctx, enveloped, duration_ms)
-            _record_execution_step(tool_name, action, params, result, enveloped, duration_ms)
-            return enveloped
+                result = scope.report(result)
+                enveloped = _build_operation_envelope(
+                    tool_name, action, params, result, duration_ms=duration_ms)
+                enveloped = scope.annotate(enveloped)
+                enveloped = lifecycle.run_after(ctx, enveloped, duration_ms)
+                _record_execution_step(tool_name, action, params, result, enveloped, duration_ms)
+                return enveloped
+            finally:
+                scope.close()
     else:
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
             action = _guarded_action_name(args, kwargs)
-            params = _guarded_params(args, kwargs)
-            lifecycle = _execution_lifecycle.get_lifecycle_pipeline()
-            ctx = _execution_lifecycle.ToolCallContext(
-                tool_name=tool_name,
-                action=action,
-                params=params or {},
-            )
-            decision = lifecycle.run_before(ctx)
-            if decision and not decision.proceed and decision.short_circuit_result is not None:
-                return _build_operation_envelope(tool_name, action, params, decision.short_circuit_result, duration_ms=0)
-
-            t0 = time.perf_counter()
+            scope = _CallScope(tool_name, action, args, kwargs)
             try:
-                result = fn(*args, **kwargs)
-            except _MissingParam as exc:
-                result = _missing_param_error(exc, action)
-            except Exception as exc:
+                args, kwargs = scope.args, scope.kwargs
+                params = _guarded_params(args, kwargs)
+                if scope.error is not None:
+                    return _build_operation_envelope(tool_name, action, params, scope.error, duration_ms=0)
+                lifecycle = _execution_lifecycle.get_lifecycle_pipeline()
+                ctx = _execution_lifecycle.ToolCallContext(
+                    tool_name=tool_name,
+                    action=action,
+                    params=params or {},
+                )
+                decision = lifecycle.run_before(ctx)
+                if decision and not decision.proceed and decision.short_circuit_result is not None:
+                    return _build_operation_envelope(tool_name, action, params, decision.short_circuit_result, duration_ms=0)
+
+                t0 = time.perf_counter()
+                try:
+                    result = fn(*args, **kwargs)
+                except _MissingParam as exc:
+                    result = _missing_param_error(exc, action)
+                except Exception as exc:
+                    duration_ms = max(0, int((time.perf_counter() - t0) * 1000))
+                    lifecycle.run_on_error(ctx, exc, duration_ms)
+                    raise
+                finally:
+                    scope.restore()
                 duration_ms = max(0, int((time.perf_counter() - t0) * 1000))
-                lifecycle.run_on_error(ctx, exc, duration_ms)
-                raise
-            duration_ms = max(0, int((time.perf_counter() - t0) * 1000))
-            enveloped = _build_operation_envelope(
-                tool_name, action, params, result, duration_ms=duration_ms)
-            enveloped = lifecycle.run_after(ctx, enveloped, duration_ms)
-            _record_execution_step(tool_name, action, params, result, enveloped, duration_ms)
-            return enveloped
+                result = scope.report(result)
+                enveloped = _build_operation_envelope(
+                    tool_name, action, params, result, duration_ms=duration_ms)
+                enveloped = scope.annotate(enveloped)
+                enveloped = lifecycle.run_after(ctx, enveloped, duration_ms)
+                _record_execution_step(tool_name, action, params, result, enveloped, duration_ms)
+                return enveloped
+            finally:
+                scope.close()
 
     wrapper.__wrapped_by_missing_param_guard__ = True
     return wrapper
@@ -3073,6 +3365,7 @@ def _get_tl():
             code="NO_CURRENT_TIMELINE", category="precondition",
             remediation="Open a timeline via timeline(action='set_current', params={'index': N}) or in the Resolve UI.",
         )
+    _note_timeline(tl)
     return proj, tl, None
 
 def _get_item(p):
@@ -27520,6 +27813,7 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
     tl = proj.GetCurrentTimeline()
     if not tl:
         return _err("No current timeline")
+    _note_timeline(tl)
 
     if action == "auto_align_clips":
         missing = _requires_method(tl, "AutoAlignClips", "21.1")
