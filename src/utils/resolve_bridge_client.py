@@ -28,9 +28,11 @@ proxy deliberately does not.
 
 ## What it does not hide
 
-- **Latency.** Every call is a loopback round trip, measured at ~0.35 ms. Fine
-  for hundreds of calls, noticeable for tens of thousands — enumerating a large
-  timeline item-by-item is the shape that bites.
+- **Latency.** Every call is a loopback round trip. With a new connection per
+  call that was ~0.4 ms on macOS and 1-14 ms on Windows (#327); the connection
+  is now kept open between calls (~0.17 ms on macOS). Fine for hundreds of
+  calls, noticeable for tens of thousands — enumerating a large timeline
+  item-by-item is the shape that bites.
 - **Bridge absence.** If the in-Resolve script is not running, construction fails
   with a clear message rather than pretending; there is nothing to fall back to.
 - **Incomplete replies.** A returned container longer than the surface's
@@ -82,6 +84,11 @@ REQUIRED_BRIDGE_OPERATIONS = ("call", "list_methods", "release_handles", "health
 
 DEFAULT_TIMEOUT_SECONDS = 30.0
 
+#: Reuse a kept-alive connection only if it has been idle less than this. It is
+#: below the bridge's KEEPALIVE_IDLE_S, so the bridge never closes a connection
+#: the client is about to send on (#327).
+KEEPALIVE_REUSE_S = 20.0
+
 
 class BridgeUnavailable(RuntimeError):
     """The in-Resolve bridge could not be reached. Not a fallback condition."""
@@ -108,7 +115,13 @@ def bridge_enabled() -> bool:
 
 
 class BridgeTransport:
-    """One authenticated loopback connection per request, serialised."""
+    """An authenticated loopback connection, kept open between requests (#327).
+
+    Every request is still signed with its own nonce and timestamp; only the
+    TCP connection is reused. A bridge that predates keep-alive never says
+    `keep_alive: true`, and the client then closes after each reply, exactly as
+    it did before.
+    """
 
     def __init__(self, config: Dict[str, Any], *, timeout: float = DEFAULT_TIMEOUT_SECONDS) -> None:
         self.host = config["host"]
@@ -134,6 +147,60 @@ class BridgeTransport:
         #: enumeration can prove it instead of inferring it from a count that
         #: looks plausible. Bounded — this is a diagnostic, not a log.
         self.truncations: List[Dict[str, Any]] = []
+        self._sock: Optional[socket.socket] = None
+        self._reader = None
+        self._idle_since = 0.0
+
+    def close(self) -> None:
+        """Close the kept-alive connection, if any."""
+        with self._lock:
+            self._drop()
+
+    def _drop(self) -> None:
+        for closable in (self._reader, self._sock):
+            if closable is not None:
+                try:
+                    closable.close()
+                except OSError:
+                    pass
+        self._sock = self._reader = None
+
+    def _exchange(self, line: bytes, reuse: bool) -> bytes:
+        """Send one request line and read the reply line.
+
+        On a reused connection an empty reply or a send/read error means the
+        bridge closed the connection while it sat idle (a restart or reload),
+        before reading the request, so b"" is returned for a fresh retry.
+        """
+        if not reuse:
+            try:
+                # A connect that times out means no bridge, never a dialog: the
+                # kernel completes the handshake even while a modal dialog blocks
+                # Resolve. Windows retries a refused loopback SYN for ~2 s, so a
+                # short timeout fires here before the refusal does (#278).
+                sock = socket.create_connection((self.host, self.port), timeout=self.timeout)
+            except OSError as exc:
+                raise self._unavailable(exc) from exc
+            self._sock, self._reader = sock, sock.makefile("rb")
+        try:
+            self._sock.settimeout(self.timeout)
+            self._sock.sendall(line)
+            raw = self._reader.readline(_bridge.MAX_REQUEST_BYTES + 1)
+        except (TimeoutError, socket.timeout) as exc:
+            self._drop()
+            raise BridgeCallError(
+                "bridge_timeout",
+                "Resolve did not answer in time — check for an open modal dialog, "
+                "which blocks its scripting API entirely",
+            ) from exc
+        except OSError as exc:
+            self._drop()
+            if reuse:
+                return b""
+            raise self._unavailable(exc) from exc
+        if not raw:
+            self._drop()
+        return raw
 
     def note_truncation(self, method: str, truncated: Any) -> None:
         """Record and announce a reply the surface could not carry in full."""
@@ -177,40 +244,17 @@ class BridgeTransport:
             raise BridgeCallError("request_too_large", "request exceeds the bridge limit")
 
         with self._lock:
-            try:
-                # A connect that times out means no bridge, never a dialog: the
-                # kernel completes the handshake even while a modal dialog blocks
-                # Resolve. Windows retries a refused loopback SYN for ~2 s, so a
-                # short timeout fires here before the refusal does (#278).
-                sock = socket.create_connection((self.host, self.port), timeout=self.timeout)
-            except OSError as exc:
-                raise self._unavailable(exc) from exc
-            try:
-                with sock:
-                    sock.settimeout(self.timeout)
-                    sock.sendall(line)
-                    raw = sock.makefile("rb").readline(_bridge.MAX_REQUEST_BYTES + 1)
-            except (TimeoutError, socket.timeout) as exc:
-                raise BridgeCallError(
-                    "bridge_timeout",
-                    "Resolve did not answer in time — check for an open modal dialog, "
-                    "which blocks its scripting API entirely",
-                ) from exc
-            except OSError as exc:
-                raise self._unavailable(exc) from exc
-
-        if not raw:
-            raise BridgeCallError("bridge_protocol_error", "bridge closed without replying")
-        try:
-            response = json.loads(raw.decode("utf-8"))
-        except (UnicodeDecodeError, ValueError) as exc:
-            raise BridgeCallError("bridge_protocol_error", "bridge returned invalid JSON") from exc
-        if not isinstance(response, dict):
-            raise BridgeCallError("bridge_protocol_error", "bridge returned a non-object")
-        if response.get("id") != payload["id"]:
-            # Mismatched ids mean interleaved responses; failing loudly beats
-            # handing a caller another request's answer.
-            raise BridgeCallError("bridge_protocol_error", "bridge response id does not match")
+            reuse = self._sock is not None and time.monotonic() - self._idle_since < KEEPALIVE_REUSE_S
+            if self._sock is not None and not reuse:
+                self._drop()
+            raw = self._exchange(line, reuse)
+            if not raw and reuse:
+                raw = self._exchange(line, False)
+            response = self._parse_reply(raw, payload["id"])
+            if response.get("keep_alive") is True and self._sock is not None:
+                self._idle_since = time.monotonic()
+            else:
+                self._drop()
         if response.get("ok") is not True:
             error = response.get("error") or {}
             raise BridgeCallError(
@@ -219,6 +263,30 @@ class BridgeTransport:
                 error.get("details") if isinstance(error.get("details"), dict) else {},
             )
         return response.get("result")
+
+    def _parse_reply(self, raw: bytes, request_id: str) -> Dict[str, Any]:
+        """Decode one reply line; any malformed reply also retires the connection."""
+        try:
+            return self._decode_reply(raw, request_id)
+        except BridgeCallError:
+            self._drop()
+            raise
+
+    @staticmethod
+    def _decode_reply(raw: bytes, request_id: str) -> Dict[str, Any]:
+        if not raw:
+            raise BridgeCallError("bridge_protocol_error", "bridge closed without replying")
+        try:
+            response = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise BridgeCallError("bridge_protocol_error", "bridge returned invalid JSON") from exc
+        if not isinstance(response, dict):
+            raise BridgeCallError("bridge_protocol_error", "bridge returned a non-object")
+        if response.get("id") != request_id:
+            # Mismatched ids mean interleaved responses; failing loudly beats
+            # handing a caller another request's answer.
+            raise BridgeCallError("bridge_protocol_error", "bridge response id does not match")
+        return response
 
 
 def _encode_argument(value: Any) -> Any:

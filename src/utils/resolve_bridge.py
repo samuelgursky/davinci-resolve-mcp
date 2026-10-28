@@ -95,6 +95,19 @@ PREAUTH_READ_TIMEOUT_S = 5.0
 MAX_CONCURRENT_CONNECTIONS = 16
 #: Post-auth: a real Resolve call can be slow, but not unbounded.
 OPERATION_TIMEOUT_S = 300.0
+#: How long an authenticated connection may sit idle between requests (#327).
+#: One TCP connection per request cost a handshake plus a TIME_WAIT socket per
+#: call: ~6 ms a call on Windows, and a read-only suite left ~1,200 sockets in
+#: TIME_WAIT, enough at sustained load to exhaust a narrow ephemeral range. A
+#: connection whose last reply carried `keep_alive: true` stays open this long.
+#: The client retires an idle connection well before this (KEEPALIVE_REUSE_S in
+#: the client), so the server never closes one a request is already in flight on.
+KEEPALIVE_IDLE_S = 30.0
+#: Replies after which the connection is closed instead of kept: the request was
+#: never authenticated, so nothing vouches for the peer.
+_CLOSE_AFTER_CODES = frozenset({
+    "invalid_request", "protocol_mismatch", "unauthorized", "stale_request", "replayed_request",
+})
 
 #: How a running bridge may be asked to stop. `exit` leaves nothing listening;
 #: `reload` asks the launcher to re-import the runtime and start again.
@@ -527,22 +540,40 @@ class _Handler(socketserver.StreamRequestHandler):
         if not bridge.acquire_slot():
             self._write({"ok": False, "error": {"code": "too_many_connections"}})
             return
+        bridge.track_connection(self.request)
         try:
-            self.request.settimeout(PREAUTH_READ_TIMEOUT_S)
-            line = self.rfile.readline(MAX_REQUEST_BYTES + 1)
-            if len(line) > MAX_REQUEST_BYTES:
-                self._write({"ok": False, "error": {"code": "request_too_large"}})
-                return
-            if not line:
-                return
-            try:
-                request = json.loads(line.decode("utf-8"))
-            except (UnicodeDecodeError, ValueError):
-                self._write({"ok": False, "error": {"code": "invalid_json"}})
-                return
-            self.request.settimeout(OPERATION_TIMEOUT_S)
-            self._write(bridge.process(request))
+            # The first request gets the pre-auth bound; later ones arrive on a
+            # connection whose previous request authenticated.
+            read_timeout = PREAUTH_READ_TIMEOUT_S
+            while True:
+                self.request.settimeout(read_timeout)
+                try:
+                    line = self.rfile.readline(MAX_REQUEST_BYTES + 1)
+                except OSError:  # idle timeout, or closed by stop()
+                    return
+                if len(line) > MAX_REQUEST_BYTES:
+                    self._write({"ok": False, "error": {"code": "request_too_large"}})
+                    return
+                if not line:
+                    return
+                try:
+                    request = json.loads(line.decode("utf-8"))
+                except (UnicodeDecodeError, ValueError):
+                    self._write({"ok": False, "error": {"code": "invalid_json"}})
+                    return
+                self.request.settimeout(OPERATION_TIMEOUT_S)
+                with bridge.serving():
+                    reply = bridge.process(request)
+                    error_code = (reply.get("error") or {}).get("code")
+                    keep = error_code not in _CLOSE_AFTER_CODES and bridge.stop_mode is None
+                    if keep:
+                        reply["keep_alive"] = True
+                    self._write(reply)
+                if not keep:
+                    return
+                read_timeout = KEEPALIVE_IDLE_S
         finally:
+            bridge.untrack_connection(self.request)
             bridge.release_slot()
 
     def _write(self, payload: Dict[str, Any]) -> None:
@@ -568,6 +599,20 @@ class _Server(socketserver.ThreadingTCPServer):
         super().server_bind()
 
 
+class _InFlight:
+    """`with bridge.serving():` — a class, not contextlib: the bridge imports only
+    what Resolve's embedded interpreter is known to carry."""
+
+    def __init__(self, bridge: "Bridge") -> None:
+        self._bridge = bridge
+
+    def __enter__(self) -> None:
+        self._bridge._in_flight_delta(1)
+
+    def __exit__(self, *exc: Any) -> None:
+        self._bridge._in_flight_delta(-1)
+
+
 class Bridge:
     """Owns the listener, the nonce cache, and the serialised operation lock."""
 
@@ -585,9 +630,42 @@ class Bridge:
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self._stop_mode: Optional[str] = None
+        # Requests in flight, for `_drain`. Connection slots can no longer
+        # answer that: a kept-alive connection holds its slot while idle.
+        self._in_flight = 0
+        self._in_flight_cond = threading.Condition()
+        self._connections: set = set()
+        self._connections_lock = threading.Lock()
 
     def acquire_slot(self) -> bool:
         return self._slots.acquire(blocking=False)
+
+    def track_connection(self, sock: Any) -> None:
+        with self._connections_lock:
+            self._connections.add(sock)
+
+    def untrack_connection(self, sock: Any) -> None:
+        with self._connections_lock:
+            self._connections.discard(sock)
+
+    def _close_connections(self) -> None:
+        """Wake idle kept-alive handlers so their threads end and the port frees."""
+        with self._connections_lock:
+            connections = list(self._connections)
+        for sock in connections:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+
+    def serving(self) -> "_InFlight":
+        """Count one request (processing and reply write) as in flight."""
+        return _InFlight(self)
+
+    def _in_flight_delta(self, delta: int) -> None:
+        with self._in_flight_cond:
+            self._in_flight += delta
+            self._in_flight_cond.notify_all()
 
     def release_slot(self) -> None:
         try:
@@ -655,23 +733,22 @@ class Bridge:
         return self._stop_mode
 
     def _drain(self, timeout: float) -> bool:
-        """Wait until no handler is in flight, so replies are already on the wire.
+        """Wait until no request is in flight, so replies are already on the wire.
 
-        Every handler holds a slot for the whole of `handle()`, and the reply is
-        written inside it (`wbufsize = 0`, so the write is a `sendall`, not a
-        buffer). Reclaiming every slot therefore means every reply has been sent
-        — deterministic, where a fixed grace period would only be probable.
+        A request counts as in flight from processing through its reply write
+        (`wbufsize = 0`, so the write is a `sendall`, not a buffer). Zero in
+        flight therefore means every reply has been sent — deterministic, where
+        a fixed grace period would only be probable. Connection slots used to
+        answer this, but a kept-alive connection holds its slot while idle.
         """
         deadline = time.monotonic() + timeout
-        held = 0
-        while held < MAX_CONCURRENT_CONNECTIONS and time.monotonic() < deadline:
-            if self._slots.acquire(blocking=False):
-                held += 1
-            else:
-                time.sleep(0.01)
-        for _ in range(held):
-            self._slots.release()
-        return held == MAX_CONCURRENT_CONNECTIONS
+        with self._in_flight_cond:
+            while self._in_flight:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                self._in_flight_cond.wait(remaining)
+        return True
 
     def start(self) -> "Bridge":
         host, port = self.config["host"], self.config["port"]
@@ -700,6 +777,7 @@ class Bridge:
             self._server.shutdown()
             self._server.server_close()
             self._server = None
+        self._close_connections()
         self._thread = None
 
     @property
