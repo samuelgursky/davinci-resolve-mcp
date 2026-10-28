@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 377-tool granular server instead
 """
 
-VERSION = "4.15.5"
+VERSION = "4.16.0"
 
 import base64
 import os
@@ -1915,12 +1915,12 @@ class _CallScope:
                     # An action that moved the current timeline elsewhere on
                     # purpose (create, duplicate) keeps that; only undo our switch.
                     if now is not None and now.GetUniqueId() == target.GetUniqueId():
-                        proj.SetCurrentTimeline(original)
-                        # Verified by readback: SetCurrentTimeline can answer
+                        switched = proj.SetCurrentTimeline(original)
+                        # Verified by readback too: SetCurrentTimeline can answer
                         # True and stay put, and an unverified restore would
                         # leave the caller's next unpinned write on our target.
                         after = proj.GetCurrentTimeline()
-                        if after is not None and after.GetUniqueId() == original.GetUniqueId():
+                        if switched and after is not None and after.GetUniqueId() == original.GetUniqueId():
                             restored = original
                         else:
                             self.restore_failed = True
@@ -28020,12 +28020,13 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         if not _coerce_bool(p.get("make_current"), False):
             now = proj.GetCurrentTimeline()
             if now is None or now.GetUniqueId() != tl.GetUniqueId():
-                proj.SetCurrentTimeline(tl)
+                switched = proj.SetCurrentTimeline(tl)
                 now = proj.GetCurrentTimeline()
-                if now is None or now.GetUniqueId() != tl.GetUniqueId():
+                if not switched or now is None or now.GetUniqueId() != tl.GetUniqueId():
                     warnings.append("Could not make the original timeline current again; the copy may be current.")
         elif proj.GetCurrentTimeline() is None or proj.GetCurrentTimeline().GetUniqueId() != dup.GetUniqueId():
-            proj.SetCurrentTimeline(dup)
+            if not proj.SetCurrentTimeline(dup):
+                warnings.append("Could not make the copy current; the original is still current.")
         now = proj.GetCurrentTimeline()
         result = _ok(name=dup.GetName(), id=dup.GetUniqueId(), current=now.GetName() if now else None)
         if warnings:
