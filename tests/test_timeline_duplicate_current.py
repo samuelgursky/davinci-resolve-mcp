@@ -56,6 +56,16 @@ class DuplicateKeepsCurrentTest(unittest.TestCase):
         result = server.timeline("duplicate", {"name": "A dup", "timeline_id": "uid-a"})
         self.assertEqual(result["id"], "uid-a-copy")
         self.assertIs(self.proj.current, b)
+        # Found live on 19.1.3.7: `current` was read inside the pin and said "A".
+        self.assertEqual(result["current"], "B")
+
+    def test_a_pinned_make_current_duplicate_keeps_the_copy(self):
+        b = _DuplicatingTimeline("B", "uid-b", self.proj)
+        self.proj.timelines.append(b)
+        self.proj.current = b
+        result = server.timeline("duplicate", {"name": "A dup", "timeline_id": "uid-a", "make_current": True})
+        self.assertEqual(result["current"], "A dup")
+        self.assertEqual(self.proj.current.GetName(), "A dup")
 
 
 if __name__ == "__main__":

@@ -1931,7 +1931,18 @@ class _CallScope:
 
     def report(self, result):
         """Add `ignored_params` to a successful result: keys no code read."""
-        if not self.outer or self.params is None or not isinstance(result, dict) or result.get("error"):
+        if not self.outer or not isinstance(result, dict) or result.get("error"):
+            return result
+        restored = getattr(self, "restored", None)
+        if restored is not None and "current" in result:
+            # `current` (timeline.duplicate) was read inside the pin; the
+            # restore has since made the caller's timeline current again.
+            try:
+                if result["current"] == self.pin[2].GetName():
+                    result = {**result, "current": restored.GetName()}
+            except Exception:
+                pass
+        if self.params is None:
             return result
         read = self.params.read_keys()
         if read is None:

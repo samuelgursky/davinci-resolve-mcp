@@ -74,15 +74,23 @@ caller asked, or failed, must not look like a success.
 
 ### Validation
 
-- Full offline suite: 4,288 tests, OK. 46 new tests across the error flag,
+- Full offline suite: 4,289 tests, OK. 47 new tests across the error flag,
   pinning, unread params, duplicate, item ids, FCPXML bundles, image
   sequences, bridge roots and bridge keep-alive (over a real loopback
   bridge).
 - Advanced Node suite on Node 20 with a fresh `npm ci`: 1,206 tests, 0
   failures (4 new for `target: "timeline"`).
-- Not live-validated on Resolve for this release. The 21.1-specific
-  behaviour (transitions in `GetItemListInTrack`, FCPXML bundles, timeline
-  DRX applies) cannot be reproduced on the maintainer's Studio 19.1.3.7.
+- Live on Studio 19.1.3.7, over MCP stdio against a disposable project with
+  synthetic media: pinned reads and writes land on the named timeline and
+  the caller's timeline comes back; unknown and conflicting selectors
+  refuse; `ignored_params`; `timeline_item_id` and its `ITEM_NOT_FOUND`;
+  `duplicate` with and without `make_current` and pinned; `isError` on
+  failures and not on successes. 21 checks, 2 cycles. The first cycle found
+  a pinned `duplicate` reporting the pinned timeline as `current` after the
+  caller's had been restored; fixed before release.
+- The 21.1-specific behaviour (transitions in `GetItemListInTrack`, FCPXML
+  bundles, timeline DRX applies) cannot be reproduced on 19.1.3.7 and is
+  not live-validated.
 
 ## What's New in v4.15.5 — DRX applies say which graph changed
 
