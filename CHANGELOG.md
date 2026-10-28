@@ -2,6 +2,88 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.16.0 — Calls name their timeline, and failures say so
+
+Eight reports from a Studio 21.1 / Windows deployment (#320–#327) and the
+open half of #318. The theme: a call that did something other than what the
+caller asked, or failed, must not look like a success.
+
+### Added
+
+- **Pin a call to a timeline** (#320). `timeline`, `timeline_item*`,
+  `timeline_markers`, `timeline_frame`, `timeline_ai`, `graph` and `render`
+  accept `timeline_id` or `timeline_name`. The server makes that timeline
+  current for the call and restores the caller's timeline afterwards,
+  verified by readback. Unknown ids (`TIMELINE_NOT_FOUND`), ambiguous names
+  (`TIMELINE_NAME_AMBIGUOUS`) and an id/name pair that disagree are refused
+  before the action runs. Before, a `timeline_id` nothing read was dropped,
+  and the write landed on whichever timeline was current.
+- **Results name the timeline acted on** (#320): `_operation.timeline`
+  `{name, id}`, plus `pinned`, `restored_current` or `restore_failed` on a
+  pinned call.
+- **Unread params are reported** (#320). A successful call carrying keys the
+  action never read returns `ignored_params` and an envelope warning. They
+  are reported after the call, not refused before it: the server has no
+  per-action schema, and a static scan of the reachable code could not bound
+  the key set for 25 of the 37 tools.
+- **`timeline_item_id` on the timeline item tools** (#323). On 21.1
+  `item_index` counts transitions, so it shifts whenever one is added or
+  removed. Every tool that resolves an item through the shared lookup
+  accepts the item's `GetUniqueId()` and refuses an unknown id with
+  `ITEM_NOT_FOUND`.
+- **`drx generate` can target the timeline** (#318).
+  `target: "timeline"` writes the grade into `<pTrackVer>`, the block a
+  timeline `ApplyGradeFromDRX` loads, in the shape the reporter applied on
+  Studio 21.1.1.10. The default stays `"clip"`.
+- **`duplicate` takes `make_current`** and returns the copy's `id` and the
+  `current` timeline (#322).
+
+### Fixed
+
+- **Failed calls set MCP `isError: true`** (#321). Every error-envelope
+  result used to arrive with `isError: false`, so spec-following hooks and
+  retry policies counted refusals as successes. The flag is set at the
+  protocol boundary; the JSON body is unchanged. `{"success": false}` without
+  an `error` key is not flagged.
+- **`timeline.duplicate` leaves the original current** (#322) unless
+  `make_current: true`. Resolve makes the copy current, so "duplicate as a
+  backup, then edit" edited the backup.
+- **FCPXML round trip on the server's own export** (#324).
+  `import_timeline_checked` accepts the bundle directory 21.1 writes for
+  FCPXML and imports the `Info.fcpxml` inside.
+- **Online image sequences are not reported missing** (#325). A path like
+  `name.[0000-8999].jpeg` is checked by its first and last frames (printf and
+  `####` patterns by one matching frame). Before, `probe_timeline_structure`
+  said `file_exists: false`, and `detect_missing_media` and
+  `build_relink_plan` listed the clips for relink.
+- **The bridge honours `allowed_media_roots` / `allowed_output_roots`**
+  (#326). `load_config` dropped both, so the policies were always the home
+  folder. The generic `call` path the MCP server uses was never gated by
+  them. The bridge's named path operations now follow the configured roots,
+  including the installer's default output root (`~/Movies`).
+
+### Performance
+
+- **The bridge keeps one connection open** (#327). Each request is still
+  signed with its own nonce; only the TCP connection is reused, retired after
+  20 s idle on the client and 30 s on the bridge. macOS loopback: 0.40 ms a
+  call per connection, 0.17 ms kept alive, and no TIME_WAIT socket per call.
+  Windows was not measured here. Re-run `scripts/install_resolve_bridge.py`
+  to update the in-Resolve copy; an older bridge keeps working, one
+  connection per call.
+
+### Validation
+
+- Full offline suite: 4,288 tests, OK. 46 new tests across the error flag,
+  pinning, unread params, duplicate, item ids, FCPXML bundles, image
+  sequences, bridge roots and bridge keep-alive (over a real loopback
+  bridge).
+- Advanced Node suite on Node 20 with a fresh `npm ci`: 1,206 tests, 0
+  failures (4 new for `target: "timeline"`).
+- Not live-validated on Resolve for this release. The 21.1-specific
+  behaviour (transitions in `GetItemListInTrack`, FCPXML bundles, timeline
+  DRX applies) cannot be reproduced on the maintainer's Studio 19.1.3.7.
+
 ## What's New in v4.15.5 — DRX applies say which graph changed
 
 `graph.apply_grade_from_drx` and `timeline_item_color.safe_apply_drx` no

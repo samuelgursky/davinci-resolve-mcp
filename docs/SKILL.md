@@ -215,6 +215,30 @@ tool — did it happen, was it verified, what changed:
   not read a missing `changes` as a no-op.
 - **`warnings`** — present only when there are any.
 - **`execution_id`** — correlates one call across logs and transcripts.
+- **`timeline`** — on timeline-scoped tools, `{name, id}` of the timeline the
+  call acted on. A pinned call (below) adds `pinned: true` and
+  `restored_current`, or `restore_failed: true` if the caller's timeline could
+  not be made current again.
+
+A failed call (an `{"error": {...}}` body) also comes back with MCP
+`isError: true`, so hooks and retry policies that follow the spec see the
+failure without parsing the body.
+
+**Unread params are reported.** When an action succeeds without reading some
+key you passed, the result carries `ignored_params: [...]` and the envelope
+lists them under `warnings`. Treat it as "that key did nothing": a misspelled
+key, an option this action does not take, or an alternative another key
+overrode (an `index` passed alongside `id`).
+
+**Pinning a call to a timeline.** `timeline`, `timeline_item*`,
+`timeline_markers`, `timeline_frame`, `timeline_ai`, `graph` and `render`
+act on the current timeline unless you pass `timeline_id` (preferred) or
+`timeline_name`. The server then makes that timeline current for the call
+and restores yours afterwards, so a user clicking another timeline mid-session
+cannot redirect your write. An unknown id, an ambiguous name or an id/name
+pair that disagree is refused before anything runs. Exceptions, where these
+keys keep their own meaning: `timeline.set_current` (selects by
+`timeline_id`) and the imports (`timeline_name` names the new timeline).
 
 The envelope is namespaced under `_operation` rather than merged into the top
 level because `status`, `operation`, `warnings`, `result` and `changes` are all
@@ -1949,8 +1973,11 @@ Key actions: `create_subtitles(settings?)` (human-readable settings resolved to
 
 Timeline items are identified by `track_type`, `track_index`, and `item_index`
 (all default to `"video"`, `1`, `0` respectively — the first clip on the first
-video track). Always retrieve item IDs via `timeline.get_items` before operating
-on specific items.
+video track), or by `timeline_item_id`, the item's `GetUniqueId()`. Prefer the
+id: on Resolve 21.1 `item_index` also counts transitions, so it shifts whenever
+a transition is added or removed. Read ids with `timeline.get_items` or
+`timeline.probe_timeline_structure`. An unknown id is refused with
+`ITEM_NOT_FOUND`; it never falls back to item 0.
 
 **`timeline_item`** — Properties, transform, speed, audio, keyframes.
 
@@ -2467,6 +2494,8 @@ reports, deletes the project, and removes generated media. See
 | `"No project open"` | No project is currently loaded | Call `project_manager(action="load", params={"name": "..."})` |
 | `"No current timeline"` | Project has no timeline set as current | Call `timeline(action="set_current", params={"index": 1})` |
 | `"No item at index N"` | `item_index` out of range for the track | Call `timeline(action="get_items", ...)` first to find valid indices |
+| `ITEM_NOT_FOUND` | No item with that `timeline_item_id` on the target timeline | Re-read ids; pass `timeline_id` if the item is on another timeline |
+| `TIMELINE_NOT_FOUND` / `TIMELINE_NAME_AMBIGUOUS` | The pin names no timeline, or several share the name | `timeline(action="list")` and pin by `timeline_id` |
 | `"Clip not found"` | Stale or wrong `clip_id` | Re-fetch IDs via `media_pool(action="get_selected")` or `folder(action="get_clips")` |
 | `"Gallery not available"` | Not on Color page | `resolve_control(action="open_page", params={"page": "color"})` |
 | `"GrabStill failed"` | Not on Color page or no clip under playhead | Switch to Color page, move playhead over a clip |
