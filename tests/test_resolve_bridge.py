@@ -153,6 +153,20 @@ class ConfigTests(unittest.TestCase):
     def test_a_valid_config_loads(self) -> None:
         self.assertEqual(rb.load_config(self._write(self.BASE))["port"], 49632)
 
+    def test_the_root_policies_reach_the_launcher(self) -> None:
+        """#326: the installer writes these; load_config used to drop them."""
+        config = rb.load_config(self._write({
+            **self.BASE, "allowed_media_roots": ["/media"], "allowed_output_roots": ["/renders"],
+        }))
+        self.assertEqual(config["allowed_media_roots"], ["/media"])
+        self.assertEqual(config["allowed_output_roots"], ["/renders"])
+        self.assertNotIn("allowed_media_roots", rb.load_config(self._write(self.BASE)))
+
+    def test_malformed_root_policies_are_refused(self) -> None:
+        for bad in ("/media", [""], [3]):
+            with self.subTest(roots=bad), self.assertRaises(rb.BridgeConfigError):
+                rb.load_config(self._write({**self.BASE, "allowed_media_roots": bad}))
+
     @unittest.skipIf(os.name == "nt", "POSIX permissions only")
     def test_a_world_readable_secret_is_refused(self) -> None:
         with self.assertRaises(rb.BridgeConfigError) as ctx:

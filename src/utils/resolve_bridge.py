@@ -414,7 +414,17 @@ def load_config(path: str) -> Dict[str, Any]:
     skew = raw.get("auth_clock_skew_seconds", 60)
     if not isinstance(skew, int) or isinstance(skew, bool) or not 10 <= skew <= 300:
         raise BridgeConfigError("auth_clock_skew_seconds must be 10..300")
-    return {"host": "127.0.0.1", "port": port, "token": token, "auth_clock_skew_seconds": skew}
+    config = {"host": "127.0.0.1", "port": port, "token": token, "auth_clock_skew_seconds": skew}
+    # The installer writes these and tells the user to widen them; dropping them
+    # here left both policies at the launcher's home-folder default (#326).
+    for key in ("allowed_media_roots", "allowed_output_roots"):
+        if key not in raw:
+            continue
+        roots = raw[key]
+        if not isinstance(roots, list) or not all(isinstance(r, str) and r.strip() for r in roots):
+            raise BridgeConfigError(f"{key} must be a list of non-empty path strings")
+        config[key] = list(roots)
+    return config
 
 
 def validate_runtime_sources(runtime_root: str) -> list:
