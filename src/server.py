@@ -59,6 +59,7 @@ from src.utils.resolve211_edits import validate_edit_options, validate_transitio
 
 # Platform-specific Resolve paths
 from src.utils.cdl import normalize_cdl_payload
+from src.utils.media_paths import media_exists as _media_exists
 from src.utils import archive_guard
 from src.utils import typed_api_search
 from src.utils import lut_files
@@ -7349,7 +7350,12 @@ def _timeline_item_conform_summary(item, track_type: str, track_index: int, item
                 media_status = clip_properties.get(key)
                 break
     summary["file_path"] = file_path
-    summary["file_exists"] = bool(file_path and os.path.exists(str(file_path)))
+    # An image sequence's path is a pattern (`name.[0000-8999].jpeg`), never a
+    # file, so os.path.exists alone reported every Online sequence missing (#325).
+    exists, sequence = _media_exists(file_path)
+    summary["file_exists"] = exists
+    if sequence is not None:
+        summary["sequence"] = sequence
     summary["media_status"] = media_status
     if clip_properties is not None:
         summary["clip_properties"] = clip_properties
@@ -9745,7 +9751,7 @@ def _detect_missing_media_from_snapshot(snapshot: Dict[str, Any]):
             for item in track.get("items", []):
                 file_path = item.get("file_path")
                 status_text = str(item.get("media_status") or "").lower()
-                exists = bool(file_path and os.path.exists(str(file_path)))
+                exists = _media_exists(file_path)[0]
                 is_missing = bool(file_path and not exists) or any(token in status_text for token in ("offline", "missing"))
                 row = {
                     "track_type": track_type,
