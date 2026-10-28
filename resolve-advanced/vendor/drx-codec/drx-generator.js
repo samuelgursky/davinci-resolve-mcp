@@ -222,6 +222,7 @@ const PARAM_IDS = {
  * Corrector Type IDs from shared library
  */
 const CORRECTOR_TYPES = drxParams.CORRECTOR_TYPES;
+const POWER_WINDOW_IDS = drxParams.POWER_WINDOWS;
 
 /**
  * Presence marker IDs from shared library
@@ -547,7 +548,7 @@ function buildHSLCurveParams(colorParams) {
  * @param {Object} options - Additional options (label, enabled, correctorTypes)
  */
 function createNode(nodeId, xPos, yPos, colorParams = null, options = {}) {
-  const { label = '', enabled = true, nodeIndex = nodeId } = options;
+  const { label = '', enabled = true, nodeIndex = nodeId, resolveVersion } = options;
 
   // Build node header with fields in order: F1, F2, F4, F5, F6, F7?, F8
   // Native Resolve analysis shows: id(F1), index(F2), pos(F4,F5), label?(F6), F8=44
@@ -749,9 +750,11 @@ function createNode(nodeId, xPos, yPos, colorParams = null, options = {}) {
     }
   }
   if (colorParams) {
-    const win = buildWindowParams(colorParams.window);
+    const win = buildWindowParams(colorParams.window, { resolveVersion });
     if (win.transform.length > 0) {
-      correctorBlocks.push(buildCorrectorBlock(CORRECTOR_TYPES.POWER_WINDOW, win.transform));
+      correctorBlocks.push(buildCorrectorBlock(win.transformType, win.transform));
+      // Resolve 21 also lists its window type in the node's corrector-type list.
+      if (win.transformType !== CORRECTOR_TYPES.POWER_WINDOW && presenceTypes.length > 0) presenceTypes.push(win.transformType);
     }
     if (win.softMask.length > 0) {
       // Linear-window softness mask (0x0870xxxx) lives under corrector type 3 in live data.
@@ -881,7 +884,7 @@ function createNode(nodeId, xPos, yPos, colorParams = null, options = {}) {
 
   // Add compact presence list as F2 (raw byte array of type IDs)
   if (presenceTypes.length > 0) {
-    const presenceBytes = Buffer.from(presenceTypes);
+    const presenceBytes = Buffer.concat(presenceTypes.map(encodeVarint)); // varints: the R21 window type is > 127
     f9Parts.push(protoBytes(2, presenceBytes));
     debugLog('[DRX] Added F2 presence list:', presenceTypes);
   }
@@ -1636,6 +1639,7 @@ function generateProtobuf(gradeParams, options = {}) {
     width = 1920,
     height = 1080,
     label = '',
+    resolveVersion,
   } = options;
 
   const timestamp = generateTimestamp();
@@ -1667,6 +1671,7 @@ function generateProtobuf(gradeParams, options = {}) {
       const node = createNode(nodeId, xPos, yPos, nodeConfig.params, {
         label: nodeConfig.label || `Node ${nodeId}`,
         enabled: nodeConfig.enabled !== false,
+        resolveVersion,
       });
       containerParts.push(node);
     });
@@ -1686,6 +1691,7 @@ function generateProtobuf(gradeParams, options = {}) {
     }
     const node = createNode(1, 500, 300, gradeParams, {
       label: label,
+      resolveVersion,
     });
     containerParts.push(node);
     // firstNodeId and lastNodeId both stay 1
@@ -1752,6 +1758,7 @@ async function generateMultiNodeDRX(nodes, connections, metadata = {}) {
     baseNodeId: passedBaseNodeId,
     firstNodeId: passedFirstNodeId,
     lastNodeId: passedLastNodeId,
+    resolveVersion,
   } = metadata;
 
   const timestamp = generateTimestamp();
@@ -1806,6 +1813,7 @@ async function generateMultiNodeDRX(nodes, connections, metadata = {}) {
         enabled: nodeConfig.enabled !== false,
         nodeIndex: nodeIndex, // Pass separate index for F2 field
         clipVersionId,
+        resolveVersion,
       }
     );
     containerParts.push(node);
@@ -1975,13 +1983,14 @@ async function generateDRX(gradeParams, metadata = {}) {
     sourceTC = '00:00:00:00',
     recordTC = '01:00:00:00',
     target = 'clip',
+    resolveVersion,
   } = metadata;
   if (target !== 'clip' && target !== 'timeline') {
     throw new Error(`target must be 'clip' or 'timeline', got ${JSON.stringify(target)}`);
   }
 
   // Generate the body (pass label for single-node mode)
-  const body = await generateDRXBody(gradeParams, { width, height, label });
+  const body = await generateDRXBody(gradeParams, { width, height, label, resolveVersion });
   const bodyHex = body.toString('hex');
 
   // Generate UUIDs
@@ -2803,8 +2812,8 @@ function buildLumaQualifierParams(lumaParams) {
  * @param {number} [windowParams.soft4=0] - Softness 4 (linear only)
  * @returns {Array} - Parameter entries for window corrector
  */
-function buildWindowParams(windowParams) {
-  const groups = { transform: [], softMask: [], gradient: [], shape: [] };
+function buildWindowParams(windowParams, { resolveVersion } = {}) {
+  const groups = { transform: [], transformType: CORRECTOR_TYPES.POWER_WINDOW, softMask: [], gradient: [], shape: [] };
   const paramEntries = groups.transform;
   const { POWER_WINDOWS } = drxParams;
 
@@ -2940,10 +2949,76 @@ function buildWindowParams(windowParams) {
     paramEntries.push(createParameterEntry(POWER_WINDOWS.SOFT_REF, w.soft1 * 16));
   }
 
+  if (isResolve21(resolveVersion) && !isVertexShape && paramEntries.length > 0) {
+    groups.transform = toResolve21WindowTransform(paramEntries);
+    groups.transformType = CORRECTOR_TYPE_WINDOW_R21;
+  }
+
   if (paramEntries.length > 0 || groups.softMask.length > 0) {
     debugLog('[DRX] Window params built:', paramEntries.length, '+', groups.softMask.length, isLinear ? '(linear: ct4 + ct3 mask)' : '(circle: ct4)');
   }
   return groups;
+}
+
+// Resolve 21 stores a circle/linear window transform as corrector type 0x10004 with the full
+// parameter set, not as corrector type 4 holding only the non-neutral parameters. The type 4
+// form loads into the Window palette on Resolve 21 but renders an empty mask, which also hides
+// the grade of the node. Order and neutral values follow what Resolve 21.0.4 exports for a
+// fresh circle window, as measured and pixel-verified by justhung69 in
+// https://github.com/justhung69/resolve-mcp (server/drx_r21.py, MIT, (c) 2026 Bùi Xuân Hưng).
+const CORRECTOR_TYPE_WINDOW_R21 = 0x10004;
+const R21_WINDOW_ORDER = [
+  [POWER_WINDOW_IDS.ROTATE, 0],
+  [POWER_WINDOW_IDS.ASPECT, 0],
+  [POWER_WINDOW_IDS.SOFT_REF, 0],
+  [POWER_WINDOW_IDS.SIZE, 1],
+  [POWER_WINDOW_IDS.PAN, 0],
+  [POWER_WINDOW_IDS.TILT, 0],
+];
+
+/** True when `resolveVersion` (a major number such as 21, or a string such as "21.0.4") is Resolve 21 or later. */
+function isResolve21(resolveVersion) {
+  return Number.parseInt(resolveVersion, 10) >= 21;
+}
+
+/** Read the parameter id out of an F3 parameter entry built by createParameterEntry. */
+function parameterEntryId(entry) {
+  let i = 1; // skip the F3 tag
+  while (entry[i++] & 0x80); // skip the entry length
+  i++; // skip the F1 tag
+  let id = 0;
+  let shift = 0;
+  let byte;
+  do {
+    byte = entry[i++];
+    id += (byte & 0x7f) * 2 ** shift;
+    shift += 7;
+  } while (byte & 0x80);
+  return id;
+}
+
+function toResolve21WindowTransform(entries) {
+  const byId = new Map(entries.map((entry) => [parameterEntryId(entry), entry]));
+  const take = (id) => {
+    const entry = byId.get(id);
+    byId.delete(id);
+    return entry;
+  };
+  const out = R21_WINDOW_ORDER.map(([id, neutral]) => take(id) || createParameterEntry(id, neutral));
+  take(POWER_WINDOW_IDS.WINDOW_TYPE);
+  const identity = [1, 0, 0, 0, 1, 0, 0, 0, 1];
+  const matrix = protoBytes(3, Buffer.concat([
+    protoVarint(1, POWER_WINDOW_IDS.TRACKING_BLOB),
+    protoBytes(2, protoBytes(10, Buffer.concat(identity.map((v, i) => protoFloat32(i + 1, v))))),
+  ]));
+  out.push(
+    createVarintParameterEntry(POWER_WINDOW_IDS.WINDOW_TYPE, 2),
+    createParameterEntry(POWER_WINDOW_IDS.REF_WIDTH, 288),
+    createParameterEntry(POWER_WINDOW_IDS.UNK_0E, 0),
+    createParameterEntry(POWER_WINDOW_IDS.UNK_0F, 0),
+    take(POWER_WINDOW_IDS.TRACKING_BLOB) || matrix,
+  );
+  return out.concat([...byId.values()]); // e.g. opacity, kept after the measured set
 }
 
 /**
