@@ -8694,12 +8694,35 @@ def _drt_looks_tool_authored(path: str) -> Optional[str]:
     return None
 
 
+def _fcpxml_bundle_document(path: str) -> Optional[str]:
+    """The importable document inside an FCPXML bundle directory, or None.
+
+    Resolve 21.1 exports FCPXML as a directory named `*.fcpxml` (or
+    `*.fcpxmld`) holding `Info.fcpxml`. `export_timeline_checked` returns that
+    directory as `path`, so importing the export's own `path` used to fail when
+    the rename pass tried to open a directory as a file (#324).
+    """
+    if not os.path.isdir(path) or not path.rstrip("/\\").lower().endswith((".fcpxml", ".fcpxmld")):
+        return None
+    info = os.path.join(path, "Info.fcpxml")
+    if os.path.isfile(info):
+        return info
+    documents = sorted(
+        os.path.join(path, name) for name in os.listdir(path) if name.lower().endswith(".fcpxml")
+    )
+    return documents[0] if len(documents) == 1 and os.path.isfile(documents[0]) else None
+
+
 def _import_timeline_checked(proj, mp, p: Dict[str, Any]):
     path = p.get("path")
     if not path:
         return _err("path is required")
     if not os.path.exists(path):
         return _err(f"path does not exist: {path}")
+    bundle_document = _fcpxml_bundle_document(path)
+    if bundle_document:
+        p = {**p, "path": bundle_document}
+        path = bundle_document
     ext = os.path.splitext(path)[1].lower()
     if ext == ".prproj":
         return _err(_PRPROJ_REFUSAL, category="invalid_input")
