@@ -1974,7 +1974,11 @@ async function generateDRX(gradeParams, metadata = {}) {
     sourceTimeline = 'Timeline 1',
     sourceTC = '00:00:00:00',
     recordTC = '01:00:00:00',
+    target = 'clip',
   } = metadata;
+  if (target !== 'clip' && target !== 'timeline') {
+    throw new Error(`target must be 'clip' or 'timeline', got ${JSON.stringify(target)}`);
+  }
 
   // Generate the body (pass label for single-node mode)
   const body = await generateDRXBody(gradeParams, { width, height, label });
@@ -1987,6 +1991,31 @@ async function generateDRX(gradeParams, metadata = {}) {
 
   // Current timestamp
   const now = new Date().toISOString().replace('Z', '');
+
+  // A timeline ApplyGradeFromDRX loads <pTrackVer> (VerType 1), not the clip
+  // grade in <pClipFullVer>. This path used to write no <pTrackVer> at all, so a
+  // timeline apply loaded nothing and replaced the timeline graph with an empty
+  // one (#318). target:'timeline' carries the grade in <pTrackVer> and marks the
+  // clip part uncorrected: the shape the #318 reporter applied successfully on
+  // Studio 21.1.1.10 (timeline graph 0 -> 1 node, no other graph changed).
+  const forTimeline = target === 'timeline';
+  const trackSection = forTimeline
+    ? `
+ <pTrackVer>
+  <ListMgt::LmVersion DbId="${uuidv4()}">
+   <FieldsBlob/>
+   <Name/>
+   <HasCorrection>true</HasCorrection>
+   <VerType>1</VerType>
+   <ImplVersion>1</ImplVersion>
+   <IncludedInRecording>true</IncludedInRecording>
+   <FlatPassEnabled>false</FlatPassEnabled>
+   <RGBAOutputEnabled>false</RGBAOutputEnabled>
+   <Body>${bodyHex}</Body>
+   <UseVersionClipProcParams>true</UseVersionClipProcParams>
+  </ListMgt::LmVersion>
+ </pTrackVer>`
+    : '';
 
   // Build DRX XML
   const xml = `<?xml version="1.0" encoding="UTF-8"?>
@@ -2010,7 +2039,7 @@ async function generateDRX(gradeParams, metadata = {}) {
   <ListMgt::LmVersion DbId="${versionId}">
    <FieldsBlob/>
    <Name/>
-   <HasCorrection>true</HasCorrection>
+   <HasCorrection>${forTimeline ? 'false' : 'true'}</HasCorrection>
    <VerType>0</VerType>
    <ImplVersion>1</ImplVersion>
    <IncludedInRecording>true</IncludedInRecording>
@@ -2019,7 +2048,7 @@ async function generateDRX(gradeParams, metadata = {}) {
    <Body>${bodyHex}</Body>
    <UseVersionClipProcParams>true</UseVersionClipProcParams>
   </ListMgt::LmVersion>
- </pClipFullVer>
+ </pClipFullVer>${trackSection}
  <PrimaryCCMode>0</PrimaryCCMode>
 </Gallery::GyStill>
 `;

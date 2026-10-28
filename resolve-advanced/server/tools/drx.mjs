@@ -250,6 +250,14 @@ const generateSchema = z.object({
         'units (wheels raw, saturation ~1.0 neutral) for lossless/programmatic callers.'
     ),
   metadata: z.object({}).passthrough().optional().describe('Optional { label, width, height } metadata'),
+  target: z
+    .enum(['clip', 'timeline'])
+    .optional()
+    .describe(
+      "'clip' (default) writes the grade as a clip grade. 'timeline' writes it as the timeline grade " +
+        "(<pTrackVer>), for graph.apply_grade_from_drx with source='timeline'; a clip-target file applied to " +
+        'the timeline is refused (DRX_NO_TIMELINE_GRADE).'
+    ),
   outputPath: z.string().optional().describe('If set, write the .drx here'),
 });
 
@@ -684,7 +692,8 @@ export const drxTool = {
     if (action === 'generate') {
       const p = generateSchema.parse(args);
       const warnings = [];
-      const out = await drxGenerator().generateDRX(normalizeGradeParams(p.gradeParams, warnings), p.metadata || {});
+      const metadata = { ...(p.metadata || {}), ...(p.target ? { target: p.target } : {}) };
+      const out = await drxGenerator().generateDRX(normalizeGradeParams(p.gradeParams, warnings), metadata);
       const content = typeof out === 'string' ? out : out?.content || out?.drxContent;
       const warn = warnings.length ? { warnings } : {};
       if (p.outputPath && content) {

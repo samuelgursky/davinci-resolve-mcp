@@ -29621,7 +29621,8 @@ def _refuse_empty_track_grade(path, source):
         "timeline graph would change nothing and replace the existing timeline graph with an empty one.",
         code="DRX_NO_TIMELINE_GRADE", category="invalid_input",
         remediation="Apply it to a clip (source='item') instead, or use a .drx exported from a "
-                    "timeline grade. To clear the timeline graph on purpose, use reset_all_grades.",
+                    "timeline grade, or generate one with drx(action='generate', target='timeline'). "
+                    "To clear the timeline graph on purpose, use reset_all_grades.",
         state={"path": path, "track_grade": state},
     )
 
