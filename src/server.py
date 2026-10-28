@@ -3372,6 +3372,21 @@ def _get_item(p):
     proj, tl, err = _get_tl()
     if err:
         return None, None, err
+    # A stable handle (#323). `item_index` counts every entry
+    # GetItemListInTrack returns, and on 21.1 that includes transitions, so an
+    # index shifts each time a transition is added or removed. `clip_id` is not
+    # an alias here: timeline_item_takes already reads it as a Media Pool clip.
+    item_id = p.get("timeline_item_id") or p.get("timelineItemId")
+    if item_id:
+        item = _find_timeline_item_by_id(tl, item_id)
+        if item is None:
+            return tl, None, _err(
+                f"No timeline item with timeline_item_id={item_id!r} on the current timeline",
+                code="ITEM_NOT_FOUND", category="invalid_input",
+                remediation="Read ids with timeline(action='probe_timeline_structure'); pass timeline_id to target another timeline.",
+                state={"timeline_item_id": str(item_id)},
+            )
+        return tl, item, None
     track_type = p.get("track_type", "video")
     track_index = p.get("track_index", 1)
     item_index = p.get("item_index", 0)
@@ -28891,6 +28906,9 @@ def timeline_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
           writes_render or inconclusive.
 
     Default: track_type="video", track_index=1, item_index=0
+    Or address the item by timeline_item_id (its GetUniqueId(), stable); on
+    21.1 item_index also counts transitions, so it shifts when one is added.
+    timeline_id / timeline_name target a timeline other than the current one.
     """
     p = _params(params)
     tl, item, err = _get_item(p)
@@ -29217,6 +29235,9 @@ def timeline_item_markers(action: str, params: Optional[Dict[str, Any]] = None) 
       clear_clip_color(...) -> {success}
 
     Default: track_type="video", track_index=1, item_index=0
+    Or address the item by timeline_item_id (its GetUniqueId(), stable); on
+    21.1 item_index also counts transitions, so it shifts when one is added.
+    timeline_id / timeline_name target a timeline other than the current one.
     """
     p = _params(params)
     _, item, err = _get_item(p)
@@ -29293,6 +29314,9 @@ def timeline_item_fusion(action: str, params: Optional[Dict[str, Any]] = None) -
       set_cache(value, ...) -> {success}  — value: "Auto", "On", or "Off"
 
     Default: track_type="video", track_index=1, item_index=0
+    Or address the item by timeline_item_id (its GetUniqueId(), stable); on
+    21.1 item_index also counts transitions, so it shifts when one is added.
+    timeline_id / timeline_name target a timeline other than the current one.
     """
     p = _params(params)
     _, item, err = _get_item(p)
@@ -31287,6 +31311,9 @@ def timeline_item_color(action: str, params: Optional[Dict[str, Any]] = None) ->
       regenerate_magic_mask(...) -> {success | needs_hitl, hitl}
 
     Default: track_type="video", track_index=1, item_index=0
+    Or address the item by timeline_item_id (its GetUniqueId(), stable); on
+    21.1 item_index also counts transitions, so it shifts when one is added.
+    timeline_id / timeline_name target a timeline other than the current one.
 
     For long-form per-action guidance and a worked example, call:
       timeline_item_color(action="action_help", params={"name": "<action>"})
@@ -31453,6 +31480,9 @@ def timeline_item_takes(action: str, params: Optional[Dict[str, Any]] = None) ->
       finalize(...) -> {success}
 
     Default: track_type="video", track_index=1, item_index=0
+    Or address the item by timeline_item_id (its GetUniqueId(), stable); on
+    21.1 item_index also counts transitions, so it shifts when one is added.
+    timeline_id / timeline_name target a timeline other than the current one.
     """
     p = _params(params)
     _, item, err = _get_item(p)
