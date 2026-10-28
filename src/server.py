@@ -257,7 +257,8 @@ logger = logging.getLogger("resolve-mcp")
 
 from mcp.server.fastmcp import Context, FastMCP, Image
 from mcp import types as mcp_types
-mcp = FastMCP(
+from src.utils.mcp_error_flag import ErrorFlaggingFastMCP
+mcp = ErrorFlaggingFastMCP(
     "DaVinciResolveMCP",
     instructions=(
         "DaVinci Resolve MCP Server — controls Resolve via its Scripting API. "

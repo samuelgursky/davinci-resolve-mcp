@@ -19,6 +19,7 @@ for path in (SRC_DIR, PROJECT_DIR):
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
+from src.utils.mcp_error_flag import ErrorFlaggingFastMCP
 
 from src.utils.app_control import (
     get_app_state,
@@ -98,7 +99,7 @@ logger.info(f"Detected platform: {get_platform()}")
 logger.info(f"Using Resolve API path: {RESOLVE_API_PATH}")
 logger.info(f"Using Resolve library path: {RESOLVE_LIB_PATH}")
 
-mcp = FastMCP("DaVinciResolveMCP")
+mcp = ErrorFlaggingFastMCP("DaVinciResolveMCP")
 if hasattr(mcp, "_mcp_server"):
     mcp._mcp_server.version = VERSION
 
