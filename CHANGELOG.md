@@ -2,6 +2,33 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.17.0 — Power windows for Resolve 21
+
+### Added
+
+- **`drx generate` takes `resolveVersion`** (#328, thanks @hpaul). A major
+  number (`21`) or a version string (`"21.0.4"`). From 21 on, circle and
+  linear power windows are written the way Resolve 21 exports them: corrector
+  type 0x10004 (65540) with the full parameter set, `REF_WIDTH` 288 and an
+  identity transform matrix, and 0x10004 added to the node's corrector-type
+  list. Resolve 21 loads the older corrector-type-4 form into the Window
+  palette but renders an empty mask, which also hides the node's grade.
+  The default is unchanged, so output for Resolve 19/20 is byte-for-byte
+  what it was. Gradient and polygon/curve windows are not rewritten. The
+  format follows justhung69/resolve-mcp (MIT), pixel-verified there on free
+  21.0.4.5.
+- The node's corrector-type list is now varint encoded, because 65540 does
+  not fit in one byte. Every type id below 128 encodes to the same byte as
+  before.
+
+### Validation
+
+- Advanced Node suite on Node 20 with a fresh `npm ci`, PR merged on
+  `main`: 1,214 tests, 1,153 passed, 0 failed, 61 skipped (8 new for the
+  Resolve 21 window layout). PR CI green on Python 3.10/3.11 and Node 20/22.
+- Not live-validated on Resolve 21: the maintainer's box runs Studio
+  19.1.3.7. The window layout is checked against Resolve 21 fixtures only.
+
 ## What's New in v4.16.0 — Calls name their timeline, and failures say so
 
 Eight reports from a Studio 21.1 / Windows deployment (#320–#327) and the
