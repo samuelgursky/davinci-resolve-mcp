@@ -5452,6 +5452,91 @@ class LoudnessParsingTests(unittest.TestCase):
 
 
 
+class ReadthroughSinglePassTests(unittest.TestCase):
+    """`_readthrough_analysis` decodes the file once for all four whole-file filters.
+
+    It used to run loudness, scene scoring, black detection and silence detection as
+    four ffmpeg passes, each decoding the whole file (video included: `-af` does not
+    drop the video stream from a null output). The single pass must give exactly what
+    the four passes gave.
+    """
+
+    def test_runs_one_ffmpeg_for_the_four_filters(self):
+        calls = []
+
+        def fake_run(args, timeout=_media_analysis_module.COMMAND_TIMEOUT_SECONDS, env=None):
+            calls.append((args, timeout))
+            return 0, "", ""
+
+        with unittest.mock.patch.object(_media_analysis_module, "_run_command", fake_run):
+            result = _media_analysis_module._readthrough_analysis("/media/a.mov")
+
+        whole_file = [(args, timeout) for args, timeout in calls if "-frames:v" not in args]
+        self.assertEqual(len(whole_file), 1, calls)
+        args, timeout = whole_file[0]
+        video = args[args.index("-vf") + 1]
+        audio = args[args.index("-af") + 1]
+        self.assertIn(_media_analysis_module._SCENE_SCORE_FILTER, video)
+        self.assertIn(_media_analysis_module._BLACKDETECT_FILTER, video)
+        self.assertIn(_media_analysis_module._LOUDNESS_FILTER, audio)
+        self.assertIn(_media_analysis_module._SILENCEDETECT_FILTER, audio)
+        # The one run keeps the budget of the four it replaces.
+        self.assertEqual(timeout, 4 * _media_analysis_module.COMMAND_TIMEOUT_SECONDS)
+        for key in ("loudness", "scenes", "black_frames", "silence", "interlace"):
+            self.assertIn(key, result)
+
+    def test_matches_four_separate_passes_on_real_media(self):
+        if not shutil.which("ffmpeg"):
+            self.skipTest("ffmpeg not installed")
+        ma = _media_analysis_module
+        directory = tempfile.mkdtemp(prefix="readthrough_single_pass_")
+        self.addCleanup(shutil.rmtree, directory, ignore_errors=True)
+        av = os.path.join(directory, "cuts.mp4")
+        # Two hard cuts with a black hold between them, and a muted span in the tone.
+        subprocess.run(
+            ["ffmpeg", "-v", "error", "-y",
+             "-f", "lavfi", "-i", "testsrc2=s=320x180:r=24:d=4",
+             "-f", "lavfi", "-i", "color=black:s=320x180:r=24:d=1",
+             "-f", "lavfi", "-i", "mandelbrot=s=320x180:r=24",
+             "-f", "lavfi", "-i", "sine=f=440:r=48000:d=9,volume=enable='between(t,2,4)':volume=0",
+             "-filter_complex",
+             "[2:v]trim=duration=4,setpts=PTS-STARTPTS[m];[0:v][1:v][m]concat=n=3:v=1:a=0,format=yuv420p[v]",
+             "-map", "[v]", "-map", "3:a", "-c:v", "libx264", "-preset", "veryfast",
+             "-c:a", "aac", av],
+            check=True, capture_output=True)
+        video_only = os.path.join(directory, "video_only.mp4")
+        audio_only = os.path.join(directory, "audio_only.wav")
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", av, "-an", "-c", "copy", video_only],
+                       check=True, capture_output=True)
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", av, "-vn", "-c:a", "pcm_s16le", audio_only],
+                       check=True, capture_output=True)
+
+        for path in (av, video_only, audio_only):
+            with self.subTest(path=os.path.basename(path)):
+                combined = ma._readthrough_analysis(path)
+                _, loud = ma._ffmpeg_stderr_filter(path, audio_filter=ma._LOUDNESS_FILTER)
+                _, scene = ma._ffmpeg_stderr_filter(path, video_filter=ma._SCENE_SCORE_FILTER)
+                _, black = ma._ffmpeg_stderr_filter(path, video_filter=ma._BLACKDETECT_FILTER)
+                _, silence = ma._ffmpeg_stderr_filter(path, audio_filter=ma._SILENCEDETECT_FILTER)
+                self.assertTrue(combined["scenes"]["success"])
+                self.assertEqual(combined["loudness"]["metrics"], ma._parse_loudness(loud))
+                self.assertEqual(
+                    [(i["time_seconds"], i["score"]) for i in combined["scenes"]["items"]],
+                    [(t, s) for t, s in ma._parse_scene_score_pairs(scene)
+                     if s > combined["scenes"]["threshold"]])
+                self.assertEqual(combined["scenes"]["threshold"],
+                                 ma._adaptive_scene_threshold(ma._parse_scene_score_pairs(scene))[0])
+                self.assertEqual(combined["black_frames"]["items"], ma._parse_blackdetect(black))
+                self.assertEqual(combined["silence"]["items"], ma._parse_silencedetect(silence))
+
+        # The fixture exercises every filter: two cuts, the black hold, the muted span.
+        full = ma._readthrough_analysis(av)
+        self.assertEqual(len(full["scenes"]["items"]), 2)
+        self.assertEqual(len(full["black_frames"]["items"]), 1)
+        self.assertEqual(len(full["silence"]["items"]), 1)
+        self.assertIsNotNone(full["loudness"]["metrics"]["integrated_lufs"])
+
+
 class MediaAnalysisPlanProjectRootTests(unittest.TestCase):
     """plan["output_root"] is a mapping, not a path.
 
