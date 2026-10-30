@@ -151,14 +151,16 @@ export class BuiltinSqlite {
 /** Verify the process is gone; a caller assertion alone is not sufficient. */
 export function requireResolveQuit(opts) {
   requireClosed(opts);
-  if (resolveRunning()) throw new Error('Fully QUIT Resolve before subtitle database writes (Resolve is running).');
+  if (resolveRunning()) throw new Error('Fully QUIT Resolve before subtitle/retime database writes (Resolve is running).');
 }
 
 function resolveRunning() {
   const win = process.platform === 'win32';
+  // Filter on Windows: an unfiltered tasklist took >5 s on a busy laptop (measured
+  // 2026-10-19, ~230 processes) and timed out, refusing every write; filtered: ~1 s.
   const result = childProcess.spawnSync(win ? 'tasklist.exe' : 'ps',
-    win ? ['/FO', 'CSV', '/NH'] : ['-A', '-o', 'comm='],
-    { encoding: 'utf8', timeout: 5000, windowsHide: true });
+    win ? ['/FI', 'IMAGENAME eq Resolve.exe', '/FO', 'CSV', '/NH'] : ['-A', '-o', 'comm='],
+    { encoding: 'utf8', timeout: 20000, windowsHide: true });
   if (result.error || result.status !== 0) throw new Error('Cannot verify Resolve is quit; refusing database write.');
   return result.stdout.split(/\r?\n/).some((line) => win
     ? /^"Resolve\.exe",/i.test(line.trim())
