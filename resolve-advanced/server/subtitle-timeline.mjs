@@ -153,6 +153,7 @@ export async function editCaptionTimeline({ source, output, track = 1, add = [],
     + target.text.slice(field.index + field[0].length);
   exported.zip.file(exported.entry, exported.xml.slice(0, target.offset) + trackText + exported.xml.slice(target.offset + target.text.length));
   await fs.writeFile(output, await exported.zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' }), { flag: 'wx' });
-  return { output, track, fps, added: staged.filter((s) => s.fresh).map((s) => s.decoded.id), replaced: p.replace.map((c) => c.id),
-    deleted: p.delete, captions: final, verification: 'exported_caption_readback', restart_required: false };
+  return { output, track, fps, added: staged.filter((s) => s.fresh).map((s) => String(s.caption.start)), replaced: p.replace.map((c) => c.id),
+    deleted: p.delete, captions: final.map((c) => ({ ...c, id: String(c.start) })),
+    verification: 'exported_caption_readback', restart_required: false };
 }

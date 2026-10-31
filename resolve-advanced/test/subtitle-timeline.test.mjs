@@ -207,3 +207,28 @@ test('caption text inserts dollar sequences literally and escapes XML on replace
     assert.deepEqual(await fs.readFile(source), original);
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });
+
+
+test('added and moved captions return start-frame IDs usable by subsequent edits', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'subtitle-reusable-ids-'));
+  try {
+    const source = await captionFixture(dir), output = path.join(dir, 'revised.drt');
+    const cue = (text, start, end) => ({ text, start, end, words: [{ text, start, end }] });
+    const result = await editCaptionTimeline({ source, output,
+      replace: [{ id: '108086', ...cue('moved', 108250, 108280) }],
+      add: [cue('added', 108300, 108330)] });
+    assert.deepEqual(result.added, ['108300']);
+    const after = await inspectCaptionTimeline({ source: output });
+    assert.deepEqual(result.captions, after.captions);
+    assert.deepEqual(result.captions.map((c) => c.id), ['108143', '108250', '108300']);
+    const moved = result.captions.find((c) => c.text === 'moved');
+    const nextOutput = path.join(dir, 'next.drt');
+    const next = await editCaptionTimeline({ source: output, output: nextOutput,
+      replace: [{ id: moved.id, ...cue('updated', 108250, 108280) }],
+      templateCaptionId: result.added[0], add: [cue('templated', 108400, 108430)], delete: result.added });
+    const back = await inspectCaptionTimeline({ source: nextOutput });
+    assert.deepEqual(next.captions, back.captions);
+    assert.deepEqual(back.captions.map((c) => c.text), ["cat it's a dog dummy.", 'updated', 'templated']);
+    assert.deepEqual(next.added, ['108400']);
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
