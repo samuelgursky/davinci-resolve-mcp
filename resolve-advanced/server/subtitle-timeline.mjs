@@ -3,9 +3,10 @@ import fs from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 import JSZip from 'jszip';
-import { subtitleSchemas } from './subtitle-db.mjs';
+import { subtitleSchemas, planCaptionEdit } from './subtitle-db.mjs';
 const require = createRequire(import.meta.url);
 const { decodePreset, setPresetInputs } = require('../vendor/drp-format/subtitle-preset.js');
+const { decodeCaption } = require('../vendor/drp-format/subtitle-captions.js');
 const REFERENCES = { 'Word Highlight': 'word-highlight-track.xml', Lollipop: 'lollipop-track.xml' };
 
 async function readTimeline(path) {
@@ -80,4 +81,76 @@ export async function editSubtitleTimeline({ source, output, track = 1, inputs =
   return { output, templateId: chosen.decoded.templateId, before: before?.decoded.inputs ?? null, after: decoded.inputs,
     editableInputs: decoded.editableInputs,
     verification: 'exported_preset_readback', restart_required: false };
+}
+
+// Caption items: same FieldsBlob codec as Project.db write_captions, but on the exported DRT.
+const xmlEscape = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const xmlUnescape = (s) => s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&');
+const tag = (xml, name) => {
+  const m = new RegExp(`<${name}>([^<]*)</${name}>|<${name}/>`).exec(xml);
+  if (!m) throw new Error(`caption item missing ${name}`);
+  return m[1] ?? '';
+};
+const setTag = (xml, name, value) => xml.replace(new RegExp(`<${name}>[^<]*</${name}>|<${name}/>`), `<${name}>${value}</${name}>`);
+async function sequenceFps(zip, track) {
+  const sequence = /<Sequence>([0-9a-f-]{36})<\/Sequence>/i.exec(track)?.[1];
+  if (!sequence) throw new Error('subtitle track has no sequence reference');
+  for (const name of Object.keys(zip.files).filter((n) => n.endsWith('.xml'))) {
+    const xml = await zip.file(name).async('string'), at = xml.indexOf(`<Sm2Sequence DbId="${sequence}">`);
+    if (at < 0) continue;
+    const hex = /<FrameRate>([0-9a-fA-F]{32})<\/FrameRate>/.exec(xml.slice(at, xml.indexOf('</Sm2Sequence>', at)))?.[1];
+    const fps = hex ? Buffer.from(hex, 'hex').readDoubleLE(0) : NaN;
+    if (!Number.isFinite(fps) || fps < 1 || fps > 240) throw new Error('unsupported timeline FrameRate encoding');
+    return fps;
+  }
+  throw new Error('timeline sequence not found in export');
+}
+function captionItems(track, fps) {
+  const m = /<Items>([\s\S]*?)<\/Items>|<Items\/>/.exec(track);
+  if (!m) throw new Error('Unsupported track: missing Items field');
+  const inner = m[1] ?? '';
+  const elements = [...inner.matchAll(/<Element>\s*<Sm2TiGenerator DbId="([0-9a-f-]{36})">[\s\S]*?<\/Sm2TiGenerator>\s*<\/Element>/gi)];
+  // Anything besides plain subtitle generators would be dropped by the rebuild below.
+  if (elements.reduce((rest, e) => rest.replace(e[0], ''), inner).trim()) throw new Error('unsupported item on subtitle track');
+  const items = elements.map(([text, id]) => {
+    if (tag(text, 'PrettyType') !== 'Subtitle') throw new Error('unsupported item on subtitle track');
+    if (/<CompositionTable>/.test(text)) throw new Error('per-caption Fusion compositions are not supported');
+    const start = Number(tag(text, 'Start')), duration = Number(tag(text, 'Duration'));
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(duration)) throw new Error('invalid caption frame columns');
+    const blob = Buffer.from(tag(text, 'FieldsBlob'), 'hex');
+    return { text, blob, decoded: { id, ...decodeCaption(blob, { name: xmlUnescape(tag(text, 'Name')), start, end: start + duration, fps }) } };
+  });
+  return { items, field: m, separator: /^\s*/.exec(inner)[0] || '\n' };
+}
+async function readCaptions(source, track) {
+  const exported = await readTimeline(source), target = selectedTrack(exported.xml, track);
+  const fps = await sequenceFps(exported.zip, target.text);
+  return { exported, target, fps, ...captionItems(target.text, fps) };
+}
+export async function inspectCaptionTimeline({ source, track = 1 }) {
+  const { fps, items } = await readCaptions(source, track);
+  return { track, fps, timeUnit: 'timeline_frames', captions: items.map((c) => c.decoded) };
+}
+export async function editCaptionTimeline({ source, output, track = 1, add = [], replace = [], delete: remove = [], templateCaptionId }) {
+  const p = subtitleSchemas.write_captions.parse({ timeline: 'export', track, add, replace, delete: remove, templateCaptionId });
+  if (source === output) throw new Error('Output must be a new file');
+  const { exported, target, fps, items, field, separator } = await readCaptions(source, track);
+  const { byId, template, staged, final } = planCaptionEdit(items, p, fps);
+  const stagedById = new Map(staged.map((s) => [s.decoded.id, s]));
+  const elements = final.map((c) => {
+    const s = stagedById.get(c.id);
+    if (!s) return byId.get(c.id).text;
+    let text = s.fresh ? template.text.replace(template.decoded.id, c.id) : s.base.text;
+    if (s.fresh) text = text.replace(/<(MarkersBA|RenderCacheBA|ImportExportMetadataBA)>[\s\S]*?<\/\1>/g, '<$1/>');
+    text = setTag(text, 'FieldsBlob', s.blob.toString('hex'));
+    text = setTag(text, 'Name', xmlEscape(` ${s.caption.text}`));
+    text = setTag(text, 'Start', String(s.caption.start));
+    return setTag(text, 'Duration', String(s.caption.end - s.caption.start));
+  });
+  const trackText = target.text.slice(0, field.index) + `<Items>${separator}${elements.join(separator)}${separator}</Items>`
+    + target.text.slice(field.index + field[0].length);
+  exported.zip.file(exported.entry, exported.xml.slice(0, target.offset) + trackText + exported.xml.slice(target.offset + target.text.length));
+  await fs.writeFile(output, await exported.zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' }), { flag: 'wx' });
+  return { output, track, fps, added: staged.filter((s) => s.fresh).map((s) => s.decoded.id), replaced: p.replace.map((c) => c.id),
+    deleted: p.delete, captions: final, verification: 'exported_caption_readback', restart_required: false };
 }

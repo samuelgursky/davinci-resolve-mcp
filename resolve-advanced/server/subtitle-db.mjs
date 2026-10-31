@@ -155,19 +155,19 @@ function removeItem(db, row) {
   db.prepare('DELETE FROM Sm2TiItem_Sm2TiTrack WHERE DbAssociate=?').run(row.Sm2TiItem_id);
   db.prepare('DELETE FROM Sm2TiItem WHERE Sm2TiItem_id=?').run(row.Sm2TiItem_id);
 }
-function captionEdit(db, p, mutate) {
-  const tr = selectedTrack(db, p), current = captions(db, tr);
+/** Validate and stage caption edits on decoded captions ({decoded, blob}); shared by Project.db and DRT writers. */
+export function planCaptionEdit(current, p, fps, checkBase = () => {}) {
   const byId = new Map(current.map((c) => [c.decoded.id, c]));
   const ids = [...p.delete, ...p.replace.map((c) => c.id)];
   if (!p.add.length && !ids.length) throw new Error('no caption changes requested');
   if (new Set(ids).size !== ids.length) throw new Error('duplicate/conflicting caption ids');
   for (const id of ids) {
     if (!byId.has(id)) throw new Error(`caption ${id} is not on the selected track`);
-    exclusive(db, byId.get(id).row);
+    checkBase(byId.get(id));
   }
   const template = p.templateCaptionId ? byId.get(p.templateCaptionId) : current[0];
   if (p.add.length && !template) throw new Error('adding captions requires an existing caption on this track as a schema template');
-  if (p.add.length) exclusive(db, template.row);
+  if (p.add.length) checkBase(template);
   const staged = [];
   for (const [fresh, list] of [[false, p.replace], [true, p.add]]) {
     for (const c of list) {
@@ -175,25 +175,35 @@ function captionEdit(db, p, mutate) {
         throw new Error('caption text must equal the words joined with spaces; words must be trimmed');
       }
       const base = fresh ? template : byId.get(c.id);
-      if (base.row.CompositionTable) throw new Error('per-caption Fusion compositions are not supported');
-      const blob = encodeCaption(base.row.FieldsBlob, c, tr.fps, { fresh });
+      const blob = encodeCaption(base.blob, c, fps, { fresh });
       const id = fresh ? randomUUID() : c.id;
-      const decoded = { id, ...decodeCaption(blob, { name: c.text, start: c.start, end: c.end, fps: tr.fps }) };
-      const qc = checkCaptions([decoded], { fps: tr.fps });
+      const decoded = { id, ...decodeCaption(blob, { name: c.text, start: c.start, end: c.end, fps }) };
+      const qc = checkCaptions([decoded], { fps });
       // Tick quantisation can otherwise turn a positive input word into a blank.
       // Half-tick boundary rounding is accepted; actual internal gaps are not.
       const errors = qc.issues.filter((r) => r.severity !== 'warning');
       if (errors.length) throw new Error(`invalid caption timing: ${JSON.stringify(errors)}`);
-      const row = { ...base.row, Sm2TiItem_id: id, Name: ` ${c.text}`, Start: String(c.start),
-        Duration: String(c.end - c.start), FieldsBlob: blob };
-      if (fresh) for (const key of ['MarkersBA', 'RenderCacheBA', 'ImportExportMetadataBA']) if (key in row) row[key] = null;
-      staged.push({ fresh, row, decoded });
+      staged.push({ fresh, base, caption: c, blob, decoded });
     }
   }
   const removed = new Set(ids);
   const final = [...current.filter((c) => !removed.has(c.decoded.id)).map((c) => c.decoded), ...staged.map((c) => c.decoded)]
     .sort((a, b) => a.start - b.start || a.id.localeCompare(b.id));
   for (let i = 1; i < final.length; i++) if (final[i].start < final[i - 1].end) throw new Error('caption edits would leave overlapping captions');
+  return { byId, template, staged, final };
+}
+function captionEdit(db, p, mutate) {
+  const tr = selectedTrack(db, p);
+  const plan = planCaptionEdit(captions(db, tr).map((c) => ({ ...c, blob: c.row.FieldsBlob })), p, tr.fps,
+    (c) => exclusive(db, c.row));
+  const { byId, template, final } = plan;
+  const staged = plan.staged.map(({ fresh, base, caption: c, blob, decoded }) => {
+    if (base.row.CompositionTable) throw new Error('per-caption Fusion compositions are not supported');
+    const row = { ...base.row, Sm2TiItem_id: decoded.id, Name: ` ${c.text}`, Start: String(c.start),
+      Duration: String(c.end - c.start), FieldsBlob: blob };
+    if (fresh) for (const key of ['MarkersBA', 'RenderCacheBA', 'ImportExportMetadataBA']) if (key in row) row[key] = null;
+    return { fresh, row, decoded };
+  });
   if (mutate) {
     for (const id of p.delete) removeItem(db, byId.get(id).row);
     for (const c of staged) {

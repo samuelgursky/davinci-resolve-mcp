@@ -175,5 +175,42 @@ class SubtitleLiveTest(unittest.TestCase):
         capture.assert_not_called()
 
 
+    def captions(self, readback_text='new', params=None):
+        cap = lambda text: {'captions': [{'id': 'x', 'text': text, 'start': 10, 'end': 20,
+                                          'words': [{'text': text, 'start': 10, 'end': 20}]}]}
+        with patch.object(live.shutil, 'which', return_value='node'),              patch.object(live.subprocess, 'run', side_effect=[
+                 Mock(returncode=0, stdout=json.dumps(cap('new'))),
+                 Mock(returncode=0, stdout=json.dumps({**cap(readback_text), 'fps': 30}))]) as run,              patch.object(live, '_inventory', return_value={'edit': 1}) as inventory:
+            result = live.write_captions_live(self.r, self.p, self.t, params or {
+                'replace': [{'id': 'x', 'text': 'new', 'start': 10, 'end': 20,
+                             'words': [{'text': 'new', 'start': 10, 'end': 20}]}],
+                'revision_name': 'Revision'}, lambda _: self.tmp.name)
+        return result, run, inventory
+
+    def test_caption_write_selects_verified_revision(self):
+        result, run, inventory = self.captions()
+        self.assertTrue(result['success'], result)
+        self.assertIn('word_timing', result['verified_components'])
+        request = json.loads(run.call_args_list[0].kwargs['input'])
+        self.assertEqual(request['operation'], 'write_captions')
+        self.assertEqual(request['replace'][0]['id'], 'x')
+        self.assertEqual(json.loads(run.call_args_list[1].kwargs['input'])['operation'], 'inspect_captions')
+        # The rewritten track is verified by decoding, not by the item inventory.
+        self.assertEqual(inventory.call_args_list[0].args[1], 1)
+        self.p.SetCurrentTimeline.assert_called_once_with(self.imported)
+
+    def test_caption_readback_mismatch_restores_original(self):
+        result, _, _ = self.captions(readback_text='old')
+        self.assertFalse(result['success'])
+        self.assertIn('caption text or word timing', result['error'])
+        self.p.SetCurrentTimeline.assert_called_once_with(self.t)
+        self.assertTrue(result['staging_retained'])
+
+    def test_caption_write_rejects_non_list_edits(self):
+        result, run, _ = self.captions(params={'replace': {'id': 'x'}})
+        self.assertFalse(result['success'])
+        run.assert_not_called()
+        self.t.Export.assert_not_called()
+
 if __name__ == '__main__':
     unittest.main()
