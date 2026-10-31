@@ -113,9 +113,9 @@ test('Word Highlight lists and sets its drop shadow; per-word scale is refused',
 const captionBlobs = ['00000002000000748128b52ffd206a5103000a5568007204204f682c72072074686174277372052073756368720220617205206375746578ec980d7894990d78ba990d78c6990d78d2990d800194990d8001ba990d8001c6990d8001d2990d8001de990da801b6cc06121100000024789c6366606420040000b20005',
   '00000002000000738128b52ffd20694903000a5468007204206361747205206974277372022061720420646f6772072064756d6d792e78de990d78fa990d78ea9a0d78ec9a0d78809b0d8001fa990d8001ea9a0d8001ec9a0d8001809b0d8001949b0da801efcc06121100000024789c6366606420040000b20005'];
 const generator = (id, blob, name, start, duration) => `<Element><Sm2TiGenerator DbId="${id}"><FieldsBlob>${blob}</FieldsBlob><PrettyType>Subtitle</PrettyType><Name>${name}</Name><Start>${start}</Start><Duration>${duration}</Duration><MarkersBA>keep-marker</MarkersBA><In/></Sm2TiGenerator></Element>`;
-async function captionFixture(dir) {
+async function captionFixture(dir, secondStart = 108143) {
   const items = generator('aaaaaaaa-0000-0000-0000-000000000001', captionBlobs[0], " Oh, that's such a cute", 108086, 57)
-    + generator('aaaaaaaa-0000-0000-0000-000000000002', captionBlobs[1], ' cat it&apos;s a dog dummy.', 108143, 91);
+    + generator('aaaaaaaa-0000-0000-0000-000000000002', captionBlobs[1], ' cat it&apos;s a dog dummy.', secondStart, 91);
   const zip = new JSZip();
   zip.file('project.xml', '<project/>');
   zip.file('MediaPool/Master/MpFolder.xml', '<Sm2Sequence DbId="33333333-3333-3333-3333-333333333333"><FrameRate>0000000000003e400000000000000000</FrameRate></Sm2Sequence>');
@@ -157,5 +157,27 @@ test('replace, add and delete caption text and word timing in an exported DRT', 
     await assert.rejects(editCaptionTimeline({ source, output: path.join(dir, 'over.drt'), add: [{ text: 'x', start: 108100, end: 108110,
       words: [{ text: 'x', start: 108100, end: 108110 }] }] }), /overlapping/);
     await assert.rejects(editCaptionTimeline({ source, output: path.join(dir, 'id.drt'), delete: ['missing'] }), /not on the selected track/);
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+
+test('caption writes refuse ambiguous start-frame IDs before removing any item', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'subtitle-duplicate-start-'));
+  try {
+    const source = await captionFixture(dir, 108086), original = await fs.readFile(source);
+    const before = await inspectCaptionTimeline({ source });
+    assert.deepEqual(before.captions.map((c) => c.id), ['108086', '108086']);
+    const caption = { text: 'new', start: 108300, end: 108330,
+      words: [{ text: 'new', start: 108300, end: 108330 }] };
+    for (const [name, edits] of [
+      ['delete', { delete: ['108086'] }],
+      ['replace', { replace: [{ id: '108086', ...caption }] }],
+      ['add', { add: [caption] }],
+    ]) {
+      const output = path.join(dir, `${name}.drt`);
+      await assert.rejects(editCaptionTimeline({ source, output, ...edits }), /duplicate caption ids/);
+      assert.equal(await fs.stat(output).catch(() => null), null);
+      assert.deepEqual(await fs.readFile(source), original);
+    }
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });

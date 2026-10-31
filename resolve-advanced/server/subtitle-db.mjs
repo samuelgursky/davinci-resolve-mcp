@@ -158,6 +158,7 @@ function removeItem(db, row) {
 /** Validate and stage caption edits on decoded captions ({decoded, blob}); shared by Project.db and DRT writers. */
 export function planCaptionEdit(current, p, fps, checkBase = () => {}) {
   const byId = new Map(current.map((c) => [c.decoded.id, c]));
+  if (byId.size !== current.length) throw new Error('duplicate caption ids on selected track; refusing ambiguous edit');
   const ids = [...p.delete, ...p.replace.map((c) => c.id)];
   if (!p.add.length && !ids.length) throw new Error('no caption changes requested');
   if (new Set(ids).size !== ids.length) throw new Error('duplicate/conflicting caption ids');
