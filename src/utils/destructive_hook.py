@@ -192,6 +192,7 @@ DESTRUCTIVE_ACTIONS_BY_TOOL: Dict[str, FrozenSet[str]] = {
         "analyze_dolby_vision",
         "create_subtitles",
         "set_subtitle_preset",
+        "write_captions_live",
     }),
     "timeline_item": frozenset({
         "delete_keyframe",
@@ -378,6 +379,7 @@ NATIVE_DRY_RUN_ACTIONS: frozenset = frozenset({
     ("timeline", "replace_source_range"),
     ("timeline_ai", "create_subtitles"),
     ("timeline_ai", "set_subtitle_preset"),
+    ("timeline_ai", "write_captions_live"),
     ("script_plugin", "safe_install_extension"),
     ("script_plugin", "safe_remove_extension"),
     ("project_manager", "safe_project_delete"),
