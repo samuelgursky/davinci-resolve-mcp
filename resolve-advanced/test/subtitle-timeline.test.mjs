@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import JSZip from 'jszip';
+import { XMLValidator } from 'fast-xml-parser';
 import { editSubtitleTimeline, editCaptionTimeline, inspectCaptionTimeline } from '../server/subtitle-timeline.mjs';
 
 const native = await fs.readFile(new URL('../assets/word-highlight-track.xml', import.meta.url), 'utf8');
@@ -179,5 +180,30 @@ test('caption writes refuse ambiguous start-frame IDs before removing any item',
       assert.equal(await fs.stat(output).catch(() => null), null);
       assert.deepEqual(await fs.readFile(source), original);
     }
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+
+test('caption text inserts dollar sequences literally and escapes XML on replace and add', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'subtitle-literal-text-'));
+  try {
+    const source = await captionFixture(dir), output = path.join(dir, 'literal.drt');
+    const original = await fs.readFile(source);
+    const tokens = ['$&', '$`', "$'", '$$', '$1', '<tag>', '&amp;'];
+    const text = tokens.join(' ');
+    const cue = (start, end) => ({ text, start, end, words: tokens.map((word, i) => ({
+      text: word, start: start + Math.floor((end - start) * i / tokens.length),
+      end: start + Math.floor((end - start) * (i + 1) / tokens.length),
+    })) });
+    await editCaptionTimeline({ source, output,
+      replace: [{ id: '108086', ...cue(108086, 108143) }], add: [cue(108300, 108360)] });
+    const zip = await JSZip.loadAsync(await fs.readFile(output));
+    const xml = await zip.file('SeqContainer/22222222-2222-2222-2222-222222222222.xml').async('string');
+    assert.equal(XMLValidator.validate(xml), true);
+    assert.equal(xml.split("<Name> $&amp; $` $' $$ $1 &lt;tag&gt; &amp;amp;</Name>").length - 1, 2);
+    const after = await inspectCaptionTimeline({ source: output });
+    assert.equal(after.captions[0].text, text);
+    assert.equal(after.captions[2].text, text);
+    assert.deepEqual(await fs.readFile(source), original);
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });

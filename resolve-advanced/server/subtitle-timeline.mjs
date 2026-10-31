@@ -91,7 +91,7 @@ const tag = (xml, name) => {
   if (!m) throw new Error(`caption item missing ${name}`);
   return m[1] ?? '';
 };
-const setTag = (xml, name, value) => xml.replace(new RegExp(`<${name}>[^<]*</${name}>|<${name}/>`), `<${name}>${value}</${name}>`);
+const setTag = (xml, name, value) => xml.replace(new RegExp(`<${name}>[^<]*</${name}>|<${name}/>`), () => `<${name}>${value}</${name}>`);
 async function sequenceFps(zip, track) {
   const sequence = /<Sequence>([0-9a-f-]{36})<\/Sequence>/i.exec(track)?.[1];
   if (!sequence) throw new Error('subtitle track has no sequence reference');
