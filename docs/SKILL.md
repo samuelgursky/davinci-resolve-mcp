@@ -459,6 +459,15 @@ Operating rules an agent must know:
   Ordinary title presets use `timeline.insert_fusion_title` with the full ID,
   then scoped `fusion_comp` probes and input writes. See
   [title library automation](guides/title-library-automation.md) for acceptance.
+- **Live caption text and word timing**: `timeline_ai.list_captions_live` reads
+  one subtitle track's captions from a native DRT export, with Resolve open.
+  `timeline_ai.write_captions_live` takes the same `replace` / `add` / `delete`
+  shape as `project_db` `write_captions` and imports the result as a selected
+  revision. A caption `id` is its start frame as a string, because Resolve
+  issues new item IDs on every export; use the IDs the write returns for the
+  next edit. Resolve's re-export must keep the text, bounds and word frames,
+  or the original stays selected. Adding to an empty track needs an existing
+  caption as a template; per-caption Fusion compositions are refused.
 - **Offline subtitle DB edits**: `project_db` `list_captions` / `write_captions` /
   `check_captions` cover text, bounds, explicit per-word timing, add and delete.
   `list_subtitle_presets` / `copy_subtitle_preset` / `set_subtitle_preset` handle
@@ -1964,7 +1973,8 @@ against it, and image content fails that validation.
 
 Key actions: `create_subtitles(settings?)` (human-readable settings resolved to
 `SUBTITLE_*`/`AUTO_CAPTION_*` enums + read-back verified — see
-`subtitle_generation_probe`), `detect_scene_cuts`,
+`subtitle_generation_probe`), `list_captions_live`, `write_captions_live`,
+`detect_scene_cuts`,
 `grab_still`, `grab_all_stills(source?)`, `analyze_dolby_vision`
 
 ---
