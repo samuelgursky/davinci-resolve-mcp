@@ -2,6 +2,33 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.17.1 — Media analysis decodes each file once
+
+### Changed
+
+- **The readthrough pass of media analysis runs ffmpeg once instead of four
+  times** (#329, thanks @Dev-next-gen). Loudness, scene scoring, black frames
+  and silence each used to be a separate ffmpeg run, and each run decoded the
+  whole file: `-af` alone does not drop the video stream from a null output,
+  so the audio passes decoded every video frame too. The four filters now
+  share one run through `split`/`asplit`. On a 1080p H.264 file the
+  readthrough took 8.1 s instead of 22.1 s, and CPU time fell from 84.8 s to
+  30.5 s; ProRes and HEVC dropped by about the same share. The results are
+  the same as before. The parsers are unchanged.
+- The four measurements now share one exit code and one timeout. The single
+  run gets four times the old per-pass timeout, the budget of the four runs it
+  replaces. If that run times out, all four report `success: false`, where
+  before the other three could still succeed.
+
+### Validation
+
+- Python suite with the PR merged on `main`: 4,291 tests. The only failures
+  are the 4 `source_media_guard` path checks that always fail in a scratch
+  worktree. The new test compares the single run against the four separate
+  runs with the real ffmpeg on an A/V file, a video-only file and an
+  audio-only file.
+- No Resolve behaviour changed; this is ffmpeg only.
+
 ## What's New in v4.17.0 — Power windows for Resolve 21
 
 ### Added
