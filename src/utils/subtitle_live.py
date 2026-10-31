@@ -74,12 +74,19 @@ def _capture_installed_preset(resolve, project, preset, output):
             raise RuntimeError(f"Preset capture cleanup refused; retained {capture.GetName()}")
 
 
-def _inventory(timeline):
-    """Compare track counts and item names, bounds and media IDs only."""
+def _inventory(timeline, edited_subtitle_track=None):
+    """Compare track counts and item names, bounds and media IDs only.
+
+    edited_subtitle_track is left out of the comparison when a call rewrites its
+    captions; those are verified by decoding the re-export instead.
+    """
     result = {}
     for kind in ("video", "audio", "subtitle"):
         tracks = []
         for index in range(1, int(timeline.GetTrackCount(kind) or 0) + 1):
+            if kind == "subtitle" and index == edited_subtitle_track:
+                tracks.append("edited")
+                continue
             items = []
             for item in timeline.GetItemListInTrack(kind, index) or []:
                 media = item.GetMediaPoolItem()
@@ -90,8 +97,23 @@ def _inventory(timeline):
     return result
 
 
-def set_subtitle_preset(resolve, project, timeline, params, safe_dir):
-    """Create and select a verified revision; restore original on any failure."""
+def _codec(node, request, default_error="Subtitle codec failed"):
+    """Run one bridge operation and return its decoded JSON result."""
+    completed = subprocess.run([node, str(BRIDGE)], input=json.dumps(request),
+                               capture_output=True, text=True, encoding="utf-8", errors="replace",
+                               timeout=60, check=False)
+    if completed.returncode:
+        err = completed.stderr.strip() or default_error
+        if "ERR_MODULE_NOT_FOUND" in err or "Cannot find package" in err:
+            err = subtitle_codec_gap() or (
+                f"{err} From {_ADVANCED} run: npm install --omit=dev --omit=optional"
+            )
+        raise RuntimeError(err)
+    return json.loads(completed.stdout)
+
+
+def _preflight(timeline, params):
+    """Shared argument checks: (node, dry_run, track), or an error result."""
     node = shutil.which("node")
     if not node:
         return {"success": False, "error": "Node.js is required for the subtitle preset codec"}
@@ -102,23 +124,16 @@ def set_subtitle_preset(resolve, project, timeline, params, safe_dir):
     dry_run = params.get("dry_run", False)
     if not isinstance(dry_run, bool):
         return {"success": False, "error": "dry_run must be coerced to a boolean by the dispatcher"}
-    inputs = params.get("inputs", {})
-    if not isinstance(inputs, dict):
-        return {"success": False, "error": "inputs must be an object"}
     track = params.get("track", 1)
     if isinstance(track, bool) or not isinstance(track, int) or not 1 <= track <= timeline.GetTrackCount("subtitle"):
         return {"success": False, "error": "Subtitle track index out of range"}
-    reference = params.get("preset_reference")
-    if reference and not Path(reference).is_file():
-        return {"success": False, "error": "preset_reference must be an existing native DRT export"}
-    installed = None
-    if params.get("preset") not in (None, "Word Highlight", "Lollipop") and not reference:
-        try:
-            installed = find_subtitle_preset(params["preset"], params.get("templates_archive"))
-        except (OSError, ValueError) as exc:
-            return {"success": False, "error": str(exc)}
-        if dry_run:
-            return {"success": False, "error": "Uncached installed preset capture needs a live temporary timeline; use preset_reference for a mutation-free dry run"}
+    return node, dry_run, track
+
+
+def _revise(resolve, project, timeline, params, safe_dir, *, dry_run, build, check, report, edited_track=None):
+    """Export, build(source, output, staging) a patched DRT, import it as a selected
+    revision and check(readback, patch) Resolve's re-export of it. The original is
+    never modified and stays active on any failure or preview."""
     name = params.get("revision_name") or f"{timeline.GetName()} - subtitles {uuid.uuid4().hex[:8]}"
     if any(project.GetTimelineByIndex(i).GetName() == name for i in range(1, project.GetTimelineCount() + 1)):
         return {"success": False, "error": "revision_name already exists"}
@@ -127,33 +142,14 @@ def set_subtitle_preset(resolve, project, timeline, params, safe_dir):
     source, output = staging / "original.drt", staging / "revision.drt"
     original_active = project.GetCurrentTimeline()
     original_timecode = timeline.GetCurrentTimecode()
-    before = _inventory(timeline)
+    before = _inventory(timeline, edited_track)
     imported = None
     succeeded = False
     result = None
     try:
         if not timeline.Export(str(source), resolve.EXPORT_DRT):
             raise RuntimeError("Native timeline export failed")
-        request = {"source": str(source), "output": str(output), "track": track, "inputs": inputs}
-        if installed:
-            captured = staging / "installed-title.drt"
-            _capture_installed_preset(resolve, project, installed, captured)
-            request.update(title_reference=str(captured), template_id=installed["template_id"])
-        if reference:
-            request.update(preset_reference=os.path.abspath(reference), reference_track=params.get("reference_track", 1))
-        if params.get("preset") and not reference:
-            request["preset"] = params["preset"]
-        completed = subprocess.run([node, str(BRIDGE)], input=json.dumps(request),
-                                   capture_output=True, text=True, encoding="utf-8", errors="replace",
-                                   timeout=60, check=False)
-        if completed.returncode:
-            err = completed.stderr.strip() or "Subtitle codec failed"
-            if "ERR_MODULE_NOT_FOUND" in err or "Cannot find package" in err:
-                err = subtitle_codec_gap() or (
-                    f"{err} From {_ADVANCED} run: npm install --omit=dev --omit=optional"
-                )
-            raise RuntimeError(err)
-        patch = json.loads(completed.stdout)
+        patch = build(source, output, staging)
         # The codec's output file is private staging, removed after success.
         patch.pop("output", None)
         if dry_run:
@@ -164,26 +160,18 @@ def set_subtitle_preset(resolve, project, timeline, params, safe_dir):
         imported = project.GetMediaPool().ImportTimelineFromFile(str(output), {"importSourceClips": False})
         if not imported:
             raise RuntimeError("Resolve refused the patched native timeline")
-        if _inventory(imported) != before:
+        if _inventory(imported, edited_track) != before:
             raise RuntimeError("Imported edit differs in track counts, clip/caption names, bounds or media IDs")
         if not imported.SetName(name):
             raise RuntimeError("Failed to name subtitle revision")
         if imported.GetName() != name:
             raise RuntimeError("Subtitle revision name did not persist")
         # Re-export through Resolve to prove that it parsed and retained the
-        # preset. The codec's own pre-import readback alone is insufficient.
+        # edit. The codec's own pre-import readback alone is insufficient.
         readback = staging / "resolve-readback.drt"
         if not imported.Export(str(readback), resolve.EXPORT_DRT):
             raise RuntimeError("Failed to re-export the imported subtitle revision")
-        checked = subprocess.run([node, str(BRIDGE)],
-                                 input=json.dumps({"operation": "inspect", "source": str(readback), "track": track}),
-                                 capture_output=True, text=True, encoding="utf-8", errors="replace",
-                                 timeout=60, check=False)
-        if checked.returncode:
-            raise RuntimeError(checked.stderr.strip() or "Imported preset readback failed")
-        actual = json.loads(checked.stdout)
-        if actual.get("templateId") != patch.get("templateId") or actual.get("inputs") != patch.get("after"):
-            raise RuntimeError("Resolve did not retain the requested subtitle controls")
+        check(readback, patch)
         selected, detail = set_current_timeline(project, imported)
         if not selected:
             raise RuntimeError(describe_switch_failure(detail, "selecting subtitle revision"))
@@ -193,12 +181,8 @@ def set_subtitle_preset(resolve, project, timeline, params, safe_dir):
                 warnings.append("Subtitle revision was selected, but its playhead could not be restored")
         succeeded = True
         result = {"success": True, "restart_required": False, "original_timeline": timeline.GetName(),
-                "timeline": imported.GetName(), "timeline_id": imported.GetUniqueId(),
-                "patch": patch,
-                "verification": "resolve_reexport_preset_readback_and_live_edit_inventory",
-                "verified_components": ["track_counts", "item_names", "item_bounds", "media_ids", "subtitle_preset_controls"],
-                "unverified_components": ["markers", "grades", "other_fusion_compositions", "audio_content"],
-                "render_verified": False}
+                  "timeline": imported.GetName(), "timeline_id": imported.GetUniqueId(),
+                  "patch": patch, **report, "render_verified": False}
         if warnings:
             result["warnings"] = warnings
         return result
@@ -231,3 +215,112 @@ def set_subtitle_preset(resolve, project, timeline, params, safe_dir):
             else:
                 result["staging_retained"] = True
                 result["staging_directory"] = str(staging)
+
+
+def set_subtitle_preset(resolve, project, timeline, params, safe_dir):
+    """Create and select a verified revision; restore original on any failure."""
+    checked = _preflight(timeline, params)
+    if isinstance(checked, dict):
+        return checked
+    node, dry_run, track = checked
+    inputs = params.get("inputs", {})
+    if not isinstance(inputs, dict):
+        return {"success": False, "error": "inputs must be an object"}
+    reference = params.get("preset_reference")
+    if reference and not Path(reference).is_file():
+        return {"success": False, "error": "preset_reference must be an existing native DRT export"}
+    installed = None
+    if params.get("preset") not in (None, "Word Highlight", "Lollipop") and not reference:
+        try:
+            installed = find_subtitle_preset(params["preset"], params.get("templates_archive"))
+        except (OSError, ValueError) as exc:
+            return {"success": False, "error": str(exc)}
+        if dry_run:
+            return {"success": False, "error": "Uncached installed preset capture needs a live temporary timeline; use preset_reference for a mutation-free dry run"}
+
+    def build(source, output, staging):
+        request = {"source": str(source), "output": str(output), "track": track, "inputs": inputs}
+        if installed:
+            captured = staging / "installed-title.drt"
+            _capture_installed_preset(resolve, project, installed, captured)
+            request.update(title_reference=str(captured), template_id=installed["template_id"])
+        if reference:
+            request.update(preset_reference=os.path.abspath(reference), reference_track=params.get("reference_track", 1))
+        if params.get("preset") and not reference:
+            request["preset"] = params["preset"]
+        return _codec(node, request)
+
+    def check(readback, patch):
+        actual = _codec(node, {"operation": "inspect", "source": str(readback), "track": track},
+                        "Imported preset readback failed")
+        if actual.get("templateId") != patch.get("templateId") or actual.get("inputs") != patch.get("after"):
+            raise RuntimeError("Resolve did not retain the requested subtitle controls")
+
+    return _revise(resolve, project, timeline, params, safe_dir, dry_run=dry_run, build=build, check=check, report={
+        "verification": "resolve_reexport_preset_readback_and_live_edit_inventory",
+        "verified_components": ["track_counts", "item_names", "item_bounds", "media_ids", "subtitle_preset_controls"],
+        "unverified_components": ["markers", "grades", "other_fusion_compositions", "audio_content"]})
+
+
+def _caption_shape(captions):
+    """What a caption write must preserve. Item IDs are remapped on import."""
+    return [{"text": c["text"], "start": c["start"], "end": c["end"],
+             "words": [(w["text"], w["start"], w["end"]) for w in c["words"]]} for c in captions]
+
+
+def list_captions_live(resolve, timeline, params, safe_dir):
+    """Decode one subtitle track's captions from a native export; mutates nothing."""
+    checked = _preflight(timeline, {**params, "dry_run": False})
+    if isinstance(checked, dict):
+        return checked
+    node, _, track = checked
+    staging = Path(safe_dir(str(ROOT / "logs" / "subtitle-live"))) / uuid.uuid4().hex
+    staging.mkdir(parents=True, exist_ok=False)
+    try:
+        source = staging / "original.drt"
+        if not timeline.Export(str(source), resolve.EXPORT_DRT):
+            return {"success": False, "error": "Native timeline export failed"}
+        return {"success": True, "timeline": timeline.GetName(),
+                **_codec(node, {"operation": "inspect_captions", "source": str(source), "track": track})}
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+        return {"success": False, "error": str(exc)}
+    finally:
+        # This UUID directory belongs only to this read.
+        shutil.rmtree(staging, ignore_errors=True)
+
+
+def write_captions_live(resolve, project, timeline, params, safe_dir):
+    """Replace/add/delete caption text and word timing as a verified revision, Resolve open.
+
+    Same caption shape as advanced project_db write_captions (timeline frames, words
+    tile each caption). A caption id is its start frame as a string, as list_captions_live
+    reports it: Resolve issues fresh item IDs on every export.
+    """
+    checked = _preflight(timeline, params)
+    if isinstance(checked, dict):
+        return checked
+    node, dry_run, track = checked
+    edits = {key: params.get(key, []) for key in ("replace", "add", "delete")}
+    if not all(isinstance(value, list) for value in edits.values()):
+        return {"success": False, "error": "replace, add and delete must be lists"}
+    template = params.get("template_caption_id", params.get("templateCaptionId"))
+
+    def build(source, output, staging):
+        request = {"operation": "write_captions", "source": str(source), "output": str(output),
+                   "track": track, **edits}
+        if template:
+            request["templateCaptionId"] = template
+        return _codec(node, request)
+
+    def check(readback, patch):
+        actual = _codec(node, {"operation": "inspect_captions", "source": str(readback), "track": track},
+                        "Imported caption readback failed")
+        if _caption_shape(actual.get("captions", [])) != _caption_shape(patch.get("captions", [])):
+            raise RuntimeError("Resolve did not retain the requested caption text or word timing")
+
+    return _revise(resolve, project, timeline, params, safe_dir, dry_run=dry_run, build=build, check=check,
+                   edited_track=track, report={
+                       "verification": "resolve_reexport_caption_readback_and_live_edit_inventory",
+                       "verified_components": ["track_counts", "item_names", "item_bounds", "media_ids",
+                                               "caption_text", "caption_bounds", "word_timing"],
+                       "unverified_components": ["markers", "grades", "fusion_compositions", "audio_content"]})
