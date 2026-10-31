@@ -293,7 +293,8 @@ def write_captions_live(resolve, project, timeline, params, safe_dir):
     """Replace/add/delete caption text and word timing as a verified revision, Resolve open.
 
     Same caption shape as advanced project_db write_captions (timeline frames, words
-    tile each caption). IDs come from list_captions_live on the timeline being edited.
+    tile each caption). A caption id is its start frame as a string, as list_captions_live
+    reports it: Resolve issues fresh item IDs on every export.
     """
     checked = _preflight(timeline, params)
     if isinstance(checked, dict):

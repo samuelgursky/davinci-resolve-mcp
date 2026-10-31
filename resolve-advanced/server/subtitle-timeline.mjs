@@ -112,13 +112,15 @@ function captionItems(track, fps) {
   const elements = [...inner.matchAll(/<Element>\s*<Sm2TiGenerator DbId="([0-9a-f-]{36})">[\s\S]*?<\/Sm2TiGenerator>\s*<\/Element>/gi)];
   // Anything besides plain subtitle generators would be dropped by the rebuild below.
   if (elements.reduce((rest, e) => rest.replace(e[0], ''), inner).trim()) throw new Error('unsupported item on subtitle track');
-  const items = elements.map(([text, id]) => {
+  // Resolve issues fresh DbIds on every export, so a caption's id is its start frame
+  // (captions on a track never overlap); DbIds are only carried in the XML.
+  const items = elements.map(([text, dbId]) => {
     if (tag(text, 'PrettyType') !== 'Subtitle') throw new Error('unsupported item on subtitle track');
     if (/<CompositionTable>/.test(text)) throw new Error('per-caption Fusion compositions are not supported');
     const start = Number(tag(text, 'Start')), duration = Number(tag(text, 'Duration'));
     if (!Number.isSafeInteger(start) || !Number.isSafeInteger(duration)) throw new Error('invalid caption frame columns');
     const blob = Buffer.from(tag(text, 'FieldsBlob'), 'hex');
-    return { text, blob, decoded: { id, ...decodeCaption(blob, { name: xmlUnescape(tag(text, 'Name')), start, end: start + duration, fps }) } };
+    return { text, dbId, blob, decoded: { id: String(start), ...decodeCaption(blob, { name: xmlUnescape(tag(text, 'Name')), start, end: start + duration, fps }) } };
   });
   return { items, field: m, separator: /^\s*/.exec(inner)[0] || '\n' };
 }
@@ -140,7 +142,7 @@ export async function editCaptionTimeline({ source, output, track = 1, add = [],
   const elements = final.map((c) => {
     const s = stagedById.get(c.id);
     if (!s) return byId.get(c.id).text;
-    let text = s.fresh ? template.text.replace(template.decoded.id, c.id) : s.base.text;
+    let text = s.fresh ? template.text.replace(template.dbId, randomUUID()) : s.base.text;
     if (s.fresh) text = text.replace(/<(MarkersBA|RenderCacheBA|ImportExportMetadataBA)>[\s\S]*?<\/\1>/g, '<$1/>');
     text = setTag(text, 'FieldsBlob', s.blob.toString('hex'));
     text = setTag(text, 'Name', xmlEscape(` ${s.caption.text}`));

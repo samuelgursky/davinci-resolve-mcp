@@ -28822,7 +28822,7 @@ def timeline_ai(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
         Same caption shape as advanced project_db write_captions, but with Resolve open:
         replace:[{id,text,start,end,words:[{text,start,end}]}], add:[{text,start,end,words}],
         delete:[id]. text = words joined by spaces; words must tile the caption.
-        IDs come from list_captions_live on the same timeline (imports remap them).
+        id = the caption start frame as a string (Resolve re-mints item IDs per export).
         Native export -> caption codec -> native import as a selected revision;
         Resolve's re-export is decoded and must match text, bounds and word frames.
         Original retained and re-selected on failure. Never patches Project.db.

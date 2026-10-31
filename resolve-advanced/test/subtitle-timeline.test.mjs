@@ -144,8 +144,12 @@ test('replace, add and delete caption text and word timing in an exported DRT', 
     const strip = (c) => ({ text: c.text, start: c.start, end: c.end, words: c.words });
     assert.deepEqual(after.captions.map(strip), result.captions.map(strip));
     assert.deepEqual(after.captions.map((c) => c.text), ['Oh f**k <so> cute', 'new one']);
-    assert.equal(after.captions[0].id, first.id);
+    assert.equal(first.id, '108086', 'live caption ids are start frames, stable across exports');
+    assert.equal(after.captions[0].id, '108086');
     const xml = await (await JSZip.loadAsync(await fs.readFile(output))).file('SeqContainer/22222222-2222-2222-2222-222222222222.xml').async('string');
+    assert.match(xml, /aaaaaaaa-0000-0000-0000-000000000001/);
+    assert.doesNotMatch(xml, /aaaaaaaa-0000-0000-0000-000000000002/);
+    assert.equal(xml.match(/Sm2TiGenerator DbId/g).length, 2);
     assert.match(xml, /<Name> Oh f\*\*k &lt;so&gt; cute<\/Name>/);
     assert.equal(xml.match(/keep-marker/g).length, 1, 'fresh captions must not copy the template markers');
     await assert.rejects(editCaptionTimeline({ source, output: path.join(dir, 'gap.drt'), replace: [{ id: first.id, text: 'a b',
