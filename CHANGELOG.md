@@ -2,6 +2,48 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.18.2 — The rest of the `$` replacement bugs
+
+v4.18.1 fixed `replace()` calls that put user text in with an interpolated
+template string. Its guard only looked for that one form, so calls whose
+replacement was a variable, a function call or a conditional were missed.
+
+### Fixed
+
+- **Splitting, trimming, adding a transition, or adding a clip to a track that
+  already has clips no longer corrupts the track when a clip name contains
+  `$`** (#333, thanks @Dev-next-gen). The rewritten clip went into the track
+  as a replacement string, so `$&` or `` $` `` in a name copied other clips into
+  the track and duplicated them.
+- **`media_ops` `relink_manifest` keeps a `$` in a target path prefix as
+  typed.** Mapping `/old/vol` to `/new/Spot $$ 30s $&` produced
+  `/new/Spot $ 30s /old/vol/...`, a path that does not exist.
+- The same form, now fixed, was also in `assemble_timeline` (the timeline's
+  pool block, which holds its name, when the media extents are rewritten),
+  in the subtitle preset writer (the preset section XML), and in the agent-rule
+  generator (generated doc sections). The other changed calls only insert hex,
+  IDs or numbers; they now use replacer functions too, so a single rule holds
+  everywhere.
+
+### Changed
+
+- The guard test now splits every `replace()` / `replaceAll()` call in
+  `resolve-advanced` and `scripts/` into its arguments, and fails unless the
+  replacement is a function or a literal with no `$` in it. Literals whose
+  `$`-sequences are backreferences (`$1`, `'\\$&'`) are allowed. The
+  `editorial` source-alias rules and the `media_ops` rename rules, where `$1`
+  is part of the feature, are listed by name. Run against the v4.18.1 sources,
+  it reports 25 call sites, including all six that #333 fixed.
+
+### Validation
+
+- Advanced Node suite on Node 20 with a fresh `npm ci`: 1,227 tests, 0 failed.
+  Python suite: 4,295 tests; the only failures are the 4 `source_media_guard`
+  path checks that always fail in a scratch worktree. With #333's fix
+  reverted, its two tests fail. The new relink test
+  fails on the v4.18.1 code with the wrong path shown above.
+- Offline file writers only. No Resolve API behaviour changed.
+
 ## What's New in v4.18.1 — Names with `$` or `\` are written as typed
 
 ### Fixed
