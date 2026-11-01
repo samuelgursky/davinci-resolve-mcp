@@ -2,6 +2,47 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.18.4 — Silent Resolve calls from #336 are on the ledger
+
+No tool behavior changed. Six calls reported on Studio 21.1.2.10 return
+success, or an empty list, without doing the work their names suggest. They
+are now `submit: bug` entries, so `lookup_api_truth` finds them before an
+agent calls them.
+
+### Documentation
+
+- **Timeline.DeleteGaps** returns True and leaves clip starts unchanged.
+- **MediaPool.AddToPhotoAlbum** returns `[]` and the album stays empty.
+  `CreatePhotoAlbumFromPhotos` placed photos in the same session. On Studio
+  19.1.3.7 those photo-album methods are absent from `dir(MediaPool)`.
+- **Timeline.ExportFrame** reports every offset out of range when
+  `GetStartFrame()` and `GetEndFrame()` are both 86400.
+  `TimelineItem.ExportFrame` exported the same frames.
+- **TimelineItem.SetPosition** and **Timeline.MoveItems** return False for
+  every input tried in that session.
+- **TimelineItem.SetLeftOffset** returns True and extends the clip from
+  source media (a start near frame 400 jumped to about -86000). Setting the
+  offset back to 0 does not restore the edit. The entry is marked
+  `destroys_prior_work`. This server only reads `GetLeftOffset`.
+- **Timeline.AddMarker** at relative frame 0 returns False, and so does
+  `AddMarker(StartFrame)`. `AddMarker(200)` returned True. The server
+  already reports `success: false` when the API returns false.
+
+### Validation
+
+- The six symbols are findable through `lookup_api_truth`, and the
+  limitations report was regenerated (43 missing capabilities, 68 bugs).
+- Static checks: API parity, limitations and read/write drift guards, agent
+  rules, undefined names, duplicate definitions, action-list drift, panel
+  docs, tool counts, and release-surface drift.
+- Live Resolve on this machine is Studio 19.1.3.7, project "Untitled
+  Project", no current timeline. `dir(MediaPool)` confirms the photo-album
+  methods are absent. Timeline and TimelineItem methods were not probed.
+  The 21.1.2.10 results are @CaptRauti's report and were not re-measured
+  here.
+- The control-panel guide was reviewed. No navigation or diagnostic card
+  changed, so screenshots were not regenerated.
+
 ## What's New in v4.18.3 — A subtitle clipInfo no longer takes Resolve down
 
 On Studio 21.1.2.10, `AppendToTimeline` with a clipInfo for an imported SRT
