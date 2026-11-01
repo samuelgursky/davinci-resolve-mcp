@@ -20,6 +20,7 @@ for path in (SRC_DIR, PROJECT_DIR):
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 from src.utils.mcp_error_flag import ErrorFlaggingFastMCP
+from src.utils import subtitle_append_guard
 
 from src.utils.app_control import (
     get_app_state,
@@ -679,6 +680,23 @@ def _normalize_record_frame(ci, index, timeline_start_frame=None):
     return start + rf, None
 
 
+def _resolve_version_string():
+    """Connected Resolve version, or None. Called only for a subtitle clipInfo."""
+    try:
+        resolve = get_resolve()
+    except Exception:
+        return None
+    if resolve is None:
+        return None
+    getter = getattr(resolve, "GetVersionString", None)
+    if not callable(getter):
+        return None
+    try:
+        return getter()
+    except Exception:
+        return None
+
+
 def _build_append_clip_info_dict(root, ci, index, timeline_start_frame=None):
     """Build one MediaPool.AppendToTimeline clipInfo map (6 keys per docs line 221).
 
@@ -716,6 +734,16 @@ def _build_append_clip_info_dict(root, ci, index, timeline_start_frame=None):
     mt = ci.get("mediaType", ci.get("media_type"))
     if mt is not None:
         out["mediaType"] = mt
+    if subtitle_append_guard.is_subtitle_item(mp_item):
+        message = subtitle_append_guard.refusal_message(
+            out, _resolve_version_string(), index=index,
+        )
+        if message:
+            return None, {
+                "error": message,
+                "code": "SUBTITLE_APPEND_CRASH",
+                "retryable": False,
+            }
     return out, None
 
 

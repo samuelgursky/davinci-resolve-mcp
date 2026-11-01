@@ -12,7 +12,7 @@ that none exists).
 
 **Verified on:** DaVinci Resolve Studio 21.0.2
 
-**Totals:** 43 missing capabilities, 61 bugs / unreliable behaviors.
+**Totals:** 43 missing capabilities, 62 bugs / unreliable behaviors.
 
 The authoritative source is the runtime-queryable `api_truth` ledger
 (`resolve_control api_truth "<query>"`); this document is generated from
@@ -181,8 +181,8 @@ equivalent, blocking full automation.
 ### Speech recognition engine selection and SRT import
 
 - **Object:** `Timeline`
-- **Behavior:** Timeline.CreateSubtitlesFromAudio(autoCaptionSettings) always uses the built-in Resolve speech recognition engine. There is no API parameter to select an alternative provider (e.g. whisper-cli, Google Speech, AWS Transcribe). The language selection via resolve.AUTO_CAPTION_LANGUAGE_* is the only customization; the engine itself cannot be changed. There is no dedicated subtitle import method. However, MediaPool.ImportMedia(srt) + AppendToTimeline was reported working on Studio 21.0.4.5 (issue #169). Whether that route carries word timing for animated presets on 21.1 has not been verified; SRT contains only cue timing.
-- **Workaround / current handling:** Use Resolve's engine for CreateSubtitlesFromAudio. For external SRT, test ImportMedia + AppendToTimeline on the exact installed build or import through the UI. Use project_db write_captions for explicit word timings with Resolve fully quit; do not assume SRT supplies them.
+- **Behavior:** Timeline.CreateSubtitlesFromAudio(autoCaptionSettings) always uses the built-in Resolve speech recognition engine. There is no API parameter to select an alternative provider (e.g. whisper-cli, Google Speech, AWS Transcribe). The language selection via resolve.AUTO_CAPTION_LANGUAGE_* is the only customization; the engine itself cannot be changed. There is no dedicated subtitle import method. MediaPool.ImportMedia(srt) + AppendToTimeline was reported working on Studio 21.0.4.5 (issue #169). On Studio 21.1.2.10 the clipInfo form of that append aborts Resolve and the plain form places nothing (issue #335). Whether either route carries word timing for animated presets has not been verified; SRT contains only cue timing.
+- **Workaround / current handling:** Use Resolve's engine for CreateSubtitlesFromAudio. For external SRT on 21.1.2, import through the UI. clipInfo append of a subtitle item is refused on 21.1+ (see MediaPool.AppendToTimeline subtitle clipInfo). Use project_db write_captions for explicit word timings with Resolve fully quit; do not assume SRT supplies them.
 - **Tags:** missing-method, subtitle, transcription, speech-recognition, asr
 
 ### Media Pool folder rename
@@ -572,6 +572,15 @@ values, or automation-hostile modal prompts.
 - **Workaround / current handling:** Do not trust a render's subtitle settings from the settings_success boolean. VERIFY the artifact: ffprobe the output for a subtitle stream, check for a sidecar file, or sample frames for burned-in pixels. If subtitles must be burned in, confirm the result before delivering.
 - **Reference:** [issue #123](https://github.com/samuelgursky/davinci-resolve-mcp/issues/123)
 - **Tags:** render, subtitle, silent-failure, unverified-cause, deliver
+
+### MediaPool.AppendToTimeline (subtitle clipInfo)
+
+- **Object:** `MediaPool`
+- **Signature:** `([{clipInfo}]) -> [TimelineItem]`
+- **Behavior:** On Studio 21.1.2.10 (Windows), AppendToTimeline with a clipInfo dict for an imported SRT MediaPoolItem (Type Subtitle) aborts Resolve: assertion at Sm2MpObject.cpp:546, reproduced 2/2. The call hangs, then the process is gone. The plain list form AppendToTimeline([item]) does not crash and places nothing. ImportMedia(srt) + AppendToTimeline was reported working on Studio 21.0.4.5 (issue #169). Which clipInfo field triggers the abort was not isolated. Builds 21.1.0 and 21.1.1 were not measured.
+- **Workaround / current handling:** media_pool append_to_timeline, the granular append_to_timeline, and the other clipInfo builders refuse a Type=Subtitle item on Resolve 21.1 and above, and when the connected version cannot be read, with SUBTITLE_APPEND_CRASH, before AppendToTimeline is called. On a build older than 21.1 the call is still forwarded. Import the SRT through the UI on 21.1.2.
+- **Reference:** [issue #335](https://github.com/samuelgursky/davinci-resolve-mcp/issues/335)
+- **Tags:** crash, subtitle, timeline, silent-failure
 
 ### hasattr() / getattr() on Resolve API objects (attribute fabrication)
 

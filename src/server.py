@@ -63,6 +63,7 @@ from src.utils.resolve211_edits import validate_edit_options, validate_transitio
 from src.utils.cdl import normalize_cdl_payload
 from src.utils.media_paths import media_exists as _media_exists
 from src.utils import archive_guard
+from src.utils import subtitle_append_guard
 from src.utils import typed_api_search
 from src.utils import lut_files
 from src.utils import resolve_writes as _resolve_writes
@@ -3912,6 +3913,68 @@ def _timeline_start_frame(tl) -> Optional[int]:
         return None
 
 
+def _connected_resolve_version():
+    """The connected Resolve version string, or None when it cannot be read.
+
+    Only called once a payload is already known to contain a subtitle clipInfo,
+    so a missing connection is not an excuse to launch Resolve from a test.
+    """
+    try:
+        resolve = get_resolve()
+    except Exception:
+        return None
+    if resolve is None:
+        return None
+    getter = getattr(resolve, "GetVersionString", None)
+    if not callable(getter):
+        return None
+    try:
+        return getter()
+    except Exception:
+        return None
+
+
+def _payload_has_subtitle_clipinfo(payload) -> bool:
+    rows = [payload] if isinstance(payload, dict) else payload
+    if not isinstance(rows, list):
+        return False
+    for row in rows:
+        if isinstance(row, dict) and subtitle_append_guard.is_subtitle_item(row.get("mediaPoolItem")):
+            return True
+    return False
+
+
+def _subtitle_append_block(payload, index=None):
+    """Structured refusal for a subtitle clipInfo that would abort Resolve 21.1.
+
+    None when the payload may be forwarded. Clip objects, the plain
+    AppendToTimeline([item]) form, are not clipInfos and are not refused.
+    The version is read only after a subtitle clipInfo is present, so a
+    normal append does not touch the Resolve connection from here.
+    """
+    if not _payload_has_subtitle_clipinfo(payload):
+        return None
+    message = subtitle_append_guard.refusal_message(
+        payload, _connected_resolve_version(), index=index,
+    )
+    if not message:
+        return None
+    return _err(
+        message,
+        code="SUBTITLE_APPEND_CRASH",
+        category="unsupported",
+        retryable=False,
+        reason=subtitle_append_guard.MEASURED,
+        remediation=(
+            "Do not send a clipInfo for a subtitle MediaPoolItem on Resolve 21.1. "
+            "On Studio 21.1.2.10 that call aborts Resolve. The plain clip_ids form "
+            "does not crash, and on that build it also places nothing. Import the "
+            "SRT in the Resolve UI, or use project_db write_captions with Resolve "
+            "fully quit."
+        ),
+    )
+
+
 def _build_append_clip_info_dict(
     root,
     ci: Dict[str, Any],
@@ -3965,6 +4028,9 @@ def _build_append_clip_info_dict(
     mt = ci.get("mediaType", ci.get("media_type"))
     if mt is not None:
         out["mediaType"] = mt
+    blocked = _subtitle_append_block(out, index=index)
+    if blocked:
+        return None, blocked
     return out, None
 
 
@@ -4512,14 +4578,18 @@ def _append_clip_info_from_timeline_item(
     if src_end_excl is None or src_end_excl <= src_start:
         return None, _err("invalid source range")
     record = int(record_frame) if record_frame is not None else t_start + int(record_frame_offset)
-    return {
+    info = {
         "mediaPoolItem": mpi,
         "startFrame": src_start,
         "endFrame": src_end_excl,
         "recordFrame": record,
         "trackIndex": int(target_track_index),
         "mediaType": int(media_type),
-    }, None
+    }
+    blocked = _subtitle_append_block(info)
+    if blocked:
+        return None, blocked
+    return info, None
 
 
 def _find_appended_timeline_item_summary(
@@ -15603,6 +15673,9 @@ def _compare_timeline_append_readback(before, observed, expected_count: int):
 
 
 def _append_to_timeline_with_verification(proj, mp, append_payload, requested: Dict[str, Any], expected_count: int):
+    blocked = _subtitle_append_block(append_payload)
+    if blocked:
+        return None, None, None, blocked
     raw_result = {"value": None}
     before = _timeline_append_readback_snapshot(proj)
 
@@ -15622,7 +15695,7 @@ def _append_to_timeline_with_verification(proj, mp, append_payload, requested: D
         intent=requested,
         label="media_pool.append_to_timeline",
     )
-    return raw_result["value"], verification, before
+    return raw_result["value"], verification, before, None
 
 
 def _append_to_timeline_verified_operation(requested: Dict[str, Any], verification: Dict[str, Any], before):
@@ -23261,6 +23334,10 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
           record_frame is relative to the current timeline start frame by default;
           pass record_frame_mode="absolute" for raw Resolve recordFrame values.
           Returns timeline_item_id per item.
+          A MediaPoolItem whose Type is Subtitle is refused on Resolve 21.1+
+          (and when the version cannot be read) with SUBTITLE_APPEND_CRASH,
+          before AppendToTimeline. On Studio 21.1.2.10 that clipInfo aborts
+          Resolve (issue #335). Builds older than 21.1 are still forwarded.
         Either form: Resolve answering None/False/[] is APPEND_TO_TIMELINE_FAILED,
           with verified_operation (the timeline readback) kept on the error;
           retryable only when the readback shows nothing was appended.
@@ -23523,13 +23600,15 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
                 "clip_info_count": len(raw),
                 "expected_count": len(built),
             }
-            result, verification, before = _append_to_timeline_with_verification(
+            result, verification, before, blocked = _append_to_timeline_with_verification(
                 proj,
                 mp,
                 built,
                 requested,
                 len(built),
             )
+            if blocked:
+                return blocked
             if not result:
                 return _append_to_timeline_failed(
                     "Failed to append clip_infos to timeline", result, requested, verification, before,
@@ -23561,13 +23640,15 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
             "resolved_clip_count": len(clips),
             "expected_count": len(clips),
         }
-        result, verification, before = _append_to_timeline_with_verification(
+        result, verification, before, blocked = _append_to_timeline_with_verification(
             proj,
             mp,
             clips,
             requested,
             len(clips),
         )
+        if blocked:
+            return blocked
         if not result:
             return _append_to_timeline_failed(
                 "Failed to append clip_ids to timeline", result, requested, verification, before,
