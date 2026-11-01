@@ -686,3 +686,22 @@ test('assemble_project folders: a bin name needing xml escaping produces well-fo
   assert.match(bin, /<Name>R&amp;D<\/Name>/);
   await fs.unlink(out);
 });
+
+test('assemble_project keeps $ sequences in a merged timeline name literal', async () => {
+  // The later archives' pool clips are spliced in with String.prototype.replace,
+  // whose replacement string expands $&, $' and $$.
+  const out = tmp('.drp');
+  const spec = (name) => ({ timelineName: name, media: [{
+    mediaFilePath: '/m/a.mp4', spec: { width: 640, height: 360, frameCount: 480, fps: 24 },
+    cuts: [{ startFrame: 86400, durationFrames: 48 }] }] });
+  await drtTool.handler({ action: 'assemble_project', args: {
+    outputPath: out, targetAppVersion: '21.1',
+    timelines: [spec('R1'), spec("R2 $& $' $$")],
+  }});
+  const zip = await JSZip.loadAsync(await fs.readFile(out));
+  const mp = await zip.file('MediaPool/Master/MpFolder.xml').async('string');
+  const { XMLValidator } = createRequire(import.meta.url)('fast-xml-parser');
+  assert.equal(XMLValidator.validate(mp), true, 'the merged Master folder xml parses');
+  assert.match(mp, /<Name>R2 \$&amp; \$&apos; \$\$<\/Name>/);
+  await fs.unlink(out);
+});
