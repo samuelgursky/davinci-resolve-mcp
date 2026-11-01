@@ -247,7 +247,7 @@ async function assembleTimeline(spec = {}) {
         if (!hit) throw new Error(`assembleTimeline: item markers — no ${kind} clip starting at ${cut.startFrame} on track ${cut.track ?? 1}`);
         const blob = encodeTimelineMarkersBlob(cut.markers);
         const el = `<Element>\n     <Sm2TiItemLockableBlob DbId="${randomUUID()}">\n      <FieldsBlob>${blob.toString('hex')}</FieldsBlob>\n      <BlobOwner>${hit[1]}</BlobOwner>\n      <DbSavedTime>0</DbSavedTime>\n     </Sm2TiItemLockableBlob>\n    </Element>\n   `;
-        pj = pj.replace('</LocableBlobSet>', `${el}</LocableBlobSet>`);
+        pj = pj.replace('</LocableBlobSet>', () => `${el}</LocableBlobSet>`);
       }
       zipIM.file('project.xml', pj);
       buffer = await zipIM.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
@@ -417,7 +417,7 @@ async function assembleTimeline(spec = {}) {
     const setM = pjX.match(/<LocableBlobSet>[\s\S]*?<\/LocableBlobSet>/);
     if (!setM) throw new Error('assembleTimeline: project.xml has no LocableBlobSet to hold markers');
     const el = `<Element>\n     <Sm2SequenceLockableBlob DbId="${randomUUID()}">\n      <FieldsBlob>${blob.toString('hex')}</FieldsBlob>\n      <BlobOwner>${seqIdM}</BlobOwner>\n      <DbSavedTime>0</DbSavedTime>\n     </Sm2SequenceLockableBlob>\n    </Element>\n   `;
-    pjX = pjX.replace('</LocableBlobSet>', `${el}</LocableBlobSet>`);
+    pjX = pjX.replace('</LocableBlobSet>', () => `${el}</LocableBlobSet>`);
     zipM.file('project.xml', pjX);
     buffer = await zipM.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
   }

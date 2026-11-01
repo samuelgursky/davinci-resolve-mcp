@@ -75,17 +75,17 @@ async function placeGenerator(drpInput, opts = {}) {
 
   let gen = fs.readFileSync(snippetPathFor(templateVersion), 'utf8').trim();
   gen = freshDbIds(gen);
-  gen = gen.replace(/<PrettyType>[\s\S]*?<\/PrettyType>/, `<PrettyType>${escapeXml(generatorName)}</PrettyType>`);
-  gen = gen.replace(/<Name>[\s\S]*?<\/Name>/, `<Name>${escapeXml(generatorName)}</Name>`);
-  gen = gen.replace(/<Start>\d+<\/Start>/, `<Start>${startFrame}</Start>`);
-  gen = gen.replace(/<Duration>\d+<\/Duration>/, `<Duration>${durationFrames}</Duration>`);
+  gen = gen.replace(/<PrettyType>[\s\S]*?<\/PrettyType>/, () => `<PrettyType>${escapeXml(generatorName)}</PrettyType>`);
+  gen = gen.replace(/<Name>[\s\S]*?<\/Name>/, () => `<Name>${escapeXml(generatorName)}</Name>`);
+  gen = gen.replace(/<Start>\d+<\/Start>/, () => `<Start>${startFrame}</Start>`);
+  gen = gen.replace(/<Duration>\d+<\/Duration>/, () => `<Duration>${durationFrames}</Duration>`);
   const colorNorm = color != null ? normalizeColor(color) : null;
   if (colorNorm) {
     const blob = solidColorEffectBlob(colorNorm);
     if (!/<EffectFiltersBA\s*\/>|<EffectFiltersBA>\s*<\/EffectFiltersBA>/.test(gen)) {
       throw new Error('placeGenerator: template carries no empty <EffectFiltersBA/> to populate with the colour');
     }
-    gen = gen.replace(/<EffectFiltersBA\s*\/>|<EffectFiltersBA>\s*<\/EffectFiltersBA>/, `<EffectFiltersBA>${blob}</EffectFiltersBA>`);
+    gen = gen.replace(/<EffectFiltersBA\s*\/>|<EffectFiltersBA>\s*<\/EffectFiltersBA>/, () => `<EffectFiltersBA>${blob}</EffectFiltersBA>`);
   }
 
   const { match: vtv, tracks } = getTrackVec(seqXml, 'video');

@@ -72,22 +72,22 @@ async function placeCompound(drpInput, opts = {}) {
   //    the cuts machinery, 0-based frames).
   let inner = fs.readFileSync(T('compound-inner-r19.xml'), 'utf8');
   inner = freshDbIds(inner);
-  inner = inner.replace(/<Sm2SequenceContainer DbId="[^"]+"/, `<Sm2SequenceContainer DbId="${innerContainerId}"`);
-  inner = inner.replace(/<Sequence>[0-9a-f-]{36}<\/Sequence>/g, `<Sequence>${innerSequenceId}</Sequence>`);
+  inner = inner.replace(/<Sm2SequenceContainer DbId="[^"]+"/, () => `<Sm2SequenceContainer DbId="${innerContainerId}"`);
+  inner = inner.replace(/<Sequence>[0-9a-f-]{36}<\/Sequence>/g, () => `<Sequence>${innerSequenceId}</Sequence>`);
   inner = inner.replace(/<Items>[\s\S]*?<\/Items>/g, '<Items/>');
   zip.file(`SeqContainer/${innerContainerId}.xml`, inner);
 
   // 2) Pool compound element: fresh identities + blob SeqRef patch.
   let pool = fs.readFileSync(T('compound-pool-r19.xml'), 'utf8');
-  pool = pool.replace(/<Sm2MpCompoundClip DbId="[^"]+"/, `<Sm2MpCompoundClip DbId="${compoundId}"`);
-  pool = pool.replace(/<Sm2Sequence DbId="[^"]+"/, `<Sm2Sequence DbId="${innerSequenceId}"`);
-  pool = pool.replace(/<UniqueSequenceId>[^<]*<\/UniqueSequenceId>/, `<UniqueSequenceId>${crypto.randomUUID()}</UniqueSequenceId>`);
-  pool = pool.replace(/<UniqueMediaPoolItemId>[^<]*<\/UniqueMediaPoolItemId>/, `<UniqueMediaPoolItemId>${crypto.randomUUID()}</UniqueMediaPoolItemId>`);
-  pool = pool.replace(/<SmPTZRPreset DbId="[^"]+"/, `<SmPTZRPreset DbId="${crypto.randomUUID()}"`);
+  pool = pool.replace(/<Sm2MpCompoundClip DbId="[^"]+"/, () => `<Sm2MpCompoundClip DbId="${compoundId}"`);
+  pool = pool.replace(/<Sm2Sequence DbId="[^"]+"/, () => `<Sm2Sequence DbId="${innerSequenceId}"`);
+  pool = pool.replace(/<UniqueSequenceId>[^<]*<\/UniqueSequenceId>/, () => `<UniqueSequenceId>${crypto.randomUUID()}</UniqueSequenceId>`);
+  pool = pool.replace(/<UniqueMediaPoolItemId>[^<]*<\/UniqueMediaPoolItemId>/, () => `<UniqueMediaPoolItemId>${crypto.randomUUID()}</UniqueMediaPoolItemId>`);
+  pool = pool.replace(/<SmPTZRPreset DbId="[^"]+"/, () => `<SmPTZRPreset DbId="${crypto.randomUUID()}"`);
   // The embedded sequence's <Parent> points BACK at the compound's own id —
   // the reference sweep found it as the one un-rewired link (a dangling
   // Parent is presumably as fatal as the dangling MpFolder/SeqRef were).
-  pool = pool.replace(/<Parent>[0-9a-f-]{36}<\/Parent>/, `<Parent>${compoundId}</Parent>`);
+  pool = pool.replace(/<Parent>[0-9a-f-]{36}<\/Parent>/, () => `<Parent>${compoundId}</Parent>`);
   {
     const fbM = pool.match(/(<Sm2Sequence DbId="[^"]+">\s*<FieldsBlob>)([0-9a-fA-F]+)(<\/FieldsBlob>)/);
     if (!fbM) throw new Error('placeCompound: embedded Sm2Sequence FieldsBlob not found');
@@ -98,12 +98,12 @@ async function placeCompound(drpInput, opts = {}) {
     const patched = encodeKeyedDict({ hdr: dict.hdr, entries: dict.entries }).toString('hex');
     pool = pool.replace(fbM[0], `${fbM[1]}${patched}${fbM[3]}`);
   }
-  pool = pool.replace(/<Name>[^<]*<\/Name>/, `<Name>${escapeXml(name)}</Name>`);
+  pool = pool.replace(/<Name>[^<]*<\/Name>/, () => `<Name>${escapeXml(name)}</Name>`);
   // MediaExtents = [startSec, durationSec] LE doubles; inner starts at 0.
   const me = Buffer.alloc(16);
   me.writeDoubleLE(0, 0);
   me.writeDoubleLE(durationFrames / fps, 8);
-  pool = pool.replace(/<MediaExtents>[0-9a-fA-F]*<\/MediaExtents>/, `<MediaExtents>${me.toString('hex')}</MediaExtents>`);
+  pool = pool.replace(/<MediaExtents>[0-9a-fA-F]*<\/MediaExtents>/, () => `<MediaExtents>${me.toString('hex')}</MediaExtents>`);
   // Attach to the primary MediaPool folder — and point the element's
   // <MpFolder> at THAT folder's DbId (the template's value references the
   // harvest project's folder; a dangling folder ref CRASHES Resolve on
@@ -112,22 +112,22 @@ async function placeCompound(drpInput, opts = {}) {
   let mpXml = await zip.file(mpPath).async('string');
   const folderId = (mpXml.match(/<Sm2MpFolder DbId="([^"]+)"/) || [])[1];
   if (!folderId) throw new Error('placeCompound: target MpFolder has no Sm2MpFolder DbId');
-  pool = pool.replace(/<MpFolder>[0-9a-f-]{36}<\/MpFolder>/, `<MpFolder>${folderId}</MpFolder>`);
-  mpXml = mpXml.replace('</MediaVec>', `${pool}\n  </MediaVec>`);
+  pool = pool.replace(/<MpFolder>[0-9a-f-]{36}<\/MpFolder>/, () => `<MpFolder>${folderId}</MpFolder>`);
+  mpXml = mpXml.replace('</MediaVec>', () => `${pool}\n  </MediaVec>`);
   zip.file(mpPath, mpXml);
 
   // 3) Parent item: template clone → fresh id, name, placement, MediaRef,
   //    identity timemap over the inner content ((frames − 0.5)/fps, measured).
   let item = fs.readFileSync(T('compound-item-r19.xml'), 'utf8').trim();
   item = freshDbIds(item);
-  item = item.replace(/<Name>[^<]*<\/Name>/, `<Name>${escapeXml(name)}</Name>`);
-  item = item.replace(/<Start>\d+<\/Start>/, `<Start>${startFrame}</Start>`);
-  item = item.replace(/<Duration>\d+<\/Duration>/, `<Duration>${durationFrames}</Duration>`);
-  item = item.replace(/<MediaRef>[0-9a-f-]{36}<\/MediaRef>/, `<MediaRef>${compoundId}</MediaRef>`);
+  item = item.replace(/<Name>[^<]*<\/Name>/, () => `<Name>${escapeXml(name)}</Name>`);
+  item = item.replace(/<Start>\d+<\/Start>/, () => `<Start>${startFrame}</Start>`);
+  item = item.replace(/<Duration>\d+<\/Duration>/, () => `<Duration>${durationFrames}</Duration>`);
+  item = item.replace(/<MediaRef>[0-9a-f-]{36}<\/MediaRef>/, () => `<MediaRef>${compoundId}</MediaRef>`);
   const tm = Buffer.alloc(9);
   tm.writeUInt8(0x02, 0);
   tm.writeDoubleBE((durationFrames - 0.5) / fps, 1);
-  item = item.replace(/<MediaTimemapBA>[0-9a-fA-F]*<\/MediaTimemapBA>/, `<MediaTimemapBA>${tm.toString('hex')}</MediaTimemapBA>`);
+  item = item.replace(/<MediaTimemapBA>[0-9a-fA-F]*<\/MediaTimemapBA>/, () => `<MediaTimemapBA>${tm.toString('hex')}</MediaTimemapBA>`);
 
   const { match: vec, tracks } = getTrackVec(parentXml, 'video');
   if (track > tracks.length) throw new Error(`placeCompound: parent video track ${track} does not exist (${tracks.length})`);

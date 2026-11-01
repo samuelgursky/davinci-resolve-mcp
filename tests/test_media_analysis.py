@@ -2174,6 +2174,20 @@ class MediaAnalysisPlanningTests(unittest.TestCase):
         self.assertFalse(scene["changed"])
         self.assertEqual(scene["reason"], "preserved_existing_fill_empty_field")
 
+    def test_publish_metadata_merge_keeps_backslashes_in_new_analysis_literally(self):
+        # The owned block used to be a re.sub replacement string, so a Windows
+        # path raised "bad escape \F" and "\t" turned into a tab.
+        new_text = "Source: D:\\Footage\\day1\\take\\1.mov, group \\1, tab \\t"
+        comments = _media_analysis_merge_metadata_field(
+            "Comments",
+            "Assistant note\n\n[DaVinci Resolve MCP Analysis]\nold\n[/DaVinci Resolve MCP Analysis]",
+            new_text,
+            {},
+        )
+        self.assertTrue(comments["changed"])
+        self.assertIn(new_text, comments["value"])
+        self.assertNotIn("old", comments["value"])
+
     def test_publish_metadata_provenance_uses_namespaced_third_party_keys(self):
         provenance = _media_analysis_provenance_metadata(
             {

@@ -96,9 +96,9 @@ async function placeFusionTitle(drpInput, opts = {}) {
     throw new Error('placeFusionTitle: template is not a Fusion Title clip');
   }
   clip = freshDbIds(clip);
-  clip = clip.replace(/<Start>\d+<\/Start>/, `<Start>${startFrame}</Start>`);
-  clip = clip.replace(/<Duration>\d+<\/Duration>/, `<Duration>${durationFrames}</Duration>`);
-  if (name) clip = clip.replace(/<Name>[\s\S]*?<\/Name>/, `<Name>${escapeXml(name)}</Name>`);
+  clip = clip.replace(/<Start>\d+<\/Start>/, () => `<Start>${startFrame}</Start>`);
+  clip = clip.replace(/<Duration>\d+<\/Duration>/, () => `<Duration>${durationFrames}</Duration>`);
+  if (name) clip = clip.replace(/<Name>[\s\S]*?<\/Name>/, () => `<Name>${escapeXml(name)}</Name>`);
   const titleInputs = { text, font, style, size, vJustify, hJustify, color };
   if (Object.values(titleInputs).some((v) => v !== undefined && v !== null)) {
     const m = clip.match(/<CompositionBA>([0-9a-fA-F]*)<\/CompositionBA>/);

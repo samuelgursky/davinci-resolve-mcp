@@ -13357,7 +13357,9 @@ def _media_analysis_replace_owned_block(existing: Any, body: Any) -> str:
         + re.escape(_MCP_METADATA_BLOCK_END)
     )
     if re.search(pattern, existing_text, flags=re.DOTALL):
-        return re.sub(pattern, block, existing_text, flags=re.DOTALL).strip()
+        # A function replacement inserts the block literally: as a string, a
+        # backslash in the analysis text (a Windows path) is read as an escape.
+        return re.sub(pattern, lambda _match: block, existing_text, flags=re.DOTALL).strip()
     return f"{existing_text}\n\n{block}".strip() if existing_text else block
 
 

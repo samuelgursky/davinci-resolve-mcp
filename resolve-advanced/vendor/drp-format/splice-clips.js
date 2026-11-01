@@ -37,10 +37,10 @@ function clipDuration(clipXml) {
   return m ? parseInt(m[1], 10) : null;
 }
 function setClipStart(clipXml, v) {
-  return clipXml.replace(/<Start>\d+<\/Start>/, `<Start>${v}</Start>`);
+  return clipXml.replace(/<Start>\d+<\/Start>/, () => `<Start>${v}</Start>`);
 }
 function setClipDuration(clipXml, v) {
-  return clipXml.replace(/<Duration>\d+<\/Duration>/, `<Duration>${v}</Duration>`);
+  return clipXml.replace(/<Duration>\d+<\/Duration>/, () => `<Duration>${v}</Duration>`);
 }
 // The source IN-point lives in <In> as `<framePos>|<LE-double of framePos*0.001>`, where framePos
 // is in TIMELINE frames (verified live: Resolve appended a clip with source-in 600 media-frames @29.97
@@ -143,7 +143,7 @@ async function moveClip(drpInput, opts = {}) {
   // Optionally retime.
   if (toStart !== undefined && toStart !== null) {
     if (!Number.isInteger(toStart)) throw new TypeError('moveClip: toStart must be an integer');
-    clip = clip.replace(/<Start>\d+<\/Start>/, `<Start>${toStart}</Start>`);
+    clip = clip.replace(/<Start>\d+<\/Start>/, () => `<Start>${toStart}</Start>`);
   }
 
   // Grow to the destination track with empty clones, then insert.

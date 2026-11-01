@@ -94,9 +94,9 @@ async function placeSubtitles(drpInput, opts = {}) {
     '    <UserDefinedName/>\n    <LayersVec/>\n   </Sm2TiTrack>\n  </Element>\n ';
   let xml;
   if (/<SubtitleTrackVec\/>/.test(seqXml)) {
-    xml = seqXml.replace('<SubtitleTrackVec/>', `<SubtitleTrackVec>${track}</SubtitleTrackVec>`);
+    xml = seqXml.replace('<SubtitleTrackVec/>', () => `<SubtitleTrackVec>${track}</SubtitleTrackVec>`);
   } else if (/<SubtitleTrackVec>/.test(seqXml)) {
-    xml = seqXml.replace('</SubtitleTrackVec>', `${track}</SubtitleTrackVec>`);
+    xml = seqXml.replace('</SubtitleTrackVec>', () => `${track}</SubtitleTrackVec>`);
   } else {
     throw new Error('placeSubtitles: timeline has no SubtitleTrackVec');
   }

@@ -89,7 +89,7 @@ function getItemsInner(trackElement) {
 function setItemsInner(trackElement, inner) {
   const body = inner && inner.trim() ? inner : null;
   if (/<Items\s*\/>/.test(trackElement)) {
-    return body ? trackElement.replace(/<Items\s*\/>/, `<Items>${body}</Items>`) : trackElement;
+    return body ? trackElement.replace(/<Items\s*\/>/, () => `<Items>${body}</Items>`) : trackElement;
   }
   return trackElement.replace(/<Items>[\s\S]*?<\/Items>/, body ? `<Items>${body}</Items>` : '<Items/>');
 }

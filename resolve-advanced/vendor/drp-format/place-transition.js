@@ -115,9 +115,9 @@ async function placeTransition(drpInput, opts = {}) {
   let trans = fs.readFileSync(trackType === 'audio' ? AUDIO_TEMPLATE_PATH : TEMPLATE_PATH, 'utf8').trim();
   trans = freshDbIds(trans);
   if (type === 'wipe') {
-    trans = trans.replace(/<FieldsBlob>[0-9a-fA-F]*<\/FieldsBlob>/, `<FieldsBlob>${WIPE_FIELDS_BLOB}</FieldsBlob>`);
+    trans = trans.replace(/<FieldsBlob>[0-9a-fA-F]*<\/FieldsBlob>/, () => `<FieldsBlob>${WIPE_FIELDS_BLOB}</FieldsBlob>`);
   } else if (STYLE_PRETTY_TYPES[type]) {
-    trans = trans.replace(/<PrettyType>Cross Dissolve<\/PrettyType>/, `<PrettyType>${STYLE_PRETTY_TYPES[type]}</PrettyType>`);
+    trans = trans.replace(/<PrettyType>Cross Dissolve<\/PrettyType>/, () => `<PrettyType>${STYLE_PRETTY_TYPES[type]}</PrettyType>`);
   }
   // Span geometry follows <Start>/<Duration>, NOT AlignmentType (the E61
   // harvest of Resolve's own EDL import carries AlignmentType 2 with the
@@ -132,8 +132,8 @@ async function placeTransition(drpInput, opts = {}) {
     }
   }
   const start = spanStart !== undefined ? spanStart : atFrame - Math.floor(durationFrames / 2);
-  trans = trans.replace(/<Start>\d+<\/Start>/, `<Start>${start}</Start>`);
-  trans = trans.replace(/<Duration>\d+<\/Duration>/, `<Duration>${durationFrames}</Duration>`);
+  trans = trans.replace(/<Start>\d+<\/Start>/, () => `<Start>${start}</Start>`);
+  trans = trans.replace(/<Duration>\d+<\/Duration>/, () => `<Duration>${durationFrames}</Duration>`);
   const transitionDbId = (trans.match(/<Sm2TiTransition DbId="([^"]+)"/) || [])[1] || null;
 
   // Insert the transition <Element> immediately after the left clip's <Element> in <Items>.
