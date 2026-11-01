@@ -137,7 +137,7 @@ async function placeTransition(drpInput, opts = {}) {
   const transitionDbId = (trans.match(/<Sm2TiTransition DbId="([^"]+)"/) || [])[1] || null;
 
   // Insert the transition <Element> immediately after the left clip's <Element> in <Items>.
-  const newItems = items.replace(clips[leftIdx], `${clips[leftIdx]}${trans}`);
+  const newItems = items.replace(clips[leftIdx], () => `${clips[leftIdx]}${trans}`);
   tracks[track - 1] = setItemsInner(tracks[track - 1], newItems);
 
   const xml = replaceTrackVec(seqXml, trackType, vec, tracks);

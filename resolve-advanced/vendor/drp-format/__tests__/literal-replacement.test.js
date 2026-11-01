@@ -16,6 +16,8 @@ const { createEmptyProject } = require('../author-project');
 const { placeSubtitles } = require('../place-subtitles');
 const { placeGenerator } = require('../place-generator');
 const { placeFusionTitle } = require('../place-fusion-title');
+const { splitClip, trimClip, trimClipHead } = require('../splice-clips');
+const { placeTransition } = require('../place-transition');
 
 const ROOT = path.resolve(__dirname, '..', '..', '..');
 const TRICKY = "Spot $$ 30s $& $' $` end";
@@ -92,4 +94,35 @@ test('placeFusionTitle keeps $-sequences in the clip name', async () => {
   const { buffer, startFrame } = await createEmptyProject({ timelineName: 'Title' });
   const res = await placeFusionTitle(buffer, { trackIndex: 2, startFrame, durationFrames: 24, name: TRICKY });
   assert.ok((await sequenceXml(res.buffer)).includes(`<Name>${escapeXml(TRICKY)}</Name>`));
+});
+
+// A second clip on a track goes through the populated-track branch of
+// setItemsInner, and splitClip/placeTransition rewrite the clip in place. A
+// string replacement there copies the matched <Items> block ($&) and the text
+// around it ($`, $') into the track, duplicating clips.
+const nameCount = (xml) => xml.split(`<Name>${escapeXml(TRICKY)}</Name>`).length - 1;
+
+async function titledTrack() {
+  const { buffer, startFrame } = await createEmptyProject({ timelineName: 'Track' });
+  const first = await placeFusionTitle(buffer, { trackIndex: 2, startFrame, durationFrames: 24, name: TRICKY });
+  const second = await placeFusionTitle(first.buffer, { trackIndex: 2, startFrame: startFrame + 24, durationFrames: 24, name: 'Next' });
+  return { buffer: second.buffer, startFrame };
+}
+
+test('a clip added to a populated track leaves the clip already there intact', async () => {
+  const xml = await sequenceXml((await titledTrack()).buffer);
+  assert.strictEqual(nameCount(xml), 1);
+  assert.strictEqual(xml.split('<Name>Next</Name>').length - 1, 1);
+});
+
+test('splitClip, trimClip, trimClipHead and placeTransition keep $-sequences in the clip name', async () => {
+  const { buffer, startFrame } = await titledTrack();
+  for (const trim of [trimClip, trimClipHead]) {
+    const res = await trim(buffer, { track: 2, clipIndex: 0, newDuration: 12, frames: 6, ripple: true });
+    assert.strictEqual(nameCount(await sequenceXml(res.buffer)), 1);
+  }
+  const split = await splitClip(buffer, { track: 2, at: startFrame + 12 });
+  assert.strictEqual(nameCount(await sequenceXml(split.buffer)), 2);
+  const res = await placeTransition(buffer, { track: 2, atFrame: startFrame + 24 });
+  assert.strictEqual(nameCount(await sequenceXml(res.buffer)), 1);
 });
