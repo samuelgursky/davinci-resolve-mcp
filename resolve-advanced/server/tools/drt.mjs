@@ -486,7 +486,7 @@ export const drtTool = {
         // Children live INSIDE <MediaVec> — an element appended after its
         // close parses fine and is silently invisible (measured: the whole
         // REEL_02 subtree vanished while every id chain checked out).
-        mpXml = mpXml.replace('</MediaVec>', `${tlNew}\n</MediaVec>`);
+        mpXml = mpXml.replace('</MediaVec>', () => `${tlNew}\n</MediaVec>`);
         for (const el of mediaEls) {
           const id = el.match(/DbId="([^"]+)"/)[1];
           if (!mpXml.includes(`DbId="${id}"`)) mpXml = mpXml.replace('</MediaVec>', `${el}\n</MediaVec>`);
