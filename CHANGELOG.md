@@ -22,8 +22,8 @@ agent calls them.
   every input tried in that session.
 - **TimelineItem.SetLeftOffset** returns True and extends the clip from
   source media (a start near frame 400 jumped to about -86000). Setting the
-  offset back to 0 does not restore the edit. The entry is marked
-  `destroys_prior_work`. This server only reads `GetLeftOffset`.
+  offset back to 0 does not restore the edit. This server only reads
+  `GetLeftOffset`, so the ledger records the fact without a refusal gate.
 - **Timeline.AddMarker** at relative frame 0 returns False, and so does
   `AddMarker(StartFrame)`. `AddMarker(200)` returned True. The server
   already reports `success: false` when the API returns false.

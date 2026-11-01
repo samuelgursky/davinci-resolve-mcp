@@ -83,7 +83,10 @@ class LookupTest(unittest.TestCase):
             entry for entry in API_TRUTH
             if entry["symbol"] == "TimelineItem.SetLeftOffset"
         )
-        self.assertTrue(offset.get("destroys_prior_work"))
+        # The flag refuses a mapped action. Nothing calls SetLeftOffset, and
+        # the 21.1.2 result was not re-measured, so the fact stays in the
+        # ledger without a refusal that can never fire.
+        self.assertNotIn("destroys_prior_work", offset)
 
     def test_entries_well_formed(self):
         for e in API_TRUTH:
