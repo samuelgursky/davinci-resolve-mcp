@@ -475,7 +475,7 @@ export const drtTool = {
           const seqRef = dict.entries.find((e) => e.key === 'SeqRef');
           if (seqRef && remap.has(String(seqRef.value))) {
             seqRef.value = remap.get(String(seqRef.value));
-            tlNew = tlNew.replace(fbM[0], `${fbM[1]}${encodeKeyedDict({ hdr: dict.hdr, entries: dict.entries }).toString('hex')}${fbM[3]}`);
+            tlNew = tlNew.replace(fbM[0], () => `${fbM[1]}${encodeKeyedDict({ hdr: dict.hdr, entries: dict.entries }).toString('hex')}${fbM[3]}`);
           }
         }
         for (const [n, xml] of Object.entries(containers)) {

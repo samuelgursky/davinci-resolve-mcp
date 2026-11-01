@@ -42,7 +42,7 @@ export async function applyLut(ref, opts = {}) {
   const xml = ref.content != null ? ref.content : await fs.readFile(ref.drxPath, 'utf8');
   const bodyHex = extractBodyHex(xml);
   const newBodyHex = await injectNodeLut(bodyHex, nodeIndex, { lutPath: opts.lutPath, slotMeta });
-  const newXml = xml.replace(BODY_RE, `<Body>${newBodyHex}</Body>`);
+  const newXml = xml.replace(BODY_RE, () => `<Body>${newBodyHex}</Body>`);
 
   // ROUND-TRIP ASSERT: decode the patched grade and confirm the LUT ref survives.
   const parsed = await drxParser().parseDRXContent(newXml);

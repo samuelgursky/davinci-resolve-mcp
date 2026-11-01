@@ -88,7 +88,7 @@ function expandSynonyms(text, synonyms) {
       const regex = new RegExp(`\\b${alt}\\b`, 'gi');
       if (regex.test(expanded)) {
         // Don't replace, just note the canonical form
-        expanded = expanded.replace(regex, canonical);
+        expanded = expanded.replace(regex, () => canonical);
       }
     }
   }

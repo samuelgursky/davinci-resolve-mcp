@@ -96,7 +96,7 @@ async function placeCompound(drpInput, opts = {}) {
     if (!seqRef) throw new Error('placeCompound: embedded blob has no SeqRef entry — schema drift, refusing to author a crasher');
     seqRef.value = innerContainerId;
     const patched = encodeKeyedDict({ hdr: dict.hdr, entries: dict.entries }).toString('hex');
-    pool = pool.replace(fbM[0], `${fbM[1]}${patched}${fbM[3]}`);
+    pool = pool.replace(fbM[0], () => `${fbM[1]}${patched}${fbM[3]}`);
   }
   pool = pool.replace(/<Name>[^<]*<\/Name>/, () => `<Name>${escapeXml(name)}</Name>`);
   // MediaExtents = [startSec, durationSec] LE doubles; inner starts at 0.

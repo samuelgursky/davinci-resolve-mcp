@@ -438,7 +438,7 @@ async function assembleTimeline(spec = {}) {
     const me = Buffer.alloc(16);
     me.writeDoubleLE(originFrame / 24, 0);
     me.writeDoubleLE((maxEnd - originFrame) / 24, 8);
-    mpF = mpF.replace(tlBlock, tlBlock.replace(meM[0], `<MediaExtents>${me.toString('hex')}</MediaExtents>`));
+    mpF = mpF.replace(tlBlock, () => tlBlock.replace(meM[0], () => `<MediaExtents>${me.toString('hex')}</MediaExtents>`));
     zipF.file(mpP, mpF);
     buffer = await zipF.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
   }

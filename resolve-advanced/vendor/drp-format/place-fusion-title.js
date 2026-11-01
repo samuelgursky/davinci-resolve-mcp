@@ -103,7 +103,7 @@ async function placeFusionTitle(drpInput, opts = {}) {
   if (Object.values(titleInputs).some((v) => v !== undefined && v !== null)) {
     const m = clip.match(/<CompositionBA>([0-9a-fA-F]*)<\/CompositionBA>/);
     if (!m || !m[1]) throw new Error('placeFusionTitle: template has no CompositionBA to style');
-    clip = clip.replace(m[0], `<CompositionBA>${setTitleInputs(m[1], titleInputs)}</CompositionBA>`);
+    clip = clip.replace(m[0], () => `<CompositionBA>${setTitleInputs(m[1], titleInputs)}</CompositionBA>`);
   }
 
   // Locate VideoTrackVec and split into track elements.

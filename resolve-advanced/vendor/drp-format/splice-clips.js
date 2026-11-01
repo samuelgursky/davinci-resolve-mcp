@@ -57,8 +57,8 @@ function clipIn(clipXml) {
 }
 function setClipIn(clipXml, framePos) {
   const enc = `<In>${encodeSourceIn(framePos)}</In>`;
-  if (/<In\s*\/>/.test(clipXml)) return clipXml.replace(/<In\s*\/>/, enc);
-  if (/<In>[^<]*<\/In>/.test(clipXml)) return clipXml.replace(/<In>[^<]*<\/In>/, enc);
+  if (/<In\s*\/>/.test(clipXml)) return clipXml.replace(/<In\s*\/>/, () => enc);
+  if (/<In>[^<]*<\/In>/.test(clipXml)) return clipXml.replace(/<In>[^<]*<\/In>/, () => enc);
   return clipXml; // no In element to set
 }
 // A FROZEN clip carries an EMPTY <In/> (harvested live from an EDL M2 000.0

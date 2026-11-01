@@ -149,7 +149,7 @@ function emitBlock(relPath, begin, end, block) {
   const section = `${begin}\n${block}\n${end}`;
   let next;
   if (orig.includes(begin) && orig.includes(end)) {
-    next = orig.replace(new RegExp(`${begin}[\\s\\S]*?${end}`), section);
+    next = orig.replace(new RegExp(`${begin}[\\s\\S]*?${end}`), () => section);
   } else {
     next = (orig.trimEnd() + '\n\n' + section + '\n').replace(/^\n+/, '');
   }

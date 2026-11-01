@@ -61,15 +61,15 @@ export async function editSubtitleTimeline({ source, output, track = 1, inputs =
       .filter(m => m.decoded.templateId === template_id);
     if (matches.length !== 1) throw new Error('Native title reference must contain exactly one matching composition');
     const scaffold = before ?? holder(await fs.readFile(new URL('../assets/lollipop-track.xml', import.meta.url), 'utf8'));
-    chosen = { ...matches[0], text: scaffold.text.replace(scaffold.hex, matches[0].hex) };
+    chosen = { ...matches[0], text: scaffold.text.replace(scaffold.hex, () => matches[0].hex) };
   }
   if (!chosen) throw new Error('No animation preset: supply a native preset_reference DRT or apply Word Highlight through the live Effects UI');
   const patched = Object.keys(parsed.inputs).length
     ? setPresetInputs(Buffer.from(chosen.hex, 'hex'), parsed.inputs) : Buffer.from(chosen.hex, 'hex');
-  const section = freshIds(chosen.text.replace(chosen.hex, patched.toString('hex')));
+  const section = freshIds(chosen.text.replace(chosen.hex, () => patched.toString('hex')));
   let text;
-  if (before) text = target.text.replace(before.text, section);
-  else if (/<FusionCompHolderItems\s*\/>/.test(target.text)) text = target.text.replace(/<FusionCompHolderItems\s*\/>/, section);
+  if (before) text = target.text.replace(before.text, () => section);
+  else if (/<FusionCompHolderItems\s*\/>/.test(target.text)) text = target.text.replace(/<FusionCompHolderItems\s*\/>/, () => section);
   else throw new Error('Unsupported track: missing FusionCompHolderItems field');
   const xml = exported.xml.slice(0, target.offset) + text + exported.xml.slice(target.offset + target.text.length);
   // Resolve remaps timeline identity on import. Keep cross-entry sequence
@@ -142,7 +142,7 @@ export async function editCaptionTimeline({ source, output, track = 1, add = [],
   const elements = final.map((c) => {
     const s = stagedById.get(c.id);
     if (!s) return byId.get(c.id).text;
-    let text = s.fresh ? template.text.replace(template.dbId, randomUUID()) : s.base.text;
+    let text = s.fresh ? template.text.replace(template.dbId, () => randomUUID()) : s.base.text;
     if (s.fresh) text = text.replace(/<(MarkersBA|RenderCacheBA|ImportExportMetadataBA)>[\s\S]*?<\/\1>/g, '<$1/>');
     text = setTag(text, 'FieldsBlob', s.blob.toString('hex'));
     text = setTag(text, 'Name', xmlEscape(` ${s.caption.text}`));

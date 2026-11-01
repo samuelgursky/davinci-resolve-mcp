@@ -70,7 +70,7 @@ function restampVersions(xmlStr, src, target) {
   return xmlStr
     .split(`DbAppVer="${src.dbAppVer}"`).join(`DbAppVer="${target.dbAppVer}"`)
     .split(`DbPrjVer="${src.dbPrjVer}"`).join(`DbPrjVer="${target.dbPrjVer}"`)
-    .replace(PROJECT_VERSION_RE, `<ProjectVersion>${target.dbPrjVer}</ProjectVersion>`);
+    .replace(PROJECT_VERSION_RE, () => `<ProjectVersion>${target.dbPrjVer}</ProjectVersion>`);
 }
 
 /**

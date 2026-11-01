@@ -844,7 +844,7 @@ export const drxTool = {
       });
       // Splice the new Body into the ORIGINAL envelope (byte-lossless outside the
       // position varints — labels, keyframes, OFX, still metadata all pass through).
-      const out = xml.replace(m[0], `<Body>${r.bodyHex}</Body>`);
+      const out = xml.replace(m[0], () => `<Body>${r.bodyHex}</Body>`);
       // Guard: the rewrite must not change the node count (silent-corruption check).
       const reparsed = await drxParser().parseDRXContent(out);
       if ((reparsed.nodes || []).length !== r.nodeCount) {
