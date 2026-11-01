@@ -2,6 +2,45 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.18.3 — A subtitle clipInfo no longer takes Resolve down
+
+On Studio 21.1.2.10, `AppendToTimeline` with a clipInfo for an imported SRT
+aborts Resolve. The clipInfo builders now refuse that payload before the call.
+
+### Fixed
+
+- **A subtitle clipInfo is refused on Resolve 21.1+** (#335, thanks
+  @blacksky3810). `media_pool append_to_timeline` and the other clipInfo
+  builders return `SUBTITLE_APPEND_CRASH` instead of forwarding the call.
+  On Studio 21.1.2.10 that call aborts Resolve (`Sm2MpObject.cpp:546`). The
+  plain `clip_ids` form is unchanged: it does not crash, and on that build it
+  also places nothing. Builds older than 21.1 still forward the clipInfo;
+  that route was reported working on Studio 21.0.4.5 (#169). An unreadable
+  version is refused too.
+- **An allowed media root of `/` contains its files** (#334, thanks
+  @Dev-next-gen). The path check built the prefix as `root + separator`, so
+  `/` became `//` and a Windows drive root doubled its separator. Every clip
+  was then reported outside the allowed roots.
+
+### Documentation
+
+- The SRT-import `api_truth` entry now records the 21.1.2 crash and the
+  silent plain-form no-op, and the limitations report was regenerated.
+
+### Validation
+
+- Focused unit tests: the 21.1.2 clipInfo never reaches `AppendToTimeline`,
+  an unreadable version is refused, 21.0.4.5 still forwards, a video clipInfo
+  still forwards, and the granular builder returns the same code.
+- Static checks: API parity, limitations and read/write drift guards, agent
+  rules, undefined names, duplicate definitions, action-list drift, panel
+  docs, tool counts, and release-surface drift.
+- Live Resolve on this machine is Studio 19.1.3.7. The refusal applies at
+  21.1 and above, so it was not exercised against the open project. The
+  21.1.2 crash was not reproduced here.
+- Control-panel guide reviewed. No panel navigation or visible UI changed,
+  so screenshots were not regenerated.
+
 ## What's New in v4.18.2 — The rest of the `$` replacement bugs
 
 v4.18.1 fixed `replace()` calls that put user text in with an interpolated
