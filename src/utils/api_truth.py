@@ -1758,18 +1758,47 @@ API_TRUTH: List[Dict[str, Any]] = [
                    "The language selection via resolve.AUTO_CAPTION_LANGUAGE_* "
                    "is the only customization; the engine itself cannot be "
                    "changed. There is no dedicated subtitle import method. "
-                   "However, MediaPool.ImportMedia(srt) + AppendToTimeline was "
-                   "reported working on Studio 21.0.4.5 (issue #169). Whether "
-                   "that route carries word timing for animated presets on "
-                   "21.1 has not been verified; SRT contains only cue timing.",
+                   "MediaPool.ImportMedia(srt) + AppendToTimeline was reported "
+                   "working on Studio 21.0.4.5 (issue #169). On Studio 21.1.2.10 "
+                   "the clipInfo form of that append aborts Resolve and the plain "
+                   "form places nothing (issue #335). Whether either route carries "
+                   "word timing for animated presets has not been verified; SRT "
+                   "contains only cue timing.",
         "recommended": "Use Resolve's engine for CreateSubtitlesFromAudio. "
-                       "For external SRT, test ImportMedia + AppendToTimeline "
-                       "on the exact installed build or import through the UI. "
+                       "For external SRT on 21.1.2, import through the UI. "
+                       "clipInfo append of a subtitle item is refused on 21.1+ "
+                       "(see MediaPool.AppendToTimeline subtitle clipInfo). "
                        "Use project_db write_captions for explicit word timings "
                        "with Resolve fully quit; do not assume SRT supplies them.",
         "tags": ["missing-method", "subtitle", "transcription",
                  "speech-recognition", "asr"],
         "submit": "missing",
+    },
+    {
+        "symbol": "MediaPool.AppendToTimeline (subtitle clipInfo)",
+        "object": "MediaPool",
+        "signature": "([{clipInfo}]) -> [TimelineItem]",
+        "reality": "On Studio 21.1.2.10 (Windows), AppendToTimeline with a "
+                   "clipInfo dict for an imported SRT MediaPoolItem (Type "
+                   "Subtitle) aborts Resolve: assertion at Sm2MpObject.cpp:546, "
+                   "reproduced 2/2. The call hangs, then the process is gone. "
+                   "The plain list form AppendToTimeline([item]) does not crash "
+                   "and places nothing. ImportMedia(srt) + AppendToTimeline was "
+                   "reported working on Studio 21.0.4.5 (issue #169). Which "
+                   "clipInfo field triggers the abort was not isolated. Builds "
+                   "21.1.0 and 21.1.1 were not measured.",
+        "recommended": "media_pool append_to_timeline, the granular "
+                       "append_to_timeline, and the other clipInfo builders "
+                       "refuse a Type=Subtitle item on Resolve 21.1 and above, "
+                       "and when the connected version cannot be read, with "
+                       "SUBTITLE_APPEND_CRASH, before AppendToTimeline is called. "
+                       "On a build older than 21.1 the call is still forwarded. "
+                       "Import the SRT through the UI on 21.1.2.",
+        "tags": ["crash", "subtitle", "timeline", "silent-failure"],
+        "submit": "bug",
+        "issue": 335,
+        "mitigation": ["subtitle_append_guard"],
+        "verified_on": "Reported on DaVinci Resolve Studio 21.1.2.10 (Windows); not re-measured here",
     },
     {
         "symbol": "Media Pool folder rename",

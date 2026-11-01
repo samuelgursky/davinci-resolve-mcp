@@ -2300,11 +2300,18 @@ media_pool(action="import_bounded_media", params={
 # reported 301 frames). Treat that as an observed configuration-specific result,
 # not a guarantee for every Resolve version or media type.
 media_pool(action="media_pool_boundary_report", params={"selected": True, "depth": 2})
-# Positioned append (MediaPool.AppendToTimeline([{clipInfo}, ...])) — e.g. rebuild a subtitle row after delete_clips
+# Positioned append (MediaPool.AppendToTimeline([{clipInfo}, ...]))
 media_pool(action="append_to_timeline", params={"clip_infos": [
   {"clip_id": "<uuid>", "start_frame": 0, "end_frame": 100, "record_frame": 1200, "track_index": 4}
 ]})
 ```
+
+A clipInfo whose MediaPoolItem Type is `Subtitle` is refused on Resolve 21.1
+and above, and when the connected version cannot be read, with
+`SUBTITLE_APPEND_CRASH`. On Studio 21.1.2.10 that call aborts Resolve
+(`Sm2MpObject.cpp:546`, issue #335). The plain `clip_ids` form does not crash,
+and on that build it also places nothing. Builds older than 21.1 still forward
+the clipInfo; that route was reported working on Studio 21.0.4.5 (issue #169).
 
 When Resolve answers `AppendToTimeline` with None/False/[], either form fails
 with `APPEND_TO_TIMELINE_FAILED`, not `success` with `count: 0`, and keeps

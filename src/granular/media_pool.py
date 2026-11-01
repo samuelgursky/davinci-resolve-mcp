@@ -195,6 +195,9 @@ def append_to_timeline(
             relative to the current timeline start frame by default; pass
             record_frame_mode="absolute" for raw Resolve recordFrame values.
             Returns timeline_item_id per appended item.
+            A MediaPoolItem whose Type is Subtitle is refused on Resolve 21.1+
+            with code SUBTITLE_APPEND_CRASH. On Studio 21.1.2.10 that clipInfo
+            aborts Resolve (issue #335).
     """
     project, mp, err = _get_mp()
     if err:
