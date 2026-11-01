@@ -64,6 +64,27 @@ class LookupTest(unittest.TestCase):
         self.assertIn("exclusive", entry["reality"].lower())
         self.assertIn("GetEndFrame() - GetStartFrame()", entry["recommended"])
 
+    def test_issue_336_silent_calls_are_recorded(self):
+        expected = {
+            "DeleteGaps": "Timeline.DeleteGaps",
+            "AddToPhotoAlbum": "MediaPool.AddToPhotoAlbum",
+            "ExportFrame": "Timeline.ExportFrame",
+            "SetLeftOffset": "TimelineItem.SetLeftOffset",
+            "MoveItems": "TimelineItem.SetPosition / Timeline.MoveItems",
+            "relative frame 0": "Timeline.AddMarker at relative frame 0",
+        }
+        for query, symbol in expected.items():
+            hits = lookup_api_truth(query)
+            self.assertTrue(
+                any(entry["symbol"] == symbol for entry in hits),
+                query,
+            )
+        offset = next(
+            entry for entry in API_TRUTH
+            if entry["symbol"] == "TimelineItem.SetLeftOffset"
+        )
+        self.assertTrue(offset.get("destroys_prior_work"))
+
     def test_entries_well_formed(self):
         for e in API_TRUTH:
             self.assertIn("symbol", e)
