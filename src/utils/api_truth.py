@@ -1897,7 +1897,6 @@ API_TRUTH: List[Dict[str, Any]] = [
         "tags": ["silent-failure", "timeline", "edit", "destructive"],
         "submit": "bug",
         "issue": 336,
-        "destroys_prior_work": True,
         "verified_on": "Reported on DaVinci Resolve Studio 21.1.2.10 (Windows); not re-measured here",
     },
     {
