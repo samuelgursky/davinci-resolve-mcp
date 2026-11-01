@@ -348,7 +348,10 @@ const PARAMETER_RANGES = {
   },
 
   lumMixSlider: {
-    master: { min: 0.0, max: 1.0, default: 0.0, precision: 3 },
+    // UI 0–100 → stored /100. Resolve's default is UI 100 (stored 1.0), under which R/G/B wheel
+    // moves are luminance-preserving; 0 makes them plain per-channel multipliers (render-measured
+    // on Studio 21.0.4.5, 2026-10-19).
+    master: { min: 0.0, max: 1.0, default: 1.0, precision: 3 },
   },
 
   // ========================================================================
