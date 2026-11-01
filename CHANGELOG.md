@@ -2,6 +2,40 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.18.1 — Names with `$` or `\` are written as typed
+
+### Fixed
+
+- **`drt assemble_project` no longer rewrites a merged timeline's name when it
+  contains `$`** (#332, thanks @Dev-next-gen). The name was inserted with a
+  replacement string, and JavaScript expands `$&`, `$'` and `$$` in one. A
+  second timeline named `R2 $& $'` wrote an `MpFolder.xml` that no longer
+  parsed, and `Spot $$ 30s` came out as `Spot $ 30s`, so a `folder` move then
+  failed to find the timeline.
+- **The same fix in 53 more places in the offline `.drp`/`.drt` writers.**
+  Caption text in `placeSubtitles`, generator, title and compound clip names,
+  media pool clip names and file paths, and every other value inserted into
+  the XML now goes in with a replacer function, so `$`-sequences stay literal.
+  A new guard test fails the advanced suite if a `replace()` call passes an
+  interpolated template as a string.
+- **The audio-only fallback clone in `cut-media` now XML-escapes the source
+  file name and path.** A source path containing `&`, such as
+  `Smith & Jones/clip.mov`, wrote invalid XML.
+- **Re-running media analysis on a clip no longer fails when the new analysis
+  text contains a backslash.** The managed block in the clip's metadata was
+  replaced with `re.sub` using the text as a replacement string, so a Windows
+  path raised `bad escape \F` and `\t` turned into a tab. The text is now
+  inserted as-is.
+
+### Validation
+
+- Advanced Node suite on Node 20 with a fresh `npm ci`: 1,224 tests, 0 failed.
+  With the fixes reverted, the guard and the caption, generator and title tests
+  fail.
+- Python suite: the new metadata test fails with `bad escape \F` without the
+  fix and passes with it.
+- Offline file writers only. No Resolve API behaviour changed.
+
 ## What's New in v4.18.0 — Edit captions with Resolve open
 
 ### Added
