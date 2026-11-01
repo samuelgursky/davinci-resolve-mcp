@@ -452,6 +452,18 @@ class OperationSurfaceTests(unittest.TestCase):
         self.assertEqual(by_name["inside"], inside)
         self.assertEqual(by_name["outside"], "<outside-allowed-roots>")
 
+    def test_a_filesystem_root_media_root_contains_its_files(self) -> None:
+        import os
+        from src.utils import resolve_bridge_ops as rbo
+        inside = os.path.join(self.ROOT, "b.mov")
+        open(inside, "w", encoding="utf-8").close()
+        root = os.path.abspath(os.sep)
+        ops = rbo.ResolveOperations(
+            FakeResolve(clips=[("inside", inside)]), media_roots=[root], output_roots=[root],
+        )
+        by_name = {c["name"]: c["file_path"] for c in ops.dispatch("list_media", {})["clips"]}
+        self.assertEqual(by_name["inside"], inside)
+
     def test_a_false_return_is_an_error_not_a_success(self) -> None:
         from src.utils import resolve_bridge_ops as ops
         with self.assertRaises(ops.OperationError) as ctx:
