@@ -21,7 +21,7 @@
     "LICENSE"
   ],
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "adm-zip": "^0.6.0",
     "fast-xml-parser": "^5.11.2",
     "fzstd": "^0.1.1",
