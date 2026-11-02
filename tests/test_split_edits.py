@@ -93,6 +93,18 @@ class AuditTests(unittest.TestCase):
     def test_no_video_is_an_error(self) -> None:
         self.assertFalse(se.audit([], track(0, 100))["success"])
 
+    def test_the_first_and_last_frame_of_a_track_are_not_joins(self) -> None:
+        out = se.audit(track(86400, 86500, 86600), track(86400, 86512, 86600))
+        self.assertEqual(out["paired_joins"], 1)
+        self.assertEqual(out["counts"][se.SHAPE_STRAIGHT], 0)
+        self.assertEqual(out["split_ratio"], 1.0)
+
+    def test_seven_straight_clips_are_six_joins_and_not_flagged(self) -> None:
+        boundaries = list(range(0, 800, 100))
+        out = se.audit(track(*boundaries), track(*boundaries))
+        self.assertEqual(out["paired_joins"], 6)
+        self.assertFalse(out["findings"])
+
     def test_offsets_are_reported_in_seconds_too(self) -> None:
         out = se.audit(track(0, 100, 200), track(0, 112, 200), fps=24.0)
         join = next(j for j in out["joins"] if j["picture_frame"] == 100)

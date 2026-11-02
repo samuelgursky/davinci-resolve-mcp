@@ -46,13 +46,23 @@ SHAPE_STRAIGHT = "straight"
 
 
 def _edit_points(items: Sequence[Mapping[str, Any]]) -> List[int]:
-    """Cut points on a track — every boundary where one item meets the next."""
-    frames = set()
+    """Cut points on a track — every boundary where one item meets the next.
+
+    The track's first frame and its last are where it begins and ends, not joins.
+    """
+    starts, ends = set(), set()
     for item in items:
-        for key in ("timeline_start_frame", "timeline_end_frame"):
-            value = item.get(key)
-            if value is not None:
-                frames.add(int(value))
+        start = item.get("timeline_start_frame")
+        end = item.get("timeline_end_frame")
+        if start is not None:
+            starts.add(int(start))
+        if end is not None:
+            ends.add(int(end))
+    frames = starts | ends
+    if starts:
+        frames.discard(min(starts))
+    if ends:
+        frames.discard(max(ends))
     return sorted(frames)
 
 
