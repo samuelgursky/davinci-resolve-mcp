@@ -2306,12 +2306,13 @@ media_pool(action="append_to_timeline", params={"clip_infos": [
 ]})
 ```
 
-A clipInfo whose MediaPoolItem Type is `Subtitle` is refused on Resolve 21.1
+A clipInfo whose MediaPoolItem Type is `Subtitle` is refused on Resolve 21.0
 and above, and when the connected version cannot be read, with
-`SUBTITLE_APPEND_CRASH`. On Studio 21.1.2.10 that call aborts Resolve
-(`Sm2MpObject.cpp:546`, issue #335). The plain `clip_ids` form does not crash,
-and on that build it also places nothing. Builds older than 21.1 still forward
-the clipInfo; that route was reported working on Studio 21.0.4.5 (issue #169).
+`SUBTITLE_APPEND_CRASH`. On Studio 21.1.2.10 and on free 21.0.3.7 that call
+aborts Resolve (`Sm2MpObject.cpp:546`, issue #335). The plain `clip_ids` form
+does not crash, and on 21.1.2.10 it also places nothing. Builds older than
+21.0 still forward the clipInfo. Studio 21.0.4.5 was reported working
+(issue #169) and is refused anyway: it is one patch away from the crash.
 
 When Resolve answers `AppendToTimeline` with None/False/[], either form fails
 with `APPEND_TO_TIMELINE_FAILED`, not `success` with `count: 0`, and keeps

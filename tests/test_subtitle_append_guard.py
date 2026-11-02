@@ -124,7 +124,9 @@ class RefusalMessageTest(unittest.TestCase):
     def test_version_matrix(self):
         item = Item("srt", "Subtitle")
         payload = {"mediaPoolItem": item}
-        self.assertIsNone(guard.refusal_message(payload, "21.0.4.5"))
+        self.assertIn("21.0.3.7", guard.refusal_message(payload, "21.0.3.7"))
+        self.assertIn("21.0.4.5", guard.refusal_message(payload, "21.0.4.5"))
+        self.assertIsNone(guard.refusal_message(payload, "20.3.2.9"))
         self.assertIsNone(guard.refusal_message(payload, "Studio 19.1.3.7"))
         self.assertIn("21.1.0", guard.refusal_message(payload, "21.1.0"))
         self.assertIn("Sm2MpObject.cpp:546", guard.refusal_message(payload, "21.1.2.10"))
@@ -164,8 +166,19 @@ class CompoundAppendTest(unittest.TestCase):
         self.assertEqual(pool.calls, [])
         self.assertIn("could not be read", result["error"]["message"])
 
-    def test_21_0_4_still_forwards_the_clipinfo(self):
+    def test_21_0_3_never_reaches_resolve(self):
+        result, pool, _get_resolve = self._append(Item("srt", "Subtitle"), "21.0.3.7")
+        self.assertEqual(result["error"]["code"], "SUBTITLE_APPEND_CRASH")
+        self.assertEqual(pool.calls, [])
+        self.assertIn("21.0.3.7", result["error"]["message"])
+
+    def test_21_0_4_is_refused_with_the_neighboring_crash(self):
         result, pool, _get_resolve = self._append(Item("srt", "Subtitle"), "21.0.4.5")
+        self.assertEqual(result["error"]["code"], "SUBTITLE_APPEND_CRASH")
+        self.assertEqual(pool.calls, [])
+
+    def test_19_1_still_forwards_the_clipinfo(self):
+        result, pool, _get_resolve = self._append(Item("srt", "Subtitle"), "19.1.3.7")
         self.assertTrue(result["success"])
         self.assertEqual(len(pool.calls), 1)
         self.assertEqual(pool.calls[0][0]["mediaPoolItem"].unique_id, "srt")

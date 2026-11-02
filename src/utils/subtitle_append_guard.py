@@ -6,10 +6,11 @@ aborts the process: assertion at ``Sm2MpObject.cpp:546``, reproduced twice
 (issue #335). The plain list form, ``AppendToTimeline([item])``, does not
 crash, and on that build it also places nothing.
 
-``ImportMedia`` plus ``AppendToTimeline`` was reported working on Studio
-21.0.4.5 (issue #169). Builds 21.1.0 and 21.1.1 were not measured. Every
-21.1 build is refused, and so is a subtitle clipInfo when the connected
-version cannot be read: forwarding the call is what takes Resolve down.
+The same abort was then reported on free 21.0.3.7 (macOS, issue #335).
+Studio 21.0.4.5 had been reported working (issue #169), one patch later and
+on a different edition, which is not a narrow enough gap to keep forwarding
+a call that kills Resolve. Every 21.0 build and newer is refused, and so is
+a subtitle clipInfo when the connected version cannot be read.
 """
 
 from typing import Any, Optional
@@ -17,14 +18,16 @@ from typing import Any, Optional
 from src.utils.resolve_versions import at_least
 
 #: First build line on which the clipInfo form is refused.
-FLOOR = "21.1"
+FLOOR = "21.0"
 
 MEASURED = (
     "Reported on DaVinci Resolve Studio 21.1.2.10 (Windows), reproduced 2/2: "
     "MediaPool.AppendToTimeline with a clipInfo for a Type=Subtitle MediaPoolItem "
     "aborts Resolve (Sm2MpObject.cpp:546). The plain clip list does not crash and "
-    "places nothing. ImportMedia + AppendToTimeline was reported working on Studio "
-    "21.0.4.5 (issue #169). 21.1.0 and 21.1.1 were not measured."
+    "places nothing. The same abort was reported on free 21.0.3.7 (macOS, "
+    "issue #335), once with media_type and once without. ImportMedia + "
+    "AppendToTimeline was reported working on Studio 21.0.4.5 (issue #169). "
+    "The refusal covers that build too: it is one patch away from a crash."
 )
 
 
@@ -81,11 +84,12 @@ def refusal_message(payload: Any, version: Any, index: Optional[int] = None) -> 
         return (
             f"clip_infos[{shown}] is a subtitle MediaPoolItem, and the connected "
             "Resolve version could not be read. AppendToTimeline with a clipInfo "
-            "for that item aborts Resolve Studio 21.1.2.10 (Sm2MpObject.cpp:546, "
-            "issue #335), so the call is refused."
+            "for that item aborts Resolve on Studio 21.1.2.10 (Sm2MpObject.cpp:546) "
+            "and on free 21.0.3.7 (issue #335), so the call is refused."
         )
     return (
         f"clip_infos[{shown}] is a subtitle MediaPoolItem. On Resolve {version}, "
-        "AppendToTimeline with a clipInfo for that item is refused: on Studio "
-        "21.1.2.10 it aborts Resolve (Sm2MpObject.cpp:546, issue #335)."
+        "AppendToTimeline with a clipInfo for that item is refused: it aborts "
+        "Resolve on Studio 21.1.2.10 (Sm2MpObject.cpp:546) and on free 21.0.3.7 "
+        "(issue #335)."
     )

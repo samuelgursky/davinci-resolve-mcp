@@ -1761,12 +1761,13 @@ API_TRUTH: List[Dict[str, Any]] = [
                    "MediaPool.ImportMedia(srt) + AppendToTimeline was reported "
                    "working on Studio 21.0.4.5 (issue #169). On Studio 21.1.2.10 "
                    "the clipInfo form of that append aborts Resolve and the plain "
-                   "form places nothing (issue #335). Whether either route carries "
-                   "word timing for animated presets has not been verified; SRT "
+                   "form places nothing, and the same abort was reported on free "
+                   "21.0.3.7 (issue #335). Whether either route carries word "
+                   "timing for animated presets has not been verified; SRT "
                    "contains only cue timing.",
         "recommended": "Use Resolve's engine for CreateSubtitlesFromAudio. "
-                       "For external SRT on 21.1.2, import through the UI. "
-                       "clipInfo append of a subtitle item is refused on 21.1+ "
+                       "For external SRT on 21.0 and newer, import through the UI. "
+                       "clipInfo append of a subtitle item is refused on 21.0+ "
                        "(see MediaPool.AppendToTimeline subtitle clipInfo). "
                        "Use project_db write_captions for explicit word timings "
                        "with Resolve fully quit; do not assume SRT supplies them.",
@@ -1783,48 +1784,53 @@ API_TRUTH: List[Dict[str, Any]] = [
                    "Subtitle) aborts Resolve: assertion at Sm2MpObject.cpp:546, "
                    "reproduced 2/2. The call hangs, then the process is gone. "
                    "The plain list form AppendToTimeline([item]) does not crash "
-                   "and places nothing. ImportMedia(srt) + AppendToTimeline was "
-                   "reported working on Studio 21.0.4.5 (issue #169). Which "
-                   "clipInfo field triggers the abort was not isolated. Builds "
-                   "21.1.0 and 21.1.1 were not measured.",
+                   "and places nothing. The same abort was reported on free "
+                   "21.0.3.7 (macOS), once with media_type and once without. "
+                   "ImportMedia(srt) + AppendToTimeline was reported working on "
+                   "Studio 21.0.4.5 (issue #169). Which clipInfo field triggers "
+                   "the abort was not isolated. 21.0.0 through 21.0.2, 21.0.4, "
+                   "21.1.0, and 21.1.1 were not measured.",
         "recommended": "media_pool append_to_timeline, the granular "
                        "append_to_timeline, and the other clipInfo builders "
-                       "refuse a Type=Subtitle item on Resolve 21.1 and above, "
+                       "refuse a Type=Subtitle item on Resolve 21.0 and above, "
                        "and when the connected version cannot be read, with "
                        "SUBTITLE_APPEND_CRASH, before AppendToTimeline is called. "
-                       "On a build older than 21.1 the call is still forwarded. "
-                       "Import the SRT through the UI on 21.1.2.",
+                       "On a build older than 21.0 the call is still forwarded. "
+                       "Import the SRT through the UI.",
         "tags": ["crash", "subtitle", "timeline", "silent-failure"],
         "submit": "bug",
         "issue": 335,
         "mitigation": ["subtitle_append_guard"],
-        "verified_on": "Reported on DaVinci Resolve Studio 21.1.2.10 (Windows); not re-measured here",
+        "verified_on": "Reported on Studio 21.1.2.10 (Windows) and free 21.0.3.7 (macOS); not re-measured here",
     },
     {
         "symbol": "Timeline.DeleteGaps",
         "object": "Timeline",
         "signature": "() -> bool",
-        "reality": "On Studio 21.1.2.10 (Windows), DeleteGaps() returned True "
-                   "and left every clip start unchanged, with gaps at 0/200 and "
-                   "again at 0/200/400. This server does not call DeleteGaps. "
-                   "Not re-measured here.",
-        "recommended": "Read the clip starts before and after. Treat equal "
-                       "readings as failure even when the call returned True. "
-                       "Close the gaps in the Edit page until a build shows "
-                       "the starts actually move.",
-        "tags": ["silent-failure", "timeline", "edit"],
-        "submit": "bug",
+        "reality": "WITHDRAWN. The first report — DeleteGaps() returned True "
+                   "and left clip starts at 0/200/400 unchanged — was measured "
+                   "on a timeline whose clips sat before StartFrame 86400, so "
+                   "StartFrame and EndFrame were both 86400. Re-measured by "
+                   "the reporter on Studio 21.1.2.10 with recordFrame anchored "
+                   "at 86400: clips before [86400, 86600, 86800], DeleteGaps() "
+                   "returned True, clips after [86400, 86520, 86640]. The call "
+                   "closes gaps. Not re-measured here.",
+        "recommended": "Call DeleteGaps. The original failure was the timeline, "
+                       "not this method. See the recordFrame entry for the "
+                       "placement that built that timeline.",
+        "tags": ["timeline", "edit"],
         "issue": 336,
-        "verified_on": "Reported on DaVinci Resolve Studio 21.1.2.10 (Windows); not re-measured here",
+        "verified_on": "Withdrawn on the reporter's re-measurement, Studio 21.1.2.10 (Windows); not re-measured here",
     },
     {
         "symbol": "MediaPool.AddToPhotoAlbum",
         "object": "MediaPool",
         "signature": "(clips) -> [MediaPoolItem]",
-        "reality": "On Studio 21.1.2.10 (Windows), AddToPhotoAlbum returned [] "
-                   "and the album's GetPhotoList() stayed empty, including "
-                   "after SetCurrentPhotoAlbum. CreatePhotoAlbumFromPhotos "
-                   "placed photos in the same session. On Studio 19.1.3.7 "
+        "reality": "On Studio 21.1.2.10 (Windows), re-measured by the reporter, "
+                   "AddToPhotoAlbum returned None and the album stayed at 0 "
+                   "photos across three argument forms. CreatePhotoAlbumFromPhotos "
+                   "returned an album with 2 photos in the same session and the "
+                   "same project. On Studio 19.1.3.7 "
                    "(2026-11-01, dir() of the open project's MediaPool), "
                    "AddToPhotoAlbum, CreateEmptyPhotoAlbum, "
                    "CreatePhotoAlbumFromPhotos, and GetCurrentPhotoAlbum are "
@@ -1835,43 +1841,46 @@ API_TRUTH: List[Dict[str, Any]] = [
         "tags": ["silent-failure", "media-pool", "missing-method"],
         "submit": "bug",
         "issue": 336,
-        "verified_on": "dir() on Studio 19.1.3.7; the empty-list result is reported on 21.1.2.10 and was not re-measured here",
+        "verified_on": "dir() on Studio 19.1.3.7; the None result is the reporter's re-measurement on 21.1.2.10 and was not re-measured here",
     },
     {
         "symbol": "Timeline.ExportFrame",
         "object": "Timeline",
         "signature": "(frameOffset, settings) -> dict",
-        "reality": "On Studio 21.1.2.10 (Windows), Timeline.ExportFrame returned "
-                   "{'success': False, 'error': 'frameOffset is out of range "
-                   "for the timeline'} for offsets 0, 5, 100, 200, 216000, and "
-                   "216010. The same frames exported through "
-                   "TimelineItem.ExportFrame. The timeline reported "
-                   "StartTimecode 01:00:00:00, StartFrame 86400, and EndFrame "
-                   "86400. Not re-measured here; this machine had no current "
-                   "timeline to dir().",
-        "recommended": "Export through TimelineItem.ExportFrame. If "
-                       "GetStartFrame() and GetEndFrame() are equal, the "
-                       "timeline export has no frame range to address.",
-        "tags": ["silent-failure", "timeline", "export"],
-        "submit": "bug",
+        "reality": "WITHDRAWN. frameOffset is relative to StartFrame, valid "
+                   "from 0 through EndFrame - StartFrame - 1. On Studio "
+                   "21.1.2.10 a timeline at StartFrame 86400 and EndFrame 86880 "
+                   "accepted offset 0 and offset 479 and rejected offset 480 "
+                   "and the absolute frames 86400 and 86879. The original "
+                   "report passed absolute frames, including on a timeline "
+                   "whose StartFrame and EndFrame were both 86400. The "
+                   "rejection was the right answer to that argument. Not "
+                   "re-measured here.",
+        "recommended": "Pass a relative offset, 0 at GetStartFrame(). A caller "
+                       "that passes GetStartFrame() itself gets a rejection "
+                       "that reads like a failure. TimelineItem.ExportFrame "
+                       "addresses a clip's own frames.",
+        "tags": ["timeline", "export"],
         "issue": 336,
-        "verified_on": "Reported on DaVinci Resolve Studio 21.1.2.10 (Windows); not re-measured here",
+        "verified_on": "Withdrawn on the reporter's re-measurement, Studio 21.1.2.10 (Windows); not re-measured here",
     },
     {
         "symbol": "TimelineItem.SetPosition / Timeline.MoveItems",
         "object": "TimelineItem / Timeline",
         "signature": "SetPosition(...) -> bool; MoveItems(...) -> bool",
-        "reality": "On Studio 21.1.2.10 (Windows), TimelineItem.SetPosition "
-                   "and Timeline.MoveItems returned False for video clips and "
-                   "stills, for int and float start frames, for a no-op "
-                   "startFrame equal to the clip's current frame, for both "
+        "reality": "On Studio 21.1.2.10 (Windows), re-measured by the reporter, "
+                   "TimelineItem.SetPosition returned False for 0, 100, and "
+                   "-50, and the clip start was unchanged. Timeline.MoveItems "
+                   "was not callable. The first report had both methods "
+                   "returning False across ints, floats, a no-op start, both "
                    "moveLinkedItems values, and with or without "
-                   "subframePrecision. Timeline.SetCurrentTimecode succeeded "
-                   "in the same session. This server does not call either "
-                   "method. Not re-measured here.",
-        "recommended": "Do not treat False from these two as a bad argument. "
-                       "On 21.1.2.10 they returned False for every input tried. "
-                       "Move the clip in the Edit page.",
+                   "subframePrecision, while Timeline.SetCurrentTimecode "
+                   "succeeded in that session. This server does not call "
+                   "either method. Not re-measured here.",
+        "recommended": "Do not treat False from SetPosition as a bad argument. "
+                       "On 21.1.2.10 it returned False for every input tried, "
+                       "and MoveItems was not callable. Move the clip in the "
+                       "Edit page.",
         "tags": ["unreliable-return", "timeline", "edit"],
         "submit": "bug",
         "issue": 336,
@@ -1887,7 +1896,11 @@ API_TRUTH: List[Dict[str, Any]] = [
                    "duration to about 86515. Setting the offset back to 0 "
                    "left the clip at about -86000. The call extends the clip "
                    "from source media. It does not nudge the edit point, and "
-                   "the edit does not come back. A live gap probe on an older "
+                   "the edit does not come back. The clip was at frame 400 on "
+                   "a timeline whose StartFrame was 86400, so it sat outside "
+                   "the timeline's declared range; the reporter did not re-run "
+                   "it, because the first call was destructive, and the entry "
+                   "stands as that readback. A live gap probe on an older "
                    "build recorded SetLeftOffset as absent. This server only "
                    "reads GetLeftOffset. Not re-measured here.",
         "recommended": "Do not call SetLeftOffset to trim a handle. There is "
@@ -1900,20 +1913,24 @@ API_TRUTH: List[Dict[str, Any]] = [
         "verified_on": "Reported on DaVinci Resolve Studio 21.1.2.10 (Windows); not re-measured here",
     },
     {
-        "symbol": "Timeline.AddMarker at relative frame 0",
-        "object": "Timeline",
+        "symbol": "TimelineItem.AddMarker at relative frame 0",
+        "object": "TimelineItem",
         "signature": "(frameId, color, name, note, duration, customData) -> bool",
-        "reality": "On Studio 21.1.2.10 (Windows), with StartFrame 86400, "
-                   "AddMarker(0) returned False and AddMarker(86400) returned "
-                   "False. AddMarker(200) returned True. Other clips accepted "
-                   "their relative GetStart(). Related to issue #34. This "
-                   "server already reports success false when AddMarker "
-                   "returns false. Not re-measured here.",
-        "recommended": "Place the marker at a relative frame other than 0 "
-                       "when frame 0 is refused. Do not retry the same call "
-                       "with StartFrame added: that also returned False on "
-                       "21.1.2.10.",
-        "tags": ["unreliable-return", "timeline", "marker"],
+        "reality": "On Studio 21.1.2.10 (Windows), re-measured by the reporter "
+                   "with StartFrame 86400: Timeline.AddMarker(0) and "
+                   "Timeline.AddMarker(200) both returned True and the marker "
+                   "was present. TimelineItem.AddMarker(0) on the clip sitting "
+                   "at that StartFrame returned True and wrote nothing "
+                   "(GetMarkers count unchanged, the marker name absent). Same "
+                   "family as issue #34. The first filing recorded "
+                   "Timeline.AddMarker(0) returning False; that was the wrong "
+                   "object. This server already reports success false when "
+                   "AddMarker returns false. Not re-measured here.",
+        "recommended": "Read the marker back with GetMarkers. True from "
+                       "TimelineItem.AddMarker at relative frame 0 is not "
+                       "evidence the marker exists. Timeline.AddMarker at "
+                       "relative 0 did write the marker on this build.",
+        "tags": ["silent-failure", "timeline", "marker"],
         "submit": "bug",
         "issue": 336,
         "verified_on": "Reported on DaVinci Resolve Studio 21.1.2.10 (Windows); not re-measured here",
@@ -2562,6 +2579,13 @@ API_TRUTH: List[Dict[str, Any]] = [
                    "job-mark-range checks read clean. The only truthful "
                    "readback is the timeline items themselves, which report "
                    "their real GetStart/GetEnd — before the start frame. "
+                   "On Studio 21.1.2.10 the timeline's own range is left "
+                   "untouched as well: clips placed at absolute 0/200/400 "
+                   "while StartFrame is 86400, and StartFrame stays equal to "
+                   "EndFrame (duration 0) through SetProperty and through "
+                   "closing and reopening the timeline (issue #336). A call "
+                   "that addresses the timeline by that declared range then "
+                   "behaves as it does on an empty timeline. "
                    "Verified on "
                    "Studio 20.3.2.9 (v2.17.1 probe: relative record_frame 12 "
                    "landed at 86400 + 12 = 86412, absolute preserved 86484), "

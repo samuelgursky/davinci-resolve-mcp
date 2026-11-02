@@ -240,8 +240,8 @@ def _probe_pool_clip_marker_roundtrip(ctx):
 def _probe_pool_append_to_timeline(ctx):
     from src.utils.subtitle_append_guard import is_subtitle_item
     if is_subtitle_item(ctx.clip):
-        return ("refused: a subtitle clipInfo aborts Resolve 21.1.2 "
-                "(Sm2MpObject.cpp:546, issue #335)")
+        return ("refused: a subtitle clipInfo aborts Resolve on 21.1.2 "
+                "and on free 21.0.3.7 (Sm2MpObject.cpp:546, issue #335)")
     pool = ctx.project.GetMediaPool()
     before = ctx.timeline.GetEndFrame()
     frames = int(ctx.clip.GetClipProperty("Frames") or 0)
