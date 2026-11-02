@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 377-tool granular server instead
 """
 
-VERSION = "4.18.4"
+VERSION = "4.18.5"
 
 import base64
 import os
@@ -3945,7 +3945,7 @@ def _payload_has_subtitle_clipinfo(payload) -> bool:
 
 
 def _subtitle_append_block(payload, index=None):
-    """Structured refusal for a subtitle clipInfo that would abort Resolve 21.1.
+    """Structured refusal for a subtitle clipInfo that would abort Resolve 21.0+.
 
     None when the payload may be forwarded. Clip objects, the plain
     AppendToTimeline([item]) form, are not clipInfos and are not refused.
@@ -3966,11 +3966,11 @@ def _subtitle_append_block(payload, index=None):
         retryable=False,
         reason=subtitle_append_guard.MEASURED,
         remediation=(
-            "Do not send a clipInfo for a subtitle MediaPoolItem on Resolve 21.1. "
-            "On Studio 21.1.2.10 that call aborts Resolve. The plain clip_ids form "
-            "does not crash, and on that build it also places nothing. Import the "
-            "SRT in the Resolve UI, or use project_db write_captions with Resolve "
-            "fully quit."
+            "Do not send a clipInfo for a subtitle MediaPoolItem on Resolve 21.0 "
+            "or newer. On Studio 21.1.2.10 and on free 21.0.3.7 that call aborts "
+            "Resolve. The plain clip_ids form does not crash, and on 21.1.2.10 it "
+            "also places nothing. Import the SRT in the Resolve UI, or use "
+            "project_db write_captions with Resolve fully quit."
         ),
     )
 
@@ -23334,10 +23334,11 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
           record_frame is relative to the current timeline start frame by default;
           pass record_frame_mode="absolute" for raw Resolve recordFrame values.
           Returns timeline_item_id per item.
-          A MediaPoolItem whose Type is Subtitle is refused on Resolve 21.1+
+          A MediaPoolItem whose Type is Subtitle is refused on Resolve 21.0+
           (and when the version cannot be read) with SUBTITLE_APPEND_CRASH,
-          before AppendToTimeline. On Studio 21.1.2.10 that clipInfo aborts
-          Resolve (issue #335). Builds older than 21.1 are still forwarded.
+          before AppendToTimeline. On Studio 21.1.2.10 and on free 21.0.3.7
+          that clipInfo aborts Resolve (issue #335). Builds older than 21.0
+          are still forwarded.
         Either form: Resolve answering None/False/[] is APPEND_TO_TIMELINE_FAILED,
           with verified_operation (the timeline readback) kept on the error;
           retryable only when the readback shows nothing was appended.

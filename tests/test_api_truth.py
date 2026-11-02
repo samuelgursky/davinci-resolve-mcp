@@ -64,21 +64,40 @@ class LookupTest(unittest.TestCase):
         self.assertIn("exclusive", entry["reality"].lower())
         self.assertIn("GetEndFrame() - GetStartFrame()", entry["recommended"])
 
-    def test_issue_336_silent_calls_are_recorded(self):
-        expected = {
-            "DeleteGaps": "Timeline.DeleteGaps",
-            "AddToPhotoAlbum": "MediaPool.AddToPhotoAlbum",
-            "ExportFrame": "Timeline.ExportFrame",
-            "SetLeftOffset": "TimelineItem.SetLeftOffset",
-            "MoveItems": "TimelineItem.SetPosition / Timeline.MoveItems",
-            "relative frame 0": "Timeline.AddMarker at relative frame 0",
-        }
-        for query, symbol in expected.items():
-            hits = lookup_api_truth(query)
-            self.assertTrue(
-                any(entry["symbol"] == symbol for entry in hits),
-                query,
-            )
+    def test_issue_336_corrections_are_recorded(self):
+        withdrawn = ("Timeline.DeleteGaps", "Timeline.ExportFrame")
+        for symbol in withdrawn:
+            entry = next(e for e in API_TRUTH if e["symbol"] == symbol)
+            self.assertTrue(entry["reality"].startswith("WITHDRAWN"), symbol)
+            self.assertNotIn("submit", entry)
+
+        album = next(e for e in API_TRUTH if e["symbol"] == "MediaPool.AddToPhotoAlbum")
+        self.assertIn("returned None", album["reality"])
+        self.assertEqual(album.get("submit"), "bug")
+
+        position = next(
+            e for e in API_TRUTH
+            if e["symbol"] == "TimelineItem.SetPosition / Timeline.MoveItems"
+        )
+        self.assertIn("not callable", position["reality"])
+
+        marker = next(
+            e for e in API_TRUTH
+            if e["symbol"] == "TimelineItem.AddMarker at relative frame 0"
+        )
+        self.assertIn("Timeline.AddMarker(0)", marker["reality"])
+        self.assertIn("wrote nothing", marker["reality"])
+        self.assertEqual(marker.get("submit"), "bug")
+        self.assertFalse(any(
+            e["symbol"] == "Timeline.AddMarker at relative frame 0" for e in API_TRUTH
+        ))
+
+        record = next(
+            e for e in API_TRUTH
+            if e["symbol"].startswith("MediaPool.AppendToTimeline clipInfo recordFrame")
+        )
+        self.assertIn("duration 0", record["reality"])
+
         offset = next(
             entry for entry in API_TRUTH
             if entry["symbol"] == "TimelineItem.SetLeftOffset"
@@ -87,6 +106,7 @@ class LookupTest(unittest.TestCase):
         # the 21.1.2 result was not re-measured, so the fact stays in the
         # ledger without a refusal that can never fire.
         self.assertNotIn("destroys_prior_work", offset)
+        self.assertIn("outside", offset["reality"])
 
     def test_entries_well_formed(self):
         for e in API_TRUTH:

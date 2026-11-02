@@ -2,6 +2,31 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.18.5 — The #336 ledger matches the re-measurement
+
+@CaptRauti re-measured the six calls from v4.18.4. Three of them were the same broken timeline: `AppendToTimeline` took an absolute `recordFrame` below `StartFrame`, the clips landed outside the timeline, and `StartFrame` stayed equal to `EndFrame`.
+
+### Fixed
+
+- **A subtitle clipInfo is refused from Resolve 21.0** (#335, thanks @ylukin). Free 21.0.3.7 aborts on the same call as Studio 21.1.2.10 (`Sm2MpObject.cpp:546`). The floor was 21.1, so 4.18.3 still forwarded 21.0.3.7. Studio 21.0.4.5 was reported working (#169) and is refused with it. Builds older than 21.0 still forward the clipInfo. The plain `clip_ids` form is unchanged.
+
+### Documentation
+
+- **Timeline.DeleteGaps** and **Timeline.ExportFrame** are withdrawn. On a timeline whose clips start at 86400, `DeleteGaps` closes the gaps. `ExportFrame` takes a relative offset and accepts 0 through the last frame.
+- **Timeline.AddMarker** at relative 0 writes the marker. The silent success is **TimelineItem.AddMarker(0)** on the clip that sits at `StartFrame` (True, nothing written), the same family as #34.
+- **MediaPool.AddToPhotoAlbum** returns None, and the album stays empty. `CreatePhotoAlbumFromPhotos` placed two photos in the same session.
+- **TimelineItem.SetPosition** still returns False, and **Timeline.MoveItems** is not callable.
+- **TimelineItem.SetLeftOffset** stays as the original destructive readback. The clip was at frame 400 on a timeline whose `StartFrame` was 86400, and it was not re-run.
+- The **recordFrame** entry now records the duration-0 timeline that survives a reopen. `append_to_timeline` already refuses an absolute `recordFrame` below the timeline start. That refusal has been in place since v2.103.5.
+- The limitations report was regenerated (43 missing capabilities, 66 bugs).
+
+### Validation
+
+- Focused unit tests: the withdrawn entries are not `submit` bugs, the `TimelineItem` marker is, a 21.0.3.7 subtitle clipInfo never reaches `AppendToTimeline`, 21.0.4.5 is refused with it, and 19.1.3.7 still forwards.
+- Static checks: API parity, limitations and read/write drift guards, agent rules, undefined names, duplicate definitions, action-list drift, panel docs, tool counts, and release-surface drift.
+- Live Resolve on this machine is Studio 19.1.3.7. The refusal applies at 21.0 and above, so it was not exercised against the open project. The 21.0.3.7 crash and the 21.1.2.10 re-measurement were not reproduced here.
+- The control-panel guide was reviewed. No navigation or diagnostic card changed, so screenshots were not regenerated.
+
 ## What's New in v4.18.4 — Silent Resolve calls from #336 are on the ledger
 
 No tool behavior changed. Six calls reported on Studio 21.1.2.10 return
