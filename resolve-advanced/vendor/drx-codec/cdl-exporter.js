@@ -320,11 +320,13 @@ function parseCDL(cdlContent) {
   const results = [];
 
   // Simple XML parsing for CDL (avoid external dependencies)
-  const correctionRegex = /<ColorCorrection\s+id="([^"]+)">([\s\S]*?)<\/ColorCorrection>/gi;
+  // The id attribute may be empty or absent; such corrections are still looks.
+  const correctionRegex = /<ColorCorrection(\s[^>]*?)?(?<!\/)>([\s\S]*?)<\/ColorCorrection>/gi;
   let match;
 
   while ((match = correctionRegex.exec(cdlContent)) !== null) {
-    const id = match[1];
+    const idMatch = (match[1] || '').match(/(?:^|\s)id\s*=\s*"([^"]*)"/);
+    const id = idMatch ? idMatch[1] : '';
     const content = match[2];
 
     const cdlValues = {
