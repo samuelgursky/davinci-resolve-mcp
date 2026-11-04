@@ -2,6 +2,19 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.18.6 — `cdl_io` keeps corrections with an empty or missing id
+
+`drx` action `cdl_io` dropped ASC CDL corrections whose `id` was empty or missing, with no warning. `parseCDL` only matched an opening tag written exactly as `<ColorCorrection id="...">` with a non-empty id and no other attribute. OpenColorIO's reference `cdl_test1.ccc` has five corrections, two of them there to check that an empty or missing id does not stop a look from loading. `cdl_io` imported three of the five, and a `.cc` holding only such a correction was refused as "not a CDL/CCC/CC document".
+
+### Fixed
+
+- **`cdl_io` imports every correction in the file** (#342, thanks @Dev-next-gen). The opening tag may carry any attributes, and `id` is read from them. A correction with no id, or an empty one, is named `cc<index>`, the fallback `importCDL` already had but never reached. Self-closing `<ColorCorrection/>` elements are still skipped, and `<ColorCorrectionCollection>` is not mistaken for a correction.
+
+### Validation
+
+- The new test in `test/cdl-io.test.mjs` fails on 4.18.5 and passes with the fix. The 97 CDL-related Node tests pass on Node 20 with the PR merged into main.
+- Parser-only change, no Resolve call is involved, so no live Resolve run applies. The open Resolve is Studio 19.1.3.7.
+
 ## What's New in v4.18.5 — The #336 ledger matches the re-measurement
 
 @CaptRauti re-measured the six calls from v4.18.4. Three of them were the same broken timeline: `AppendToTimeline` took an absolute `recordFrame` below `StartFrame`, the clips landed outside the timeline, and `StartFrame` stayed equal to `EndFrame`.
