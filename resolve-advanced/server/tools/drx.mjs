@@ -250,6 +250,23 @@ const generateSchema = z.object({
         'units (wheels raw, saturation ~1.0 neutral) for lossless/programmatic callers.'
     ),
   metadata: z.object({}).passthrough().optional().describe('Optional { label, width, height } metadata'),
+  target: z
+    .enum(['clip', 'timeline'])
+    .optional()
+    .describe(
+      "'clip' (default) writes the grade as a clip grade. 'timeline' writes it as the timeline grade " +
+        "(<pTrackVer>), for graph.apply_grade_from_drx with source='timeline'; a clip-target file applied to " +
+        'the timeline is refused (DRX_NO_TIMELINE_GRADE).'
+    ),
+  resolveVersion: z
+    .union([z.number().int().min(1), z.string()])
+    .optional()
+    .describe(
+      "Resolve version the file is for, as a major number (21) or a version string ('21.0.4'). From 21 on, " +
+        'circle and linear power windows are written in the Resolve 21 form (corrector type 0x10004, full parameter ' +
+        'set), which renders on Resolve 21; the older form loads there but renders an empty mask. Default: the ' +
+        'Resolve 19 form. Not live-verified here; the format comes from justhung69/resolve-mcp.'
+    ),
   outputPath: z.string().optional().describe('If set, write the .drx here'),
 });
 
@@ -684,7 +701,12 @@ export const drxTool = {
     if (action === 'generate') {
       const p = generateSchema.parse(args);
       const warnings = [];
-      const out = await drxGenerator().generateDRX(normalizeGradeParams(p.gradeParams, warnings), p.metadata || {});
+      const metadata = {
+        ...(p.metadata || {}),
+        ...(p.target ? { target: p.target } : {}),
+        ...(p.resolveVersion !== undefined ? { resolveVersion: p.resolveVersion } : {}),
+      };
+      const out = await drxGenerator().generateDRX(normalizeGradeParams(p.gradeParams, warnings), metadata);
       const content = typeof out === 'string' ? out : out?.content || out?.drxContent;
       const warn = warnings.length ? { warnings } : {};
       if (p.outputPath && content) {
@@ -822,7 +844,7 @@ export const drxTool = {
       });
       // Splice the new Body into the ORIGINAL envelope (byte-lossless outside the
       // position varints — labels, keyframes, OFX, still metadata all pass through).
-      const out = xml.replace(m[0], `<Body>${r.bodyHex}</Body>`);
+      const out = xml.replace(m[0], () => `<Body>${r.bodyHex}</Body>`);
       // Guard: the rewrite must not change the node count (silent-corruption check).
       const reparsed = await drxParser().parseDRXContent(out);
       if ((reparsed.nodes || []).length !== r.nodeCount) {

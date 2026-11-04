@@ -213,7 +213,7 @@ async function convert(inputPath, outputPath, options = {}) {
   // Auto-generate output path if not provided
   if (!outputPath) {
     const ext = CONTAINER_EXTENSIONS[preset.container] || '.wav';
-    outputPath = inputPath.replace(/\.[^.]+$/, `_${presetName}${ext}`);
+    outputPath = inputPath.replace(/\.[^.]+$/, () => `_${presetName}${ext}`);
   }
 
   onProgress(10);

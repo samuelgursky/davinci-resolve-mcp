@@ -215,6 +215,30 @@ tool — did it happen, was it verified, what changed:
   not read a missing `changes` as a no-op.
 - **`warnings`** — present only when there are any.
 - **`execution_id`** — correlates one call across logs and transcripts.
+- **`timeline`** — on timeline-scoped tools, `{name, id}` of the timeline the
+  call acted on. A pinned call (below) adds `pinned: true` and
+  `restored_current`, or `restore_failed: true` if the caller's timeline could
+  not be made current again.
+
+A failed call (an `{"error": {...}}` body) also comes back with MCP
+`isError: true`, so hooks and retry policies that follow the spec see the
+failure without parsing the body.
+
+**Unread params are reported.** When an action succeeds without reading some
+key you passed, the result carries `ignored_params: [...]` and the envelope
+lists them under `warnings`. Treat it as "that key did nothing": a misspelled
+key, an option this action does not take, or an alternative another key
+overrode (an `index` passed alongside `id`).
+
+**Pinning a call to a timeline.** `timeline`, `timeline_item*`,
+`timeline_markers`, `timeline_frame`, `timeline_ai`, `graph` and `render`
+act on the current timeline unless you pass `timeline_id` (preferred) or
+`timeline_name`. The server then makes that timeline current for the call
+and restores yours afterwards, so a user clicking another timeline mid-session
+cannot redirect your write. An unknown id, an ambiguous name or an id/name
+pair that disagree is refused before anything runs. Exceptions, where these
+keys keep their own meaning: `timeline.set_current` (selects by
+`timeline_id`) and the imports (`timeline_name` names the new timeline).
 
 The envelope is namespaced under `_operation` rather than merged into the top
 level because `status`, `operation`, `warnings`, `result` and `changes` are all
@@ -443,6 +467,15 @@ Operating rules an agent must know:
   Ordinary title presets use `timeline.insert_fusion_title` with the full ID,
   then scoped `fusion_comp` probes and input writes. See
   [title library automation](guides/title-library-automation.md) for acceptance.
+- **Live caption text and word timing**: `timeline_ai.list_captions_live` reads
+  one subtitle track's captions from a native DRT export, with Resolve open.
+  `timeline_ai.write_captions_live` takes the same `replace` / `add` / `delete`
+  shape as `project_db` `write_captions` and imports the result as a selected
+  revision. A caption `id` is its start frame as a string, because Resolve
+  issues new item IDs on every export; use the IDs the write returns for the
+  next edit. Resolve's re-export must keep the text, bounds and word frames,
+  or the original stays selected. Adding to an empty track needs an existing
+  caption as a template; per-caption Fusion compositions are refused.
 - **Offline subtitle DB edits**: `project_db` `list_captions` / `write_captions` /
   `check_captions` cover text, bounds, explicit per-word timing, add and delete.
   `list_subtitle_presets` / `copy_subtitle_preset` / `set_subtitle_preset` handle
@@ -1948,7 +1981,8 @@ against it, and image content fails that validation.
 
 Key actions: `create_subtitles(settings?)` (human-readable settings resolved to
 `SUBTITLE_*`/`AUTO_CAPTION_*` enums + read-back verified — see
-`subtitle_generation_probe`), `detect_scene_cuts`,
+`subtitle_generation_probe`), `list_captions_live`, `write_captions_live`,
+`detect_scene_cuts`,
 `grab_still`, `grab_all_stills(source?)`, `analyze_dolby_vision`
 
 ---
@@ -1957,8 +1991,11 @@ Key actions: `create_subtitles(settings?)` (human-readable settings resolved to
 
 Timeline items are identified by `track_type`, `track_index`, and `item_index`
 (all default to `"video"`, `1`, `0` respectively — the first clip on the first
-video track). Always retrieve item IDs via `timeline.get_items` before operating
-on specific items.
+video track), or by `timeline_item_id`, the item's `GetUniqueId()`. Prefer the
+id: on Resolve 21.1 `item_index` also counts transitions, so it shifts whenever
+a transition is added or removed. Read ids with `timeline.get_items` or
+`timeline.probe_timeline_structure`. An unknown id is refused with
+`ITEM_NOT_FOUND`; it never falls back to item 0.
 
 **`timeline_item`** — Properties, transform, speed, audio, keyframes.
 
@@ -2271,11 +2308,19 @@ media_pool(action="import_bounded_media", params={
 # reported 301 frames). Treat that as an observed configuration-specific result,
 # not a guarantee for every Resolve version or media type.
 media_pool(action="media_pool_boundary_report", params={"selected": True, "depth": 2})
-# Positioned append (MediaPool.AppendToTimeline([{clipInfo}, ...])) — e.g. rebuild a subtitle row after delete_clips
+# Positioned append (MediaPool.AppendToTimeline([{clipInfo}, ...]))
 media_pool(action="append_to_timeline", params={"clip_infos": [
   {"clip_id": "<uuid>", "start_frame": 0, "end_frame": 100, "record_frame": 1200, "track_index": 4}
 ]})
 ```
+
+A clipInfo whose MediaPoolItem Type is `Subtitle` is refused on Resolve 21.0
+and above, and when the connected version cannot be read, with
+`SUBTITLE_APPEND_CRASH`. On Studio 21.1.2.10 and on free 21.0.3.7 that call
+aborts Resolve (`Sm2MpObject.cpp:546`, issue #335). The plain `clip_ids` form
+does not crash, and on 21.1.2.10 it also places nothing. Builds older than
+21.0 still forward the clipInfo. Studio 21.0.4.5 was reported working
+(issue #169) and is refused anyway: it is one patch away from the crash.
 
 When Resolve answers `AppendToTimeline` with None/False/[], either form fails
 with `APPEND_TO_TIMELINE_FAILED`, not `success` with `count: 0`, and keeps
@@ -2475,6 +2520,8 @@ reports, deletes the project, and removes generated media. See
 | `"No project open"` | No project is currently loaded | Call `project_manager(action="load", params={"name": "..."})` |
 | `"No current timeline"` | Project has no timeline set as current | Call `timeline(action="set_current", params={"index": 1})` |
 | `"No item at index N"` | `item_index` out of range for the track | Call `timeline(action="get_items", ...)` first to find valid indices |
+| `ITEM_NOT_FOUND` | No item with that `timeline_item_id` on the target timeline | Re-read ids; pass `timeline_id` if the item is on another timeline |
+| `TIMELINE_NOT_FOUND` / `TIMELINE_NAME_AMBIGUOUS` | The pin names no timeline, or several share the name | `timeline(action="list")` and pin by `timeline_id` |
 | `"Clip not found"` | Stale or wrong `clip_id` | Re-fetch IDs via `media_pool(action="get_selected")` or `folder(action="get_clips")` |
 | `"Gallery not available"` | Not on Color page | `resolve_control(action="open_page", params={"page": "color"})` |
 | `"GrabStill failed"` | Not on Color page or no clip under playhead | Switch to Color page, move playhead over a clip |

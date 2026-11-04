@@ -12,7 +12,7 @@ that none exists).
 
 **Verified on:** DaVinci Resolve Studio 21.0.2
 
-**Totals:** 43 missing capabilities, 61 bugs / unreliable behaviors.
+**Totals:** 43 missing capabilities, 66 bugs / unreliable behaviors.
 
 The authoritative source is the runtime-queryable `api_truth` ledger
 (`resolve_control api_truth "<query>"`); this document is generated from
@@ -181,8 +181,8 @@ equivalent, blocking full automation.
 ### Speech recognition engine selection and SRT import
 
 - **Object:** `Timeline`
-- **Behavior:** Timeline.CreateSubtitlesFromAudio(autoCaptionSettings) always uses the built-in Resolve speech recognition engine. There is no API parameter to select an alternative provider (e.g. whisper-cli, Google Speech, AWS Transcribe). The language selection via resolve.AUTO_CAPTION_LANGUAGE_* is the only customization; the engine itself cannot be changed. There is no dedicated subtitle import method. However, MediaPool.ImportMedia(srt) + AppendToTimeline was reported working on Studio 21.0.4.5 (issue #169). Whether that route carries word timing for animated presets on 21.1 has not been verified; SRT contains only cue timing.
-- **Workaround / current handling:** Use Resolve's engine for CreateSubtitlesFromAudio. For external SRT, test ImportMedia + AppendToTimeline on the exact installed build or import through the UI. Use project_db write_captions for explicit word timings with Resolve fully quit; do not assume SRT supplies them.
+- **Behavior:** Timeline.CreateSubtitlesFromAudio(autoCaptionSettings) always uses the built-in Resolve speech recognition engine. There is no API parameter to select an alternative provider (e.g. whisper-cli, Google Speech, AWS Transcribe). The language selection via resolve.AUTO_CAPTION_LANGUAGE_* is the only customization; the engine itself cannot be changed. There is no dedicated subtitle import method. MediaPool.ImportMedia(srt) + AppendToTimeline was reported working on Studio 21.0.4.5 (issue #169). On Studio 21.1.2.10 the clipInfo form of that append aborts Resolve and the plain form places nothing, and the same abort was reported on free 21.0.3.7 (issue #335). Whether either route carries word timing for animated presets has not been verified; SRT contains only cue timing.
+- **Workaround / current handling:** Use Resolve's engine for CreateSubtitlesFromAudio. For external SRT on 21.0 and newer, import through the UI. clipInfo append of a subtitle item is refused on 21.0+ (see MediaPool.AppendToTimeline subtitle clipInfo). Use project_db write_captions for explicit word timings with Resolve fully quit; do not assume SRT supplies them.
 - **Tags:** missing-method, subtitle, transcription, speech-recognition, asr
 
 ### Media Pool folder rename
@@ -572,6 +572,51 @@ values, or automation-hostile modal prompts.
 - **Workaround / current handling:** Do not trust a render's subtitle settings from the settings_success boolean. VERIFY the artifact: ffprobe the output for a subtitle stream, check for a sidecar file, or sample frames for burned-in pixels. If subtitles must be burned in, confirm the result before delivering.
 - **Reference:** [issue #123](https://github.com/samuelgursky/davinci-resolve-mcp/issues/123)
 - **Tags:** render, subtitle, silent-failure, unverified-cause, deliver
+
+### MediaPool.AppendToTimeline (subtitle clipInfo)
+
+- **Object:** `MediaPool`
+- **Signature:** `([{clipInfo}]) -> [TimelineItem]`
+- **Behavior:** On Studio 21.1.2.10 (Windows), AppendToTimeline with a clipInfo dict for an imported SRT MediaPoolItem (Type Subtitle) aborts Resolve: assertion at Sm2MpObject.cpp:546, reproduced 2/2. The call hangs, then the process is gone. The plain list form AppendToTimeline([item]) does not crash and places nothing. The same abort was reported on free 21.0.3.7 (macOS), once with media_type and once without. ImportMedia(srt) + AppendToTimeline was reported working on Studio 21.0.4.5 (issue #169). Which clipInfo field triggers the abort was not isolated. 21.0.0 through 21.0.2, 21.0.4, 21.1.0, and 21.1.1 were not measured.
+- **Workaround / current handling:** media_pool append_to_timeline, the granular append_to_timeline, and the other clipInfo builders refuse a Type=Subtitle item on Resolve 21.0 and above, and when the connected version cannot be read, with SUBTITLE_APPEND_CRASH, before AppendToTimeline is called. On a build older than 21.0 the call is still forwarded. Import the SRT through the UI.
+- **Reference:** [issue #335](https://github.com/samuelgursky/davinci-resolve-mcp/issues/335)
+- **Tags:** crash, subtitle, timeline, silent-failure
+
+### MediaPool.AddToPhotoAlbum
+
+- **Object:** `MediaPool`
+- **Signature:** `(clips) -> [MediaPoolItem]`
+- **Behavior:** On Studio 21.1.2.10 (Windows), re-measured by the reporter, AddToPhotoAlbum returned None and the album stayed at 0 photos across three argument forms. CreatePhotoAlbumFromPhotos returned an album with 2 photos in the same session and the same project. On Studio 19.1.3.7 (2026-11-01, dir() of the open project's MediaPool), AddToPhotoAlbum, CreateEmptyPhotoAlbum, CreatePhotoAlbumFromPhotos, and GetCurrentPhotoAlbum are absent.
+- **Workaround / current handling:** On 21.1.2, count the album's photos before and after and treat an unchanged count as failure. On 19.1.3.7 the methods are not there; do not call them.
+- **Reference:** [issue #336](https://github.com/samuelgursky/davinci-resolve-mcp/issues/336)
+- **Tags:** silent-failure, media-pool, missing-method
+
+### TimelineItem.SetPosition / Timeline.MoveItems
+
+- **Object:** `TimelineItem / Timeline`
+- **Signature:** `SetPosition(...) -> bool; MoveItems(...) -> bool`
+- **Behavior:** On Studio 21.1.2.10 (Windows), re-measured by the reporter, TimelineItem.SetPosition returned False for 0, 100, and -50, and the clip start was unchanged. Timeline.MoveItems was not callable. The first report had both methods returning False across ints, floats, a no-op start, both moveLinkedItems values, and with or without subframePrecision, while Timeline.SetCurrentTimecode succeeded in that session. This server does not call either method. Not re-measured here.
+- **Workaround / current handling:** Do not treat False from SetPosition as a bad argument. On 21.1.2.10 it returned False for every input tried, and MoveItems was not callable. Move the clip in the Edit page.
+- **Reference:** [issue #336](https://github.com/samuelgursky/davinci-resolve-mcp/issues/336)
+- **Tags:** unreliable-return, timeline, edit
+
+### TimelineItem.SetLeftOffset
+
+- **Object:** `TimelineItem`
+- **Signature:** `(offset, ...) -> bool`
+- **Behavior:** On Studio 21.1.2.10 (Windows), SetLeftOffset(5.0, False, True) on a clip at frame 400 with duration 120 returned True, moved the start to about -86000, and grew the duration to about 86515. Setting the offset back to 0 left the clip at about -86000. The call extends the clip from source media. It does not nudge the edit point, and the edit does not come back. The clip was at frame 400 on a timeline whose StartFrame was 86400, so it sat outside the timeline's declared range; the reporter did not re-run it, because the first call was destructive, and the entry stands as that readback. A live gap probe on an older build recorded SetLeftOffset as absent. This server only reads GetLeftOffset. Not re-measured here.
+- **Workaround / current handling:** Do not call SetLeftOffset to trim a handle. There is no API undo. Any future wrapper has to say that the call extends from source media and require an explicit confirm before it runs.
+- **Reference:** [issue #336](https://github.com/samuelgursky/davinci-resolve-mcp/issues/336)
+- **Tags:** silent-failure, timeline, edit, destructive
+
+### TimelineItem.AddMarker at relative frame 0
+
+- **Object:** `TimelineItem`
+- **Signature:** `(frameId, color, name, note, duration, customData) -> bool`
+- **Behavior:** On Studio 21.1.2.10 (Windows), re-measured by the reporter with StartFrame 86400: Timeline.AddMarker(0) and Timeline.AddMarker(200) both returned True and the marker was present. TimelineItem.AddMarker(0) on the clip sitting at that StartFrame returned True and wrote nothing (GetMarkers count unchanged, the marker name absent). Same family as issue #34. The first filing recorded Timeline.AddMarker(0) returning False; that was the wrong object. This server already reports success false when AddMarker returns false. Not re-measured here.
+- **Workaround / current handling:** Read the marker back with GetMarkers. True from TimelineItem.AddMarker at relative frame 0 is not evidence the marker exists. Timeline.AddMarker at relative 0 did write the marker on this build.
+- **Reference:** [issue #336](https://github.com/samuelgursky/davinci-resolve-mcp/issues/336)
+- **Tags:** silent-failure, timeline, marker
 
 ### hasattr() / getattr() on Resolve API objects (attribute fabrication)
 

@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 377-tool granular server instead
 """
 
-VERSION = "4.16.0-beta.1"
+VERSION = "4.18.5"
 
 import base64
 import os
@@ -32,6 +32,7 @@ import threading
 import time
 import zlib
 import contextlib
+import contextvars
 from typing import Dict, Any, Optional, List, Tuple
 
 # ─── Path Setup ───────────────────────────────────────────────────────────────
@@ -52,6 +53,8 @@ from src.utils.resolve211_dctl import native_dctl_result
 from src.utils.resolve211_normalization import normalize_audio
 from src.utils.subtitle_live import set_subtitle_preset as _set_live_subtitle_preset
 from src.utils.subtitle_live import list_subtitle_preset_inputs as _list_subtitle_preset_inputs
+from src.utils.subtitle_live import list_captions_live as _list_live_captions
+from src.utils.subtitle_live import write_captions_live as _write_live_captions
 from src.utils.title_library import list_title_presets as _list_installed_title_presets
 from src.utils.title_controls import title_text_targets as _title_text_targets
 from src.utils.title_controls import title_text_keys as _title_text_keys
@@ -59,7 +62,9 @@ from src.utils.resolve211_edits import validate_edit_options, validate_transitio
 
 # Platform-specific Resolve paths
 from src.utils.cdl import normalize_cdl_payload
+from src.utils.media_paths import media_exists as _media_exists
 from src.utils import archive_guard
+from src.utils import subtitle_append_guard
 from src.utils import typed_api_search
 from src.utils import lut_files
 from src.utils import resolve_writes as _resolve_writes
@@ -258,7 +263,8 @@ logger = logging.getLogger("resolve-mcp")
 
 from mcp.server.fastmcp import Context, FastMCP, Image
 from mcp import types as mcp_types
-mcp = FastMCP(
+from src.utils.mcp_error_flag import ErrorFlaggingFastMCP
+mcp = ErrorFlaggingFastMCP(
     "DaVinciResolveMCP",
     instructions=(
         "DaVinci Resolve MCP Server — controls Resolve via its Scripting API. "
@@ -1609,6 +1615,68 @@ class _Params(dict):
     def __missing__(self, key):
         raise _MissingParam(key)
 
+    # ── Read tracking (issue #320) ──────────────────────────────────────────
+    # A key the action never reads used to vanish without a word, so a caller
+    # passing `timeline_id` believed the call was pinned when it wasn't. The
+    # dict records which keys were read; the tool wrapper reports the rest as
+    # `ignored_params`. Anything that hands out the whole dict (iteration, a
+    # copy, `dict(p)`, `{**p}`) counts as reading every key: the copy may be
+    # read anywhere, and a false "ignored" would be worse than a missed one.
+    # State lives in `__dict__` via setdefault so instances built without
+    # `__init__` (copy, pickle) still work.
+
+    def _mark(self, key):
+        self.__dict__.setdefault("_read_keys", set()).add(key)
+
+    def _mark_all(self):
+        self.__dict__["_read_all"] = True
+
+    def read_keys(self):
+        """The keys read so far, or None when the whole dict was handed out."""
+        if self.__dict__.get("_read_all"):
+            return None
+        return set(self.__dict__.get("_read_keys", ()))
+
+    def __getitem__(self, key):
+        self._mark(key)
+        return super().__getitem__(key)
+
+    def __contains__(self, key):
+        self._mark(key)
+        return super().__contains__(key)
+
+    def get(self, key, default=None):
+        self._mark(key)
+        return super().get(key, default)
+
+    def pop(self, key, *default):
+        self._mark(key)
+        return super().pop(key, *default)
+
+    def setdefault(self, key, default=None):
+        self._mark(key)
+        return super().setdefault(key, default)
+
+    def __iter__(self):
+        self._mark_all()
+        return super().__iter__()
+
+    def keys(self):
+        self._mark_all()
+        return super().keys()
+
+    def items(self):
+        self._mark_all()
+        return super().items()
+
+    def values(self):
+        self._mark_all()
+        return super().values()
+
+    def copy(self):
+        self._mark_all()
+        return super().copy()
+
 
 def _params(params: Optional[Dict[str, Any]]) -> "_Params":
     """Every tool body starts here, so every action gets the diagnosable dict.
@@ -1616,8 +1684,11 @@ def _params(params: Optional[Dict[str, Any]]) -> "_Params":
     Note `_Params(params or {})` rather than a truthiness dance: an empty
     `_Params` is falsy like any empty dict, so `p = params or {}` would have
     quietly handed back a *plain* dict in exactly the no-arguments case this
-    exists to serve.
+    exists to serve. A `_Params` the tool wrapper already built is returned as
+    is, so its read tracking sees the action's reads.
     """
+    if isinstance(params, _Params):
+        return params
     return _Params(params or {})
 
 
@@ -1696,6 +1767,221 @@ def _record_execution_step(
         logger.debug("Failed to record execution step: %s", exc)
 
 
+# ─── Call scope: timeline pinning, ignored params, acted-on timeline (#320) ──
+#
+# Timeline-scoped actions act on `Project.GetCurrentTimeline()`. Nothing let a
+# caller name the target, and a `timeline_id` the action did not read was
+# dropped, so the write landed on whatever was current (including a timeline
+# the user had just clicked) while the response said success.
+#
+# `timeline_id` / `timeline_name` now pin a call: the wrapper makes that
+# timeline current for the call and restores the caller's timeline afterwards.
+# Switching rather than passing a Timeline object around is deliberate. About
+# fifty sites read the current timeline, and several Resolve calls only act on
+# the current one (playhead, current video item, render range), so a pin that
+# skipped the switch would silently not apply to them. `_playhead_frame_capture`
+# already switched and restored the same way for its own `timeline_name`.
+
+#: Tools whose actions act on the current timeline.
+_TIMELINE_SCOPED_TOOLS = frozenset({
+    "timeline", "timeline_item", "timeline_item_markers", "timeline_item_color",
+    "timeline_item_fusion", "timeline_item_takes", "timeline_markers",
+    "timeline_frame", "timeline_ai", "graph", "render",
+})
+#: Actions that read a pin key with a meaning of their own: set_current selects
+#: by `timeline_id`, and the imports use `timeline_name` for the new timeline.
+_TIMELINE_PIN_EXEMPT = frozenset({
+    ("timeline", "list"), ("timeline", "set_current"),
+    ("timeline", "import_timeline_checked"), ("timeline", "import_from_drp"),
+})
+_PIN_ID_KEYS = ("timeline_id", "timelineId")
+_PIN_NAME_KEYS = ("timeline_name", "timelineName")
+#: Keys the wrapper and the envelope read, never the action.
+_ENVELOPE_PARAM_KEYS = frozenset({"envelope", "_envelope", "execution_id", "_execution_id", "trace_id"})
+
+_call_depth = contextvars.ContextVar("resolve_mcp_call_depth", default=0)
+_acted_timeline = contextvars.ContextVar("resolve_mcp_acted_timeline", default=None)
+
+
+def _note_timeline(tl):
+    """Record the timeline this call acted on (the first one resolved wins)."""
+    if tl is not None and _acted_timeline.get() is None:
+        _acted_timeline.set(tl)
+
+
+def _timeline_ref(tl) -> Optional[Dict[str, Any]]:
+    try:
+        return {"name": str(tl.GetName()), "id": str(tl.GetUniqueId())}
+    except Exception as exc:  # a stale handle must not fail the call it describes
+        logger.debug("Could not describe timeline: %s", exc)
+        return None
+
+
+class _CallScope:
+    """Per-call state for the outermost tool call (nested tool calls pass through).
+
+    Only the outermost call is scoped: internal code that chains one tool into
+    another passes its own params, and pinning or reporting those would be
+    about the server's plumbing, not the caller's request.
+    """
+
+    def __init__(self, tool_name: str, action: str, args, kwargs):
+        self.tool_name, self.action = tool_name, action
+        self.outer = _call_depth.get() == 0
+        self._depth_token = _call_depth.set(_call_depth.get() + 1)
+        self._timeline_token = _acted_timeline.set(None) if self.outer else None
+        self.params = None
+        self.pin = None  # (project, timeline to restore or None, pinned timeline)
+        self.error = None
+        self.args, self.kwargs = args, kwargs
+        if not self.outer:
+            return
+        raw = _guarded_params(args, kwargs)
+        if raw is not None:
+            self.params = raw if isinstance(raw, _Params) else _Params(raw)
+            if isinstance(kwargs.get("params"), dict):
+                self.kwargs = {**kwargs, "params": self.params}
+            else:
+                self.args = (args[0], self.params, *args[2:])
+        if (self.params and tool_name in _TIMELINE_SCOPED_TOOLS
+                and (tool_name, action) not in _TIMELINE_PIN_EXEMPT):
+            self.error = self._pin()
+
+    def _pin(self):
+        p = self.params
+        want_id = next((p[k] for k in _PIN_ID_KEYS if p.get(k)), None)
+        want_name = next((p[k] for k in _PIN_NAME_KEYS if p.get(k)), None)
+        if not (want_id or want_name):
+            return None
+        _, proj, err = _check()
+        if err:
+            return err
+        target = None
+        if want_id:
+            target = _find_timeline_by_id(proj, want_id)[0]
+            if target is None:
+                return _err(
+                    f"No timeline with id {want_id!r} in this project",
+                    code="TIMELINE_NOT_FOUND", category="invalid_input",
+                    remediation="List timelines with timeline(action='list') and pass one of their ids.",
+                    state={"timeline_id": str(want_id)},
+                )
+        if want_name:
+            named = [
+                tl for tl in (proj.GetTimelineByIndex(i) for i in range(1, int(proj.GetTimelineCount() or 0) + 1))
+                if tl and str(tl.GetName()) == str(want_name)
+            ]
+            if target is not None and str(target.GetName()) != str(want_name):
+                return _err(
+                    f"timeline_id {want_id!r} is {target.GetName()!r}, not {want_name!r}",
+                    code="TIMELINE_SELECTOR_MISMATCH", category="invalid_input",
+                    remediation="Pass either timeline_id or timeline_name, or a pair that names the same timeline.",
+                )
+            if target is None:
+                if not named:
+                    return _err(
+                        f"No timeline named {want_name!r} in this project",
+                        code="TIMELINE_NOT_FOUND", category="invalid_input",
+                        remediation="List timelines with timeline(action='list') and pass an exact name or id.",
+                        state={"timeline_name": str(want_name)},
+                    )
+                if len(named) > 1:
+                    return _err(
+                        f"{len(named)} timelines are named {want_name!r}",
+                        code="TIMELINE_NAME_AMBIGUOUS", category="invalid_input",
+                        remediation="Pass timeline_id instead; timeline(action='list') returns each id.",
+                        state={"ids": [tl.GetUniqueId() for tl in named]},
+                    )
+                target = named[0]
+        current = proj.GetCurrentTimeline()
+        if current is not None and current.GetUniqueId() == target.GetUniqueId():
+            self.pin = (proj, None, target)
+            return None
+        if not proj.SetCurrentTimeline(target):
+            return _err(
+                f"Could not make timeline {target.GetName()!r} current to act on it",
+                code="TIMELINE_PIN_FAILED", category="resolve_api_failed",
+            )
+        self.pin = (proj, current, target)
+        return None
+
+    def restore(self):
+        """Give the caller back their current timeline. Safe to call twice."""
+        if getattr(self, "_restored_done", False):
+            return
+        self._restored_done = True
+        restored = None
+        if self.pin:
+            proj, original, target = self.pin
+            if original is not None:
+                try:
+                    now = proj.GetCurrentTimeline()
+                    # An action that moved the current timeline elsewhere on
+                    # purpose (create, duplicate) keeps that; only undo our switch.
+                    if now is not None and now.GetUniqueId() == target.GetUniqueId():
+                        switched = proj.SetCurrentTimeline(original)
+                        # Verified by readback too: SetCurrentTimeline can answer
+                        # True and stay put, and an unverified restore would
+                        # leave the caller's next unpinned write on our target.
+                        after = proj.GetCurrentTimeline()
+                        if switched and after is not None and after.GetUniqueId() == original.GetUniqueId():
+                            restored = original
+                        else:
+                            self.restore_failed = True
+                except Exception as exc:
+                    self.restore_failed = True
+                    logger.warning("Could not restore the current timeline after a pinned call: %s", exc)
+        self.restored = restored
+
+    def report(self, result):
+        """Add `ignored_params` to a successful result: keys no code read."""
+        if not self.outer or not isinstance(result, dict) or result.get("error"):
+            return result
+        restored = getattr(self, "restored", None)
+        if restored is not None and "current" in result:
+            # `current` (timeline.duplicate) was read inside the pin; the
+            # restore has since made the caller's timeline current again.
+            try:
+                if result["current"] == self.pin[2].GetName():
+                    result = {**result, "current": restored.GetName()}
+            except Exception:
+                pass
+        if self.params is None:
+            return result
+        read = self.params.read_keys()
+        if read is None:
+            return result
+        ignored = sorted(str(k) for k in set(dict.keys(self.params)) - read - _ENVELOPE_PARAM_KEYS)
+        return {**result, "ignored_params": ignored} if ignored else result
+
+    def annotate(self, enveloped):
+        """Name the timeline acted on in the envelope (#320)."""
+        if not self.outer or self.tool_name not in _TIMELINE_SCOPED_TOOLS or not isinstance(enveloped, dict):
+            return enveloped
+        acted = self.pin[2] if self.pin else _acted_timeline.get()
+        ref = _timeline_ref(acted) if acted is not None else None
+        if ref is None:
+            return enveloped
+        if self.pin:
+            ref["pinned"] = True
+            restored = getattr(self, "restored", None)
+            if restored is not None:
+                ref["restored_current"] = _timeline_ref(restored)
+            if getattr(self, "restore_failed", False):
+                ref["restore_failed"] = True
+        envelope = enveloped.get(_operation_result.ENVELOPE_KEY)
+        if isinstance(envelope, dict):
+            envelope["timeline"] = ref
+        elif "operation" in enveloped and "status" in enveloped:  # pure mode
+            enveloped["timeline"] = ref
+        return enveloped
+
+    def close(self):
+        if self._timeline_token is not None:
+            _acted_timeline.reset(self._timeline_token)
+        _call_depth.reset(self._depth_token)
+
+
 def _guard_missing_params(fn):
     """Tool decorator: report a missing parameter instead of leaking a KeyError.
 
@@ -1726,62 +2012,84 @@ def _guard_missing_params(fn):
         @functools.wraps(fn)
         async def wrapper(*args, **kwargs):
             action = _guarded_action_name(args, kwargs)
-            params = _guarded_params(args, kwargs)
-            lifecycle = _execution_lifecycle.get_lifecycle_pipeline()
-            ctx = _execution_lifecycle.ToolCallContext(
-                tool_name=tool_name,
-                action=action,
-                params=params or {},
-            )
-            decision = lifecycle.run_before(ctx)
-            if decision and not decision.proceed and decision.short_circuit_result is not None:
-                return _build_operation_envelope(tool_name, action, params, decision.short_circuit_result, duration_ms=0)
-
-            t0 = time.perf_counter()
+            scope = _CallScope(tool_name, action, args, kwargs)
             try:
-                result = await fn(*args, **kwargs)
-            except _MissingParam as exc:
-                result = _missing_param_error(exc, action)
-            except Exception as exc:
+                args, kwargs = scope.args, scope.kwargs
+                params = _guarded_params(args, kwargs)
+                if scope.error is not None:
+                    return _build_operation_envelope(tool_name, action, params, scope.error, duration_ms=0)
+                lifecycle = _execution_lifecycle.get_lifecycle_pipeline()
+                ctx = _execution_lifecycle.ToolCallContext(
+                    tool_name=tool_name,
+                    action=action,
+                    params=params or {},
+                )
+                decision = lifecycle.run_before(ctx)
+                if decision and not decision.proceed and decision.short_circuit_result is not None:
+                    return _build_operation_envelope(tool_name, action, params, decision.short_circuit_result, duration_ms=0)
+
+                t0 = time.perf_counter()
+                try:
+                    result = await fn(*args, **kwargs)
+                except _MissingParam as exc:
+                    result = _missing_param_error(exc, action)
+                except Exception as exc:
+                    duration_ms = max(0, int((time.perf_counter() - t0) * 1000))
+                    lifecycle.run_on_error(ctx, exc, duration_ms)
+                    raise
+                finally:
+                    scope.restore()
                 duration_ms = max(0, int((time.perf_counter() - t0) * 1000))
-                lifecycle.run_on_error(ctx, exc, duration_ms)
-                raise
-            duration_ms = max(0, int((time.perf_counter() - t0) * 1000))
-            enveloped = _build_operation_envelope(
-                tool_name, action, params, result, duration_ms=duration_ms)
-            enveloped = lifecycle.run_after(ctx, enveloped, duration_ms)
-            _record_execution_step(tool_name, action, params, result, enveloped, duration_ms)
-            return enveloped
+                result = scope.report(result)
+                enveloped = _build_operation_envelope(
+                    tool_name, action, params, result, duration_ms=duration_ms)
+                enveloped = scope.annotate(enveloped)
+                enveloped = lifecycle.run_after(ctx, enveloped, duration_ms)
+                _record_execution_step(tool_name, action, params, result, enveloped, duration_ms)
+                return enveloped
+            finally:
+                scope.close()
     else:
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
             action = _guarded_action_name(args, kwargs)
-            params = _guarded_params(args, kwargs)
-            lifecycle = _execution_lifecycle.get_lifecycle_pipeline()
-            ctx = _execution_lifecycle.ToolCallContext(
-                tool_name=tool_name,
-                action=action,
-                params=params or {},
-            )
-            decision = lifecycle.run_before(ctx)
-            if decision and not decision.proceed and decision.short_circuit_result is not None:
-                return _build_operation_envelope(tool_name, action, params, decision.short_circuit_result, duration_ms=0)
-
-            t0 = time.perf_counter()
+            scope = _CallScope(tool_name, action, args, kwargs)
             try:
-                result = fn(*args, **kwargs)
-            except _MissingParam as exc:
-                result = _missing_param_error(exc, action)
-            except Exception as exc:
+                args, kwargs = scope.args, scope.kwargs
+                params = _guarded_params(args, kwargs)
+                if scope.error is not None:
+                    return _build_operation_envelope(tool_name, action, params, scope.error, duration_ms=0)
+                lifecycle = _execution_lifecycle.get_lifecycle_pipeline()
+                ctx = _execution_lifecycle.ToolCallContext(
+                    tool_name=tool_name,
+                    action=action,
+                    params=params or {},
+                )
+                decision = lifecycle.run_before(ctx)
+                if decision and not decision.proceed and decision.short_circuit_result is not None:
+                    return _build_operation_envelope(tool_name, action, params, decision.short_circuit_result, duration_ms=0)
+
+                t0 = time.perf_counter()
+                try:
+                    result = fn(*args, **kwargs)
+                except _MissingParam as exc:
+                    result = _missing_param_error(exc, action)
+                except Exception as exc:
+                    duration_ms = max(0, int((time.perf_counter() - t0) * 1000))
+                    lifecycle.run_on_error(ctx, exc, duration_ms)
+                    raise
+                finally:
+                    scope.restore()
                 duration_ms = max(0, int((time.perf_counter() - t0) * 1000))
-                lifecycle.run_on_error(ctx, exc, duration_ms)
-                raise
-            duration_ms = max(0, int((time.perf_counter() - t0) * 1000))
-            enveloped = _build_operation_envelope(
-                tool_name, action, params, result, duration_ms=duration_ms)
-            enveloped = lifecycle.run_after(ctx, enveloped, duration_ms)
-            _record_execution_step(tool_name, action, params, result, enveloped, duration_ms)
-            return enveloped
+                result = scope.report(result)
+                enveloped = _build_operation_envelope(
+                    tool_name, action, params, result, duration_ms=duration_ms)
+                enveloped = scope.annotate(enveloped)
+                enveloped = lifecycle.run_after(ctx, enveloped, duration_ms)
+                _record_execution_step(tool_name, action, params, result, enveloped, duration_ms)
+                return enveloped
+            finally:
+                scope.close()
 
     wrapper.__wrapped_by_missing_param_guard__ = True
     return wrapper
@@ -3073,12 +3381,28 @@ def _get_tl():
             code="NO_CURRENT_TIMELINE", category="precondition",
             remediation="Open a timeline via timeline(action='set_current', params={'index': N}) or in the Resolve UI.",
         )
+    _note_timeline(tl)
     return proj, tl, None
 
 def _get_item(p):
     proj, tl, err = _get_tl()
     if err:
         return None, None, err
+    # A stable handle (#323). `item_index` counts every entry
+    # GetItemListInTrack returns, and on 21.1 that includes transitions, so an
+    # index shifts each time a transition is added or removed. `clip_id` is not
+    # an alias here: timeline_item_takes already reads it as a Media Pool clip.
+    item_id = p.get("timeline_item_id") or p.get("timelineItemId")
+    if item_id:
+        item = _find_timeline_item_by_id(tl, item_id)
+        if item is None:
+            return tl, None, _err(
+                f"No timeline item with timeline_item_id={item_id!r} on the current timeline",
+                code="ITEM_NOT_FOUND", category="invalid_input",
+                remediation="Read ids with timeline(action='probe_timeline_structure'); pass timeline_id to target another timeline.",
+                state={"timeline_item_id": str(item_id)},
+            )
+        return tl, item, None
     track_type = p.get("track_type", "video")
     track_index = p.get("track_index", 1)
     item_index = p.get("item_index", 0)
@@ -3590,6 +3914,68 @@ def _timeline_start_frame(tl) -> Optional[int]:
         return None
 
 
+def _connected_resolve_version():
+    """The connected Resolve version string, or None when it cannot be read.
+
+    Only called once a payload is already known to contain a subtitle clipInfo,
+    so a missing connection is not an excuse to launch Resolve from a test.
+    """
+    try:
+        resolve = get_resolve()
+    except Exception:
+        return None
+    if resolve is None:
+        return None
+    getter = getattr(resolve, "GetVersionString", None)
+    if not callable(getter):
+        return None
+    try:
+        return getter()
+    except Exception:
+        return None
+
+
+def _payload_has_subtitle_clipinfo(payload) -> bool:
+    rows = [payload] if isinstance(payload, dict) else payload
+    if not isinstance(rows, list):
+        return False
+    for row in rows:
+        if isinstance(row, dict) and subtitle_append_guard.is_subtitle_item(row.get("mediaPoolItem")):
+            return True
+    return False
+
+
+def _subtitle_append_block(payload, index=None):
+    """Structured refusal for a subtitle clipInfo that would abort Resolve 21.0+.
+
+    None when the payload may be forwarded. Clip objects, the plain
+    AppendToTimeline([item]) form, are not clipInfos and are not refused.
+    The version is read only after a subtitle clipInfo is present, so a
+    normal append does not touch the Resolve connection from here.
+    """
+    if not _payload_has_subtitle_clipinfo(payload):
+        return None
+    message = subtitle_append_guard.refusal_message(
+        payload, _connected_resolve_version(), index=index,
+    )
+    if not message:
+        return None
+    return _err(
+        message,
+        code="SUBTITLE_APPEND_CRASH",
+        category="unsupported",
+        retryable=False,
+        reason=subtitle_append_guard.MEASURED,
+        remediation=(
+            "Do not send a clipInfo for a subtitle MediaPoolItem on Resolve 21.0 "
+            "or newer. On Studio 21.1.2.10 and on free 21.0.3.7 that call aborts "
+            "Resolve. The plain clip_ids form does not crash, and on 21.1.2.10 it "
+            "also places nothing. Import the SRT in the Resolve UI, or use "
+            "project_db write_captions with Resolve fully quit."
+        ),
+    )
+
+
 def _build_append_clip_info_dict(
     root,
     ci: Dict[str, Any],
@@ -3643,6 +4029,9 @@ def _build_append_clip_info_dict(
     mt = ci.get("mediaType", ci.get("media_type"))
     if mt is not None:
         out["mediaType"] = mt
+    blocked = _subtitle_append_block(out, index=index)
+    if blocked:
+        return None, blocked
     return out, None
 
 
@@ -4190,14 +4579,18 @@ def _append_clip_info_from_timeline_item(
     if src_end_excl is None or src_end_excl <= src_start:
         return None, _err("invalid source range")
     record = int(record_frame) if record_frame is not None else t_start + int(record_frame_offset)
-    return {
+    info = {
         "mediaPoolItem": mpi,
         "startFrame": src_start,
         "endFrame": src_end_excl,
         "recordFrame": record,
         "trackIndex": int(target_track_index),
         "mediaType": int(media_type),
-    }, None
+    }
+    blocked = _subtitle_append_block(info)
+    if blocked:
+        return None, blocked
+    return info, None
 
 
 def _find_appended_timeline_item_summary(
@@ -7041,7 +7434,12 @@ def _timeline_item_conform_summary(item, track_type: str, track_index: int, item
                 media_status = clip_properties.get(key)
                 break
     summary["file_path"] = file_path
-    summary["file_exists"] = bool(file_path and os.path.exists(str(file_path)))
+    # An image sequence's path is a pattern (`name.[0000-8999].jpeg`), never a
+    # file, so os.path.exists alone reported every Online sequence missing (#325).
+    exists, sequence = _media_exists(file_path)
+    summary["file_exists"] = exists
+    if sequence is not None:
+        summary["sequence"] = sequence
     summary["media_status"] = media_status
     if clip_properties is not None:
         summary["clip_properties"] = clip_properties
@@ -8386,12 +8784,35 @@ def _drt_looks_tool_authored(path: str) -> Optional[str]:
     return None
 
 
+def _fcpxml_bundle_document(path: str) -> Optional[str]:
+    """The importable document inside an FCPXML bundle directory, or None.
+
+    Resolve 21.1 exports FCPXML as a directory named `*.fcpxml` (or
+    `*.fcpxmld`) holding `Info.fcpxml`. `export_timeline_checked` returns that
+    directory as `path`, so importing the export's own `path` used to fail when
+    the rename pass tried to open a directory as a file (#324).
+    """
+    if not os.path.isdir(path) or not path.rstrip("/\\").lower().endswith((".fcpxml", ".fcpxmld")):
+        return None
+    info = os.path.join(path, "Info.fcpxml")
+    if os.path.isfile(info):
+        return info
+    documents = sorted(
+        os.path.join(path, name) for name in os.listdir(path) if name.lower().endswith(".fcpxml")
+    )
+    return documents[0] if len(documents) == 1 and os.path.isfile(documents[0]) else None
+
+
 def _import_timeline_checked(proj, mp, p: Dict[str, Any]):
     path = p.get("path")
     if not path:
         return _err("path is required")
     if not os.path.exists(path):
         return _err(f"path does not exist: {path}")
+    bundle_document = _fcpxml_bundle_document(path)
+    if bundle_document:
+        p = {**p, "path": bundle_document}
+        path = bundle_document
     ext = os.path.splitext(path)[1].lower()
     if ext == ".prproj":
         return _err(_PRPROJ_REFUSAL, category="invalid_input")
@@ -9414,7 +9835,7 @@ def _detect_missing_media_from_snapshot(snapshot: Dict[str, Any]):
             for item in track.get("items", []):
                 file_path = item.get("file_path")
                 status_text = str(item.get("media_status") or "").lower()
-                exists = bool(file_path and os.path.exists(str(file_path)))
+                exists = _media_exists(file_path)[0]
                 is_missing = bool(file_path and not exists) or any(token in status_text for token in ("offline", "missing"))
                 row = {
                     "track_type": track_type,
@@ -13007,7 +13428,9 @@ def _media_analysis_replace_owned_block(existing: Any, body: Any) -> str:
         + re.escape(_MCP_METADATA_BLOCK_END)
     )
     if re.search(pattern, existing_text, flags=re.DOTALL):
-        return re.sub(pattern, block, existing_text, flags=re.DOTALL).strip()
+        # A function replacement inserts the block literally: as a string, a
+        # backslash in the analysis text (a Windows path) is read as an escape.
+        return re.sub(pattern, lambda _match: block, existing_text, flags=re.DOTALL).strip()
     return f"{existing_text}\n\n{block}".strip() if existing_text else block
 
 
@@ -15251,6 +15674,9 @@ def _compare_timeline_append_readback(before, observed, expected_count: int):
 
 
 def _append_to_timeline_with_verification(proj, mp, append_payload, requested: Dict[str, Any], expected_count: int):
+    blocked = _subtitle_append_block(append_payload)
+    if blocked:
+        return None, None, None, blocked
     raw_result = {"value": None}
     before = _timeline_append_readback_snapshot(proj)
 
@@ -15270,7 +15696,7 @@ def _append_to_timeline_with_verification(proj, mp, append_payload, requested: D
         intent=requested,
         label="media_pool.append_to_timeline",
     )
-    return raw_result["value"], verification, before
+    return raw_result["value"], verification, before, None
 
 
 def _append_to_timeline_verified_operation(requested: Dict[str, Any], verification: Dict[str, Any], before):
@@ -22909,6 +23335,11 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
           record_frame is relative to the current timeline start frame by default;
           pass record_frame_mode="absolute" for raw Resolve recordFrame values.
           Returns timeline_item_id per item.
+          A MediaPoolItem whose Type is Subtitle is refused on Resolve 21.0+
+          (and when the version cannot be read) with SUBTITLE_APPEND_CRASH,
+          before AppendToTimeline. On Studio 21.1.2.10 and on free 21.0.3.7
+          that clipInfo aborts Resolve (issue #335). Builds older than 21.0
+          are still forwarded.
         Either form: Resolve answering None/False/[] is APPEND_TO_TIMELINE_FAILED,
           with verified_operation (the timeline readback) kept on the error;
           retryable only when the readback shows nothing was appended.
@@ -23171,13 +23602,15 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
                 "clip_info_count": len(raw),
                 "expected_count": len(built),
             }
-            result, verification, before = _append_to_timeline_with_verification(
+            result, verification, before, blocked = _append_to_timeline_with_verification(
                 proj,
                 mp,
                 built,
                 requested,
                 len(built),
             )
+            if blocked:
+                return blocked
             if not result:
                 return _append_to_timeline_failed(
                     "Failed to append clip_infos to timeline", result, requested, verification, before,
@@ -23209,13 +23642,15 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
             "resolved_clip_count": len(clips),
             "expected_count": len(clips),
         }
-        result, verification, before = _append_to_timeline_with_verification(
+        result, verification, before, blocked = _append_to_timeline_with_verification(
             proj,
             mp,
             clips,
             requested,
             len(clips),
         )
+        if blocked:
+            return blocked
         if not result:
             return _append_to_timeline_failed(
                 "Failed to append clip_ids to timeline", result, requested, verification, before,
@@ -27224,7 +27659,7 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         track: Resolve answers that with a bare False, and SetProperty still writes there.
         DESTRUCTIVE. ripple=True is CATASTROPHIC (closes the gap; cannot be selectively undone).
       set_clips_linked(clip_ids, linked) -> {success}
-      duplicate(name?) -> {success, name}
+      duplicate(name?, make_current?) -> {success, name, id, current}  (original stays current unless make_current)
       duplicate_clips(clip_ids?, selected?, target_track_index?, track_offset?, placement?, record_frame?, record_frame_offset?, copy_properties?, include_linked?) -> {results, count}
       — Video clips only. Re-places the same MediaPool media with the same source trim on the
         current timeline (like Alt-drag) via AppendToTimeline. clip_ids: timeline item unique IDs
@@ -27520,6 +27955,7 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
     tl = proj.GetCurrentTimeline()
     if not tl:
         return _err("No current timeline")
+    _note_timeline(tl)
 
     if action == "auto_align_clips":
         missing = _requires_method(tl, "AutoAlignClips", "21.1")
@@ -27672,8 +28108,28 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
                         found.append(it)
         return {"success": bool(tl.SetClipsLinked(found, p["linked"]))}
     elif action == "duplicate":
+        # Resolve makes the copy current. Callers duplicate to keep a backup and
+        # then edit the original, so the original stays current unless asked
+        # (#322); `current` says which timeline is current afterwards.
         dup = tl.DuplicateTimeline(p.get("name", tl.GetName() + " Copy"))
-        return _ok(name=dup.GetName()) if dup else _err("Failed to duplicate")
+        if not dup:
+            return _err("Failed to duplicate")
+        warnings = []
+        if not _coerce_bool(p.get("make_current"), False):
+            now = proj.GetCurrentTimeline()
+            if now is None or now.GetUniqueId() != tl.GetUniqueId():
+                switched = proj.SetCurrentTimeline(tl)
+                now = proj.GetCurrentTimeline()
+                if not switched or now is None or now.GetUniqueId() != tl.GetUniqueId():
+                    warnings.append("Could not make the original timeline current again; the copy may be current.")
+        elif proj.GetCurrentTimeline() is None or proj.GetCurrentTimeline().GetUniqueId() != dup.GetUniqueId():
+            if not proj.SetCurrentTimeline(dup):
+                warnings.append("Could not make the copy current; the original is still current.")
+        now = proj.GetCurrentTimeline()
+        result = _ok(name=dup.GetName(), id=dup.GetUniqueId(), current=now.GetName() if now else None)
+        if warnings:
+            result["warnings"] = warnings
+        return result
     elif action == "duplicate_clips":
         return _timeline_duplicate_clips_impl(proj, tl, p)
     elif action == "copy_clips":
@@ -28453,6 +28909,16 @@ def timeline_ai(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
         inspect rendered frames separately. Successful staging exports are removed;
         failure results report retained staging for diagnosis. Unbundled dry runs need an
         existing preset_reference to avoid live capture. Never patches Project.db.
+      list_captions_live(track?) -> {fps, captions:[{id,text,start,end,words}]}  — decoded
+        from a native DRT export (timeline frames); read-only, Resolve stays open.
+      write_captions_live(track?, replace?, add?, delete?, template_caption_id?, revision_name?, dry_run?)
+        Same caption shape as advanced project_db write_captions, but with Resolve open:
+        replace:[{id,text,start,end,words:[{text,start,end}]}], add:[{text,start,end,words}],
+        delete:[id]. text = words joined by spaces; words must tile the caption.
+        id = the caption start frame as a string (Resolve re-mints item IDs per export).
+        Native export -> caption codec -> native import as a selected revision;
+        Resolve's re-export is decoded and must match text, bounds and word frames.
+        Original retained and re-selected on failure. Never patches Project.db.
       detect_scene_cuts(background?) -> {success | job_id}
       analyze_dolby_vision(clip_ids?, analysis_type?, background?) -> {success | job_id}
       grab_still() -> {success}
@@ -28478,6 +28944,11 @@ def timeline_ai(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
         # Match the safety decorator's boolean interpretation before any capture/import.
         return _set_live_subtitle_preset(get_resolve(), proj, tl,
                                         {**p, "dry_run": _coerce_bool(p.get("dry_run", p.get("dryRun")))}, _resolve_safe_dir)
+    elif action == "list_captions_live":
+        return _list_live_captions(get_resolve(), tl, p, _resolve_safe_dir)
+    elif action == "write_captions_live":
+        return _write_live_captions(get_resolve(), proj, tl,
+                                    {**p, "dry_run": _coerce_bool(p.get("dry_run", p.get("dryRun")))}, _resolve_safe_dir)
     elif action == "detect_scene_cuts":
         return _run_maybe_background(
             "timeline_ai.detect_scene_cuts", p, lambda: {"success": bool(tl.DetectSceneCuts())}
@@ -28502,7 +28973,7 @@ def timeline_ai(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
     elif action == "grab_all_stills":
         stills = tl.GrabAllStills(p.get("source", 1))
         return {"count": len(stills) if stills else 0}
-    return _unknown(action, ["list_title_presets","create_subtitles","list_subtitle_preset_inputs","set_subtitle_preset","detect_scene_cuts","analyze_dolby_vision","grab_still","grab_all_stills"])
+    return _unknown(action, ["list_title_presets","create_subtitles","list_subtitle_preset_inputs","set_subtitle_preset","list_captions_live","write_captions_live","detect_scene_cuts","analyze_dolby_vision","grab_still","grab_all_stills"])
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -28588,6 +29059,9 @@ def timeline_item(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[
           writes_render or inconclusive.
 
     Default: track_type="video", track_index=1, item_index=0
+    Or address the item by timeline_item_id (its GetUniqueId(), stable); on
+    21.1 item_index also counts transitions, so it shifts when one is added.
+    timeline_id / timeline_name target a timeline other than the current one.
     """
     p = _params(params)
     tl, item, err = _get_item(p)
@@ -28914,6 +29388,9 @@ def timeline_item_markers(action: str, params: Optional[Dict[str, Any]] = None) 
       clear_clip_color(...) -> {success}
 
     Default: track_type="video", track_index=1, item_index=0
+    Or address the item by timeline_item_id (its GetUniqueId(), stable); on
+    21.1 item_index also counts transitions, so it shifts when one is added.
+    timeline_id / timeline_name target a timeline other than the current one.
     """
     p = _params(params)
     _, item, err = _get_item(p)
@@ -28990,6 +29467,9 @@ def timeline_item_fusion(action: str, params: Optional[Dict[str, Any]] = None) -
       set_cache(value, ...) -> {success}  — value: "Auto", "On", or "Off"
 
     Default: track_type="video", track_index=1, item_index=0
+    Or address the item by timeline_item_id (its GetUniqueId(), stable); on
+    21.1 item_index also counts transitions, so it shifts when one is added.
+    timeline_id / timeline_name target a timeline other than the current one.
     """
     p = _params(params)
     _, item, err = _get_item(p)
@@ -29230,6 +29710,161 @@ def _color_graph_from_params(proj, item, p: Dict[str, Any]):
                 return graph, source, None
         return None, source, _err(f"Color group '{group_name}' not found")
     return None, source, _err(f"Unknown color graph source: {source}")
+
+
+def _drx_track_grade_state(path) -> str:
+    """What a .drx holds for a TIMELINE apply: "present", "empty", "missing" or "unreadable".
+
+    A .drx keeps the clip grade in <pClipFullVer> and the timeline grade in
+    <pTrackVer>. A timeline ApplyGradeFromDRX loads <pTrackVer>, and when that
+    block has HasCorrection false it replaces the timeline graph with an empty
+    one and still returns True (issue #318).
+    """
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    except OSError:
+        return "unreadable"
+    block = re.search(r"<pTrackVer>(.*?)</pTrackVer>", text, re.DOTALL)
+    if not block:
+        return "missing"
+    has = re.search(r"<HasCorrection>\s*(true|false)\s*</HasCorrection>", block.group(1), re.IGNORECASE)
+    return "present" if has and has.group(1).lower() == "true" else "empty"
+
+
+def _refuse_empty_track_grade(path, source):
+    """Error envelope when a timeline apply would load no timeline grade, else None."""
+    if source != "timeline":
+        return None
+    state = _drx_track_grade_state(path)
+    if state not in ("missing", "empty"):
+        return None
+    return _err(
+        "This .drx carries no timeline grade (<pTrackVer> is "
+        f"{'absent' if state == 'missing' else 'empty, HasCorrection false'}). Applying it to the "
+        "timeline graph would change nothing and replace the existing timeline graph with an empty one.",
+        code="DRX_NO_TIMELINE_GRADE", category="invalid_input",
+        remediation="Apply it to a clip (source='item') instead, or use a .drx exported from a "
+                    "timeline grade, or generate one with drx(action='generate', target='timeline'). "
+                    "To clear the timeline graph on purpose, use reset_all_grades.",
+        state={"path": path, "track_grade": state},
+    )
+
+
+def _graph_fingerprint(g):
+    """Node count plus each node's label and LUT; None when the graph can't be read.
+
+    GetToolsInNode is left out on purpose: it crashes Resolve 19.1.3 on some graphs.
+    """
+    if not g:
+        return None
+    try:
+        count = int(g.GetNumNodes() or 0)
+    except Exception:
+        return None
+    nodes = []
+    for node_index in range(1, count + 1):
+        row = {}
+        for key, method_name in (("label", "GetNodeLabel"), ("lut", "GetLUT")):
+            if _has_method(g, method_name):
+                try:
+                    row[key] = _ser(getattr(g, method_name)(node_index))
+                except Exception:
+                    row[key] = None
+        nodes.append(row)
+    return {"num_nodes": count, "nodes": nodes}
+
+
+def _drx_candidate_graphs(source, *, item=None, tl=None, group=None, layer_index=None):
+    """{name: getter} for every graph a .drx apply could land in, the target included.
+
+    The clip graph, its color group's pre/post-clip graphs and the timeline graph
+    are all candidates: on a clip in a group the grade can land in the group's
+    pre-clip graph instead of the clip's (issue #319).
+    """
+    out = {}
+    if item is not None:
+        out["item"] = lambda: item.GetNodeGraph(layer_index) if layer_index is not None else item.GetNodeGraph()
+        if group is None:
+            try:
+                group = item.GetColorGroup()
+            except Exception:
+                group = None
+    if group is not None:
+        out["color_group_pre"] = group.GetPreClipNodeGraph
+        out["color_group_post"] = group.GetPostClipNodeGraph
+    if tl is None:
+        try:
+            _, tl, _tl_err = _get_tl()
+        except Exception:
+            tl = None
+    if tl is not None:
+        out["timeline"] = tl.GetNodeGraph
+    if source not in out:
+        out[source] = None
+    return out
+
+
+def _apply_drx_with_readback(graph, source, path, grade_mode, candidates):
+    """ApplyGradeFromDRX, with every candidate graph read before and after.
+
+    The native True does not say where the grade went or whether anything
+    changed, so the result reports which graphs changed. A grade that lands only
+    in another graph is a failure. Nothing changing is reported but not failed:
+    a same-structure apply changes only parameters, which the API cannot read.
+    """
+    def read(getter):
+        try:
+            return _graph_fingerprint(getter()) if getter else None
+        except Exception:
+            return None
+
+    if candidates.get(source) is None:
+        candidates = {**candidates, source: lambda: graph}
+    before = {name: read(getter) for name, getter in candidates.items()}
+    native = bool(graph.ApplyGradeFromDRX(path, grade_mode))
+    after = {name: read(getter) for name, getter in candidates.items()}
+
+    graphs = {}
+    changed, unreadable = [], []
+    for name in candidates:
+        b, a = before[name], after[name]
+        if b is None or a is None:
+            unreadable.append(name)
+            graphs[name] = {"readable": False}
+            continue
+        graphs[name] = {"num_nodes_before": b["num_nodes"], "num_nodes_after": a["num_nodes"],
+                        "changed": b != a}
+        if b != a:
+            changed.append(name)
+
+    landed_elsewhere = bool(changed) and source not in changed
+    verification = {
+        "verified": source in changed,
+        "contradiction": landed_elsewhere,
+        "method": "node count, labels and LUTs of each graph before and after",
+    }
+    result = {"success": native, "path": path, "source": source, "changed_graphs": changed,
+              "graphs": graphs, "verification": verification}
+    if unreadable:
+        result["unreadable_graphs"] = unreadable
+    if landed_elsewhere:
+        err = _err(
+            f"The grade was applied to the {', '.join(changed)} graph, not the {source} graph that "
+            "was targeted. Resolve returned " + ("True" if native else "False") + ".",
+            code="DRX_APPLIED_TO_OTHER_GRAPH", category="resolve_api_failed", retryable=False,
+            remediation="Check the Node Editor's graph dropdown (Clip / Group Pre-Clip / Group "
+                        "Post-Clip / Timeline) on the Color page, then restore the changed graph "
+                        "from a still or grade version before retrying.",
+            state={"targeted": source, "changed_graphs": changed},
+        )
+        return {**result, **err, "success": False}
+    if native and not changed:
+        result["warning"] = (
+            "No graph changed its node count, labels or LUTs. Either the grade has the same node "
+            "structure as before (only parameters changed, which the API cannot read back) or "
+            "nothing was applied; confirm with a rendered frame or the scopes.")
+    return result
 
 
 def _grade_version_snapshot(item, p: Dict[str, Any]):
@@ -29498,6 +30133,9 @@ def _safe_apply_drx(proj, item, p: Dict[str, Any]):
     if not _has_method(graph, "ApplyGradeFromDRX"):
         return _err(f"{source} graph does not expose ApplyGradeFromDRX",
                     code="APPLY_DRX_UNSUPPORTED", category="unsupported")
+    refused = _refuse_empty_track_grade(path, source)
+    if refused:
+        return refused
     if _coerce_bool(p.get("dry_run")):
         return _ok(path=path, source=source, grade_mode=p.get("grade_mode", p.get("mode", 0)), would_apply=True)
     # B2 — Whole-grade replacement is catastrophic; require confirmation.
@@ -29514,8 +30152,13 @@ def _safe_apply_drx(proj, item, p: Dict[str, Any]):
     blocked = _consume_confirm_token(action="safe_apply_drx", params=p)
     if blocked:
         return blocked
-    success = bool(graph.ApplyGradeFromDRX(path, p.get("grade_mode", p.get("mode", 0))))
-    return {"success": success, "path": path, "source": source}
+    group = None
+    if source in ("color_group_pre", "color_group_post"):
+        group = next((g for g in proj.GetColorGroupsList() or [] if g.GetName() == p.get("group_name")), None)
+    candidates = _drx_candidate_graphs(
+        source, item=item, group=group,
+        layer_index=p.get("layer_index") if source == "item" else None)
+    return _apply_drx_with_readback(graph, source, path, p.get("grade_mode", p.get("mode", 0)), candidates)
 
 
 # ── color_trace apply driver ─────────────────────────────────────────────────
@@ -29931,7 +30574,7 @@ _ACTION_HELP: Dict[str, Dict[str, Dict[str, Any]]] = {
         "safe_apply_drx": {
             "summary": "Apply a .drx grade. REPLACES the target graph; gated by confirm_token.",
             "params": "path: str, source?, grade_mode? (0=no keyframes, 1=source TC aligned, 2=start aligned), require_temp_path?, confirm_token?",
-            "returns": "{success, path, source}",
+            "returns": "{success, path, source, changed_graphs, graphs, verification, warning?} (same readback and refusals as graph.apply_grade_from_drx)",
             "example": (
                 'timeline_item_color(action="safe_apply_drx", params={\n'
                 '  "track_type": "video", "track_index": 1, "item_index": 0,\n'
@@ -30121,7 +30764,7 @@ _ACTION_HELP: Dict[str, Dict[str, Dict[str, Any]]] = {
         "apply_grade_from_drx": {
             "summary": "REPLACES the entire node graph from a .drx. Confirm_token required.",
             "params": "path, grade_mode? (0/1/2), source?",
-            "returns": "{success}",
+            "returns": "{success, path, source, changed_graphs, graphs, verification, warning?} — changed_graphs names every graph whose node count, labels or LUTs changed; DRX_APPLIED_TO_OTHER_GRAPH when only a graph you did not target changed; DRX_NO_TIMELINE_GRADE when source=timeline and the .drx has no timeline grade",
             "example": (
                 'graph(action="apply_grade_from_drx", params={\n'
                 '  "path": "/tmp/look.drx", "grade_mode": 0, "source": "item"\n'
@@ -30737,7 +31380,7 @@ def timeline_item_color(action: str, params: Optional[Dict[str, Any]] = None) ->
     propose_grade       -> {accepted: bool, validation, plan_id?, preview_path?, error?}
     safe_set_cdl        -> {success, validation, normalized, node_preflight, diagnosis?}
     safe_copy_grade     -> {success, targets, missing}
-    safe_apply_drx      -> {success, path, source}  # first call may return confirm_token
+    safe_apply_drx      -> {success, path, source, changed_graphs, graphs, verification, warning?}  # first call may return confirm_token
     apply_trace_plan    -> {success, timeline, applied, failed, skipped, summary}  # dry_run → {resolution}; first live call returns confirm_token
     grade_capabilities  -> {item_methods, graph_sources, lut_export_types, guards}
     grade_boundary_report -> {capabilities, item, color_groups, gallery}
@@ -30777,7 +31420,7 @@ def timeline_item_color(action: str, params: Optional[Dict[str, Any]] = None) ->
       safe_copy_grade(target_ids, dry_run?, ...) -> {success, targets, missing}
         Copies grade to N items; dry_run reports targets without mutating.
         # example: action_help(name='<action_name>')
-      safe_apply_drx(path, source?, grade_mode?, require_temp_path?) -> {success}
+      safe_apply_drx(path, source?, grade_mode?, require_temp_path?) -> {success, path, source, changed_graphs, graphs, verification, warning?}
         REPLACES the target graph. Captures a version snapshot first; require_temp_path defaults True.
         # example: action_help(name='<action_name>')
       apply_trace_plan(plan_path|plan, dry_run?, min_confidence?=0.8, start_tolerance?=0, grade_mode?=0, version_name?, require_temp_path?=True, allow_timeline_mismatch?, max_rows?=40, verbose?, report_path?, confirm_token?) -> {success, applied, failed, skipped, attention, summary, report_path}
@@ -30822,6 +31465,9 @@ def timeline_item_color(action: str, params: Optional[Dict[str, Any]] = None) ->
       regenerate_magic_mask(...) -> {success | needs_hitl, hitl}
 
     Default: track_type="video", track_index=1, item_index=0
+    Or address the item by timeline_item_id (its GetUniqueId(), stable); on
+    21.1 item_index also counts transitions, so it shifts when one is added.
+    timeline_id / timeline_name target a timeline other than the current one.
 
     For long-form per-action guidance and a worked example, call:
       timeline_item_color(action="action_help", params={"name": "<action>"})
@@ -30988,6 +31634,9 @@ def timeline_item_takes(action: str, params: Optional[Dict[str, Any]] = None) ->
       finalize(...) -> {success}
 
     Default: track_type="video", track_index=1, item_index=0
+    Or address the item by timeline_item_id (its GetUniqueId(), stable); on
+    21.1 item_index also counts transitions, so it shifts when one is added.
+    timeline_id / timeline_name target a timeline other than the current one.
     """
     p = _params(params)
     _, item, err = _get_item(p)
@@ -31343,7 +31992,10 @@ def graph(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any
         UNSAFE. Assigns a LUT to an existing node. No snapshot/dry_run.
       set_node_cache(node_index, cache_value, source?, ...) -> {success}
       set_node_enabled(node_index, enabled, source?, ...) -> {success}
-      apply_grade_from_drx(path, grade_mode?, source?, ...) -> {success}
+      apply_grade_from_drx(path, grade_mode?, source?, ...) -> {success, path, source, changed_graphs, graphs, verification, warning?}
+        Reads the clip, color-group pre/post and timeline graphs before and after and
+        reports changed_graphs; fails if the grade landed only in a graph not targeted.
+        source="timeline" refuses a .drx whose <pTrackVer> has no correction.
         CATASTROPHIC. REPLACES the entire node graph. Prefer timeline_item_color.safe_apply_drx
         (confirm-token gated + validated; it does NOT snapshot — grab a still/.drx backup
         first, and ALWAYS pass track_type/track_index/item_index explicitly: the default
@@ -31370,6 +32022,7 @@ def graph(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any
 
     # Get the graph object based on source
     g = None
+    item = group = None
     if source == "timeline":
         _, tl, err = _get_tl()
         if err:
@@ -31387,6 +32040,7 @@ def graph(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any
         groups = proj.GetColorGroupsList() or []
         for cg in groups:
             if cg.GetName() == p.get("group_name"):
+                group = cg
                 g = cg.GetPreClipNodeGraph() if source == "color_group_pre" else cg.GetPostClipNodeGraph()
                 break
         if g is None:
@@ -31440,6 +32094,9 @@ def graph(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any
     elif action == "set_node_enabled":
         return {"success": bool(g.SetNodeEnabled(p["node_index"], p["enabled"]))}
     elif action == "apply_grade_from_drx":
+        refused = _refuse_empty_track_grade(p["path"], source)
+        if refused:
+            return refused
         if "confirm_token" not in p and "confirmToken" not in p and _confirm_token_required():
             return _issue_confirm_token(
                 action="graph.apply_grade_from_drx",
@@ -31451,7 +32108,9 @@ def graph(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any
         blocked = _consume_confirm_token(action="graph.apply_grade_from_drx", params=p)
         if blocked:
             return blocked
-        return {"success": bool(g.ApplyGradeFromDRX(p["path"], p.get("grade_mode", p.get("mode", 0))))}
+        candidates = _drx_candidate_graphs(source, item=item, group=group,
+                                           layer_index=p.get("layer_index"))
+        return _apply_drx_with_readback(g, source, p["path"], p.get("grade_mode", p.get("mode", 0)), candidates)
     elif action == "apply_arri_cdl_lut":
         return {"success": bool(g.ApplyArriCdlLut())}
     elif action == "reset_all_grades":
@@ -32546,6 +33205,32 @@ def _fusion_input_spline(inp):
         return None
 
 
+def _fusion_remove_stray_keys(inp, stray: List[float]) -> Dict[str, Any]:
+    """Delete the keys Fusion added when add_keyframe attached a spline.
+
+    The result is read back rather than trusted: a key that is still there is
+    reported, so a caller is never told the curve holds only what it wrote.
+    """
+    spline = _fusion_input_spline(inp)
+    if spline is not None and _has_method(spline, "DeleteKeyFrames"):
+        for frame in stray:
+            try:
+                spline.DeleteKeyFrames(frame)
+            except Exception:
+                pass
+    remaining = [f for f in _fusion_keyframe_frames(inp)
+                 if any(abs(f - s) < 1e-6 for s in stray)]
+    removed = [s for s in stray if not any(abs(s - f) < 1e-6 for f in remaining)]
+    if not remaining:
+        return _ok(removed_stray_keys=removed)
+    return _ok(
+        removed_stray_keys=removed,
+        stray_keys_remaining=remaining,
+        warning=(f"Attaching the spline also keyed frame(s) {remaining} with the old value "
+                 "and they could not be removed; remove them with delete_keyframe."),
+    )
+
+
 def _fusion_delete_keyframe(tool, p: Dict[str, Any]) -> Dict[str, Any]:
     """Remove one keyframe from an animated Fusion input. (issue #155)
 
@@ -32964,6 +33649,7 @@ def fusion_comp(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
                 _already_animated = inp.GetConnectedOutput() is not None
             except Exception:
                 _already_animated = False
+            _stray = []
             if not _already_animated:
                 _is_nest, _members = _fusion_nest_members(tool, p["input_name"])
                 if _is_nest:
@@ -32997,8 +33683,21 @@ def fusion_comp(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
                                     "attach it with add_modifier, then drive the "
                                     "modifier tool it returns.",
                     )
+                # Attaching an empty spline keys the comp's CURRENT time with the
+                # input's old value (measured on Studio 21.0.2.4: keying 10 and 20
+                # left [0, 10, 20]). Note it now; it is removed after the real key
+                # lands, since DeleteKeyFrames will not remove a spline's only key.
+                # Only a spline holds keys; a text Follower answers GetKeyFrames
+                # with its +/-1e9 render-range bounds, which are not keys.
+                _spline = _fusion_input_spline(tool[p["input_name"]])
+                if _spline is not None and _has_method(_spline, "DeleteKeyFrames"):
+                    _stray = [f for f in _fusion_keyframe_frames(tool[p["input_name"]])
+                              if abs(f) < 1e8]
             tool[p["input_name"]][p["time"]] = p["value"]
-            return _ok()
+            _stray = [f for f in _stray if abs(f - float(p["time"])) >= 1e-6]
+            if not _stray:
+                return _ok()
+            return _fusion_remove_stray_keys(tool[p["input_name"]], _stray)
         finally:
             comp.EndUndo(True)
 

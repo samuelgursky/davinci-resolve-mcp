@@ -107,7 +107,7 @@ export function relinkManifest(offlinePaths, pathMap = [], opts = {}) {
       continue;
     }
     const m = matches[0];
-    const target = src.replace(m.from, m.to);
+    const target = src.replace(m.from, () => m.to);
     if (opts.checkExists === false || fs.existsSync(target)) relinkable.push({ from: src, to: target, verified: opts.checkExists !== false });
     else stillOffline.push({ from: src, to: target, reason: 'target does not exist' });
   }

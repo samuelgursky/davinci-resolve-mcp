@@ -96,14 +96,14 @@ async function placeFusionTitle(drpInput, opts = {}) {
     throw new Error('placeFusionTitle: template is not a Fusion Title clip');
   }
   clip = freshDbIds(clip);
-  clip = clip.replace(/<Start>\d+<\/Start>/, `<Start>${startFrame}</Start>`);
-  clip = clip.replace(/<Duration>\d+<\/Duration>/, `<Duration>${durationFrames}</Duration>`);
-  if (name) clip = clip.replace(/<Name>[\s\S]*?<\/Name>/, `<Name>${escapeXml(name)}</Name>`);
+  clip = clip.replace(/<Start>\d+<\/Start>/, () => `<Start>${startFrame}</Start>`);
+  clip = clip.replace(/<Duration>\d+<\/Duration>/, () => `<Duration>${durationFrames}</Duration>`);
+  if (name) clip = clip.replace(/<Name>[\s\S]*?<\/Name>/, () => `<Name>${escapeXml(name)}</Name>`);
   const titleInputs = { text, font, style, size, vJustify, hJustify, color };
   if (Object.values(titleInputs).some((v) => v !== undefined && v !== null)) {
     const m = clip.match(/<CompositionBA>([0-9a-fA-F]*)<\/CompositionBA>/);
     if (!m || !m[1]) throw new Error('placeFusionTitle: template has no CompositionBA to style');
-    clip = clip.replace(m[0], `<CompositionBA>${setTitleInputs(m[1], titleInputs)}</CompositionBA>`);
+    clip = clip.replace(m[0], () => `<CompositionBA>${setTitleInputs(m[1], titleInputs)}</CompositionBA>`);
   }
 
   // Locate VideoTrackVec and split into track elements.

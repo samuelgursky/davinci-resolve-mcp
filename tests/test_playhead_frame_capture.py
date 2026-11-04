@@ -113,14 +113,18 @@ class BoxDownscaleTest(unittest.TestCase):
 
 
 class CapturePreviewTest(unittest.TestCase):
-    def _capture(self, params, resolve=None, tl=None, proj=None):
+    def _capture(self, params, resolve=None, tl=None, proj=None, live_current=False):
         resolve = resolve or _FakeResolve(page="edit")
         tl = tl if tl is not None else _fake_timeline(resolve)
         proj = proj or mock.Mock()
         # quality="thumbnail" is this class's subject: the clip-thumbnail route.
         params = {"quality": "thumbnail", **params}
+        # live_current: `_get_tl` answers with whatever the project says is
+        # current, as Resolve does, so a pin made before the action is seen.
+        get_tl = (lambda: (proj, proj.GetCurrentTimeline(), None)) if live_current else (lambda: (proj, tl, None))
         with mock.patch.object(s, "get_resolve", return_value=resolve), \
-             mock.patch.object(s, "_get_tl", return_value=(proj, tl, None)):
+             mock.patch.object(s, "_check", return_value=(None, proj, None)), \
+             mock.patch.object(s, "_get_tl", side_effect=get_tl):
             return s.timeline_frame("capture", params), resolve, tl
 
     def test_returns_png_image_content(self):
@@ -194,7 +198,8 @@ class CapturePreviewTest(unittest.TestCase):
         active = {"tl": current}
         proj.GetCurrentTimeline.side_effect = lambda: active["tl"]
         proj.SetCurrentTimeline.side_effect = lambda tl: active.update(tl=tl) or True
-        out, _, _ = self._capture({"timeline_name": "Other"}, resolve=resolve, tl=current, proj=proj)
+        out, _, _ = self._capture({"timeline_name": "Other"}, resolve=resolve, tl=current, proj=proj,
+                                  live_current=True)
         self.assertIsInstance(out, Image)
         self.assertEqual(
             [c.args[0] for c in proj.SetCurrentTimeline.call_args_list],

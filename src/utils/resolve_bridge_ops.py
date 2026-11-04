@@ -122,7 +122,7 @@ class PathPolicy:
 
     @staticmethod
     def _under(path: str, roots: Tuple[str, ...]) -> bool:
-        return any(path == root or path.startswith(root + os.sep) for root in roots)
+        return any(path == root or path.startswith(os.path.join(root, "")) for root in roots)
 
     def input_file(self, raw: Any) -> str:
         if not isinstance(raw, str) or not raw:

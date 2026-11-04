@@ -2781,7 +2781,13 @@ def _media_duration_seconds(record: Dict[str, Any], technical: Dict[str, Any]) -
     return None
 
 
-def _ffmpeg_stderr_filter(path: str, video_filter: Optional[str] = None, audio_filter: Optional[str] = None, frames: Optional[int] = None) -> Tuple[int, str]:
+def _ffmpeg_stderr_filter(
+    path: str,
+    video_filter: Optional[str] = None,
+    audio_filter: Optional[str] = None,
+    frames: Optional[int] = None,
+    timeout: int = COMMAND_TIMEOUT_SECONDS,
+) -> Tuple[int, str]:
     args = ["ffmpeg", "-hide_banner", "-nostats", "-i", path]
     if video_filter:
         args.extend(["-vf", video_filter])
@@ -2790,7 +2796,7 @@ def _ffmpeg_stderr_filter(path: str, video_filter: Optional[str] = None, audio_f
     if frames is not None:
         args.extend(["-frames:v", str(frames)])
     args.extend(["-f", "null", "-"])
-    code, _, stderr = _run_command(args)
+    code, _, stderr = _run_command(args, timeout=timeout)
     return code, stderr
 
 
@@ -2934,25 +2940,45 @@ def _parse_idet(stderr: str) -> Dict[str, Any]:
     }
 
 
+# The four whole-file measurements `_readthrough_analysis` makes. They used to be four
+# ffmpeg runs, and every run decoded the whole file: `-af` alone does not drop the video
+# stream from a null output, so the loudness and silence passes decoded every frame just
+# as the scene and black passes did, and each video pass decoded the audio too. One run
+# with `split`/`asplit` decodes each stream once and feeds all four filters. Each parser
+# below matches only its own filter's lines, so sharing one stderr changes no result.
+# A missing stream behaves as it did per pass: ffmpeg skips the -vf or -af it cannot
+# use, exits 0, and that filter's parser finds nothing.
+_SCENE_SCORE_FILTER = "select='gt(scene,0)',metadata=print:key=lavfi.scene_score,showinfo"
+_BLACKDETECT_FILTER = "blackdetect=d=0.5:pix_th=0.10"
+_LOUDNESS_FILTER = "ebur128=peak=true"
+_SILENCEDETECT_FILTER = "silencedetect=noise=-50dB:d=1"
+_READTHROUGH_VIDEO_FILTER = f"split[scene][black];[scene]{_SCENE_SCORE_FILTER},nullsink;[black]{_BLACKDETECT_FILTER}"
+_READTHROUGH_AUDIO_FILTER = f"asplit[loud][silence];[loud]{_LOUDNESS_FILTER},anullsink;[silence]{_SILENCEDETECT_FILTER}"
+
+
 def _readthrough_analysis(path: str) -> Dict[str, Any]:
     result: Dict[str, Any] = {"success": True}
 
-    loud_code, loud_stderr = _ffmpeg_stderr_filter(path, audio_filter="ebur128=peak=true")
+    # The one run carries the timeout budget of the four it replaces, so a file whose
+    # slowest pass (scene scoring) finished in time before still finishes in time.
+    code, stderr = _ffmpeg_stderr_filter(
+        path,
+        video_filter=_READTHROUGH_VIDEO_FILTER,
+        audio_filter=_READTHROUGH_AUDIO_FILTER,
+        timeout=COMMAND_TIMEOUT_SECONDS * 4,
+    )
+
     result["loudness"] = {
-        "success": loud_code == 0,
-        "metrics": _parse_loudness(loud_stderr),
+        "success": code == 0,
+        "metrics": _parse_loudness(stderr),
     }
 
-    # Adaptive scene detection. One ffmpeg pass dumps a (pts_time, scene_score) pair
+    # Adaptive scene detection. The scene branch dumps a (pts_time, scene_score) pair
     # for every frame whose scene score is > 0 (i.e. every non-first frame); we then
     # compute a content-aware threshold from that distribution and keep peaks above it.
     # Replaces the legacy hardcoded ``gt(scene,0.3)``, which was too coarse on
     # high-motion content (missed real cuts) and too sensitive on locked-off content.
-    scene_code, scene_stderr = _ffmpeg_stderr_filter(
-        path,
-        video_filter="select='gt(scene,0)',metadata=print:key=lavfi.scene_score,showinfo",
-    )
-    scene_score_pairs = _parse_scene_score_pairs(scene_stderr)
+    scene_score_pairs = _parse_scene_score_pairs(stderr)
     scene_threshold, scene_threshold_stats = _adaptive_scene_threshold(scene_score_pairs)
     adaptive_scene_items = [
         {"time_seconds": pts, "score": score}
@@ -2960,22 +2986,20 @@ def _readthrough_analysis(path: str) -> Dict[str, Any]:
         if score is not None and score > scene_threshold
     ]
     result["scenes"] = {
-        "success": scene_code == 0,
+        "success": code == 0,
         "items": adaptive_scene_items,
         "threshold": scene_threshold,
         "threshold_stats": scene_threshold_stats,
     }
 
-    black_code, black_stderr = _ffmpeg_stderr_filter(path, video_filter="blackdetect=d=0.5:pix_th=0.10")
     result["black_frames"] = {
-        "success": black_code == 0,
-        "items": _parse_blackdetect(black_stderr),
+        "success": code == 0,
+        "items": _parse_blackdetect(stderr),
     }
 
-    silence_code, silence_stderr = _ffmpeg_stderr_filter(path, audio_filter="silencedetect=noise=-50dB:d=1")
     result["silence"] = {
-        "success": silence_code == 0,
-        "items": _parse_silencedetect(silence_stderr),
+        "success": code == 0,
+        "items": _parse_silencedetect(stderr),
     }
 
     idet_code, idet_stderr = _ffmpeg_stderr_filter(path, video_filter="idet", frames=500)

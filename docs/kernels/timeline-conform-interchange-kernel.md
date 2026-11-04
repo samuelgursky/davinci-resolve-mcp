@@ -62,6 +62,12 @@ Supported aliases include `aaf`, `drt`, `edl`, `edl_cdl`, `edl_sdl`,
 - Source range reporting grouped generated media paths with requested handles.
 - Guarded exports succeeded for FCPXML, DRT, EDL, AAF, and OTIO.
 - FCPXML directory-style exports are normalized with a `primary_file` path.
+  `import_timeline_checked` also accepts the bundle directory itself (the
+  export's `path`) and imports the `Info.fcpxml` inside it.
+- Clip fades set with `SetFades` do not survive an FCPXML round trip (reported
+  on Studio 21.1: imported clips read FadeIn/FadeOut 0 while Cross Dissolves
+  survive). This is likely Resolve's FCPXML writer; it has not been measured
+  on other formats.
 - DRT export/import/compare round-trip succeeded and cleaned up the imported
   timeline.
 - Synthetic-only unlink, missing-media detection, relink candidate planning,

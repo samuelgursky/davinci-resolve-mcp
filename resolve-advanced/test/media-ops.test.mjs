@@ -70,6 +70,13 @@ test('relink_manifest: longest-prefix wins, missing target stays offline', () =>
   assert.deepEqual(r.unmapped, ['/unmapped/x.mov']);
 });
 
+test('relink_manifest: a $ in the target prefix is kept as typed', () => {
+  // The prefix used to go through String.replace as a replacement string, so
+  // `$$` became `$` and `$&` became the matched source prefix.
+  const r = relinkManifest(['/old/vol/A001C001.mov'], [{ from: '/old/vol', to: '/new/Spot $$ 30s $&' }], { checkExists: false });
+  assert.equal(r.relinkable[0].to, '/new/Spot $$ 30s $&/A001C001.mov');
+});
+
 test('rename_plan REFUSES camera originals and flags collisions', () => {
   const r = renamePlan(['A001C001.mov', 'interview_wide.mov', 'interview_cu.mov'], { find: 'interview_.*', replace: 'EP012_INT.mov' });
   const cam = r.plan.find((p) => p.from === 'A001C001.mov');

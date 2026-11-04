@@ -37,10 +37,10 @@ function clipDuration(clipXml) {
   return m ? parseInt(m[1], 10) : null;
 }
 function setClipStart(clipXml, v) {
-  return clipXml.replace(/<Start>\d+<\/Start>/, `<Start>${v}</Start>`);
+  return clipXml.replace(/<Start>\d+<\/Start>/, () => `<Start>${v}</Start>`);
 }
 function setClipDuration(clipXml, v) {
-  return clipXml.replace(/<Duration>\d+<\/Duration>/, `<Duration>${v}</Duration>`);
+  return clipXml.replace(/<Duration>\d+<\/Duration>/, () => `<Duration>${v}</Duration>`);
 }
 // The source IN-point lives in <In> as `<framePos>|<LE-double of framePos*0.001>`, where framePos
 // is in TIMELINE frames (verified live: Resolve appended a clip with source-in 600 media-frames @29.97
@@ -57,8 +57,8 @@ function clipIn(clipXml) {
 }
 function setClipIn(clipXml, framePos) {
   const enc = `<In>${encodeSourceIn(framePos)}</In>`;
-  if (/<In\s*\/>/.test(clipXml)) return clipXml.replace(/<In\s*\/>/, enc);
-  if (/<In>[^<]*<\/In>/.test(clipXml)) return clipXml.replace(/<In>[^<]*<\/In>/, enc);
+  if (/<In\s*\/>/.test(clipXml)) return clipXml.replace(/<In\s*\/>/, () => enc);
+  if (/<In>[^<]*<\/In>/.test(clipXml)) return clipXml.replace(/<In>[^<]*<\/In>/, () => enc);
   return clipXml; // no In element to set
 }
 // A FROZEN clip carries an EMPTY <In/> (harvested live from an EDL M2 000.0
@@ -77,7 +77,7 @@ function mapClipsOnTrack(trackElement, fn) {
   let out = inner;
   for (const c of splitClipElements(inner)) {
     const nc = fn(c);
-    if (nc !== c) out = out.replace(c, nc);
+    if (nc !== c) out = out.replace(c, () => nc);
   }
   return setItemsInner(trackElement, out);
 }
@@ -143,7 +143,7 @@ async function moveClip(drpInput, opts = {}) {
   // Optionally retime.
   if (toStart !== undefined && toStart !== null) {
     if (!Number.isInteger(toStart)) throw new TypeError('moveClip: toStart must be an integer');
-    clip = clip.replace(/<Start>\d+<\/Start>/, `<Start>${toStart}</Start>`);
+    clip = clip.replace(/<Start>\d+<\/Start>/, () => `<Start>${toStart}</Start>`);
   }
 
   // Grow to the destination track with empty clones, then insert.
@@ -263,7 +263,7 @@ async function trimClip(drpInput, opts = {}) {
   const tStart = clipStart(target);
   const trimmedClipDbId = clipDbId(target);
 
-  let track = setItemsInner(tracks[trackIdx - 1], items.replace(target, setClipDuration(target, newDuration)));
+  let track = setItemsInner(tracks[trackIdx - 1], items.replace(target, () => setClipDuration(target, newDuration)));
   if (ripple && oldDuration !== null && tStart !== null) {
     const delta = newDuration - oldDuration;
     const tEnd = tStart + oldDuration;
@@ -335,7 +335,7 @@ async function trimClipHead(drpInput, opts = {}) {
   edited = setClipDuration(edited, newDur);
   edited = setClipStart(edited, newStart);
 
-  let track = setItemsInner(tracks[trackIdx - 1], items.replace(target, edited));
+  let track = setItemsInner(tracks[trackIdx - 1], items.replace(target, () => edited));
   if (ripple) {
     track = mapClipsOnTrack(track, (c) => {
       const s = clipStart(c);
@@ -399,7 +399,7 @@ async function splitClip(drpInput, opts = {}) {
   right = setClipDuration(right, rightDur);
   right = setClipIn(right, leftIn + leftDur); // source continues where left ended
 
-  const track = setItemsInner(tracks[trackIdx - 1], items.replace(target, `${left}${right}`));
+  const track = setItemsInner(tracks[trackIdx - 1], items.replace(target, () => `${left}${right}`));
   tracks[trackIdx - 1] = track;
 
   const xml = replaceTrackVec(seqXml, trackType, vtv, tracks);

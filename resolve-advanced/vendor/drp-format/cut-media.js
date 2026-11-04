@@ -27,6 +27,7 @@ const {
   emptyTrackClone,
 } = require('./seq-surgery');
 const { clipDbId, setClipStart, setClipDuration, setClipIn, setClipInEmpty } = require('./splice-clips');
+const { escapeXml } = require('./xml-builder');
 
 /**
  * @param {Buffer|string} drpInput
@@ -96,7 +97,7 @@ async function cutSourceIntoClips(drpInput, opts = {}) {
     if (cut.mediaRef) {
       // Multi-source: point this cut at ITS source's transplanted pool
       // element instead of the donor's.
-      c = c.replace(/<MediaRef>[0-9a-f-]{36}<\/MediaRef>/, `<MediaRef>${cut.mediaRef}</MediaRef>`);
+      c = c.replace(/<MediaRef>[0-9a-f-]{36}<\/MediaRef>/, () => `<MediaRef>${cut.mediaRef}</MediaRef>`);
     }
     if (cut.srcMeta && !native && cut.audioOnly) {
       // Every clone must carry ITS OWN source identity — a donor clone
@@ -106,15 +107,15 @@ async function cutSourceIntoClips(drpInput, opts = {}) {
       // A1 (measured, E15), and a TC-bearing video source fails the whole
       // render with "Full resolution media not found" (measured, E31).
       const { name, mediaFilePath, fps, frameCount } = cut.srcMeta;
-      c = c.replace(/<Name>[\s\S]*?<\/Name>/, `<Name>${name}</Name>`);
-      c = c.replace(/<MediaFilePath>[\s\S]*?<\/MediaFilePath>/, `<MediaFilePath>${mediaFilePath}</MediaFilePath>`);
+      c = c.replace(/<Name>[\s\S]*?<\/Name>/, () => `<Name>${escapeXml(name)}</Name>`);
+      c = c.replace(/<MediaFilePath>[\s\S]*?<\/MediaFilePath>/, () => `<MediaFilePath>${escapeXml(mediaFilePath)}</MediaFilePath>`);
       const rate = Buffer.alloc(16);
       rate.writeDoubleLE(fps, 0);
-      c = c.replace(/<MediaFrameRate>[0-9a-fA-F]*<\/MediaFrameRate>/, `<MediaFrameRate>${rate.toString('hex')}</MediaFrameRate>`);
+      c = c.replace(/<MediaFrameRate>[0-9a-fA-F]*<\/MediaFrameRate>/, () => `<MediaFrameRate>${rate.toString('hex')}</MediaFrameRate>`);
       const idm = Buffer.alloc(9);
       idm.writeUInt8(0x02, 0);
       idm.writeDoubleBE((frameCount - 1) / fps, 1);
-      c = c.replace(/<MediaTimemapBA>[0-9a-fA-F]*<\/MediaTimemapBA>/, `<MediaTimemapBA>${idm.toString('hex')}</MediaTimemapBA>`);
+      c = c.replace(/<MediaTimemapBA>[0-9a-fA-F]*<\/MediaTimemapBA>/, () => `<MediaTimemapBA>${idm.toString('hex')}</MediaTimemapBA>`);
       if (cut.audioOnly) {
         // Generic audio-clip FieldsBlob, verbatim from the live A2 harvest.
         // (Video clones keep their blob — repointClipBlobsInXml owns it.)
@@ -125,13 +126,13 @@ async function cutSourceIntoClips(drpInput, opts = {}) {
       // Embedded source timecode base, in SECONDS (harvested with the media
       // template). Donor default 0 makes Resolve seek the wrong TC and fail
       // the render with "Full resolution media not found at <TC>".
-      c = c.replace(/<MediaStartTime>[\s\S]*?<\/MediaStartTime>/, `<MediaStartTime>${cut.mediaStartTime}</MediaStartTime>`);
+      c = c.replace(/<MediaStartTime>[\s\S]*?<\/MediaStartTime>/, () => `<MediaStartTime>${cut.mediaStartTime}</MediaStartTime>`);
     }
     if (cut.timemap) {
       // Constant-speed retime: swap the identity MediaTimemapBA for the
       // caller-built Sm2TimeMap (r19 keyed form render/readback-verified;
       // the clip's <In>/<Duration> are RECORD-domain, measured live).
-      c = c.replace(/<MediaTimemapBA>[0-9a-fA-F]*<\/MediaTimemapBA>/, `<MediaTimemapBA>${cut.timemap}</MediaTimemapBA>`);
+      c = c.replace(/<MediaTimemapBA>[0-9a-fA-F]*<\/MediaTimemapBA>/, () => `<MediaTimemapBA>${cut.timemap}</MediaTimemapBA>`);
     }
     return c;
   };

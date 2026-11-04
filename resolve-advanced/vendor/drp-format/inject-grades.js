@@ -105,7 +105,7 @@ function replaceBodyForClip(seqXml, targetDbId, newBodyHex) {
   if (bodyAt < 0) return null;
   let newClipRange = clipRange.replace(
     bodyRe,
-    `<Body>${newBodyHex}</Body>`,
+    () => `<Body>${newBodyHex}</Body>`,
   );
 
   // 4. Mark the owning version as corrected. Resolve keeps a per-version

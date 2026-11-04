@@ -1758,18 +1758,182 @@ API_TRUTH: List[Dict[str, Any]] = [
                    "The language selection via resolve.AUTO_CAPTION_LANGUAGE_* "
                    "is the only customization; the engine itself cannot be "
                    "changed. There is no dedicated subtitle import method. "
-                   "However, MediaPool.ImportMedia(srt) + AppendToTimeline was "
-                   "reported working on Studio 21.0.4.5 (issue #169). Whether "
-                   "that route carries word timing for animated presets on "
-                   "21.1 has not been verified; SRT contains only cue timing.",
+                   "MediaPool.ImportMedia(srt) + AppendToTimeline was reported "
+                   "working on Studio 21.0.4.5 (issue #169). On Studio 21.1.2.10 "
+                   "the clipInfo form of that append aborts Resolve and the plain "
+                   "form places nothing, and the same abort was reported on free "
+                   "21.0.3.7 (issue #335). Whether either route carries word "
+                   "timing for animated presets has not been verified; SRT "
+                   "contains only cue timing.",
         "recommended": "Use Resolve's engine for CreateSubtitlesFromAudio. "
-                       "For external SRT, test ImportMedia + AppendToTimeline "
-                       "on the exact installed build or import through the UI. "
+                       "For external SRT on 21.0 and newer, import through the UI. "
+                       "clipInfo append of a subtitle item is refused on 21.0+ "
+                       "(see MediaPool.AppendToTimeline subtitle clipInfo). "
                        "Use project_db write_captions for explicit word timings "
                        "with Resolve fully quit; do not assume SRT supplies them.",
         "tags": ["missing-method", "subtitle", "transcription",
                  "speech-recognition", "asr"],
         "submit": "missing",
+    },
+    {
+        "symbol": "MediaPool.AppendToTimeline (subtitle clipInfo)",
+        "object": "MediaPool",
+        "signature": "([{clipInfo}]) -> [TimelineItem]",
+        "reality": "On Studio 21.1.2.10 (Windows), AppendToTimeline with a "
+                   "clipInfo dict for an imported SRT MediaPoolItem (Type "
+                   "Subtitle) aborts Resolve: assertion at Sm2MpObject.cpp:546, "
+                   "reproduced 2/2. The call hangs, then the process is gone. "
+                   "The plain list form AppendToTimeline([item]) does not crash "
+                   "and places nothing. The same abort was reported on free "
+                   "21.0.3.7 (macOS), once with media_type and once without. "
+                   "ImportMedia(srt) + AppendToTimeline was reported working on "
+                   "Studio 21.0.4.5 (issue #169). Which clipInfo field triggers "
+                   "the abort was not isolated. 21.0.0 through 21.0.2, 21.0.4, "
+                   "21.1.0, and 21.1.1 were not measured.",
+        "recommended": "media_pool append_to_timeline, the granular "
+                       "append_to_timeline, and the other clipInfo builders "
+                       "refuse a Type=Subtitle item on Resolve 21.0 and above, "
+                       "and when the connected version cannot be read, with "
+                       "SUBTITLE_APPEND_CRASH, before AppendToTimeline is called. "
+                       "On a build older than 21.0 the call is still forwarded. "
+                       "Import the SRT through the UI.",
+        "tags": ["crash", "subtitle", "timeline", "silent-failure"],
+        "submit": "bug",
+        "issue": 335,
+        "mitigation": ["subtitle_append_guard"],
+        "verified_on": "Reported on Studio 21.1.2.10 (Windows) and free 21.0.3.7 (macOS); not re-measured here",
+    },
+    {
+        "symbol": "Timeline.DeleteGaps",
+        "object": "Timeline",
+        "signature": "() -> bool",
+        "reality": "WITHDRAWN. The first report — DeleteGaps() returned True "
+                   "and left clip starts at 0/200/400 unchanged — was measured "
+                   "on a timeline whose clips sat before StartFrame 86400, so "
+                   "StartFrame and EndFrame were both 86400. Re-measured by "
+                   "the reporter on Studio 21.1.2.10 with recordFrame anchored "
+                   "at 86400: clips before [86400, 86600, 86800], DeleteGaps() "
+                   "returned True, clips after [86400, 86520, 86640]. The call "
+                   "closes gaps. Not re-measured here.",
+        "recommended": "Call DeleteGaps. The original failure was the timeline, "
+                       "not this method. See the recordFrame entry for the "
+                       "placement that built that timeline.",
+        "tags": ["timeline", "edit"],
+        "issue": 336,
+        "verified_on": "Withdrawn on the reporter's re-measurement, Studio 21.1.2.10 (Windows); not re-measured here",
+    },
+    {
+        "symbol": "MediaPool.AddToPhotoAlbum",
+        "object": "MediaPool",
+        "signature": "(clips) -> [MediaPoolItem]",
+        "reality": "On Studio 21.1.2.10 (Windows), re-measured by the reporter, "
+                   "AddToPhotoAlbum returned None and the album stayed at 0 "
+                   "photos across three argument forms. CreatePhotoAlbumFromPhotos "
+                   "returned an album with 2 photos in the same session and the "
+                   "same project. On Studio 19.1.3.7 "
+                   "(2026-11-01, dir() of the open project's MediaPool), "
+                   "AddToPhotoAlbum, CreateEmptyPhotoAlbum, "
+                   "CreatePhotoAlbumFromPhotos, and GetCurrentPhotoAlbum are "
+                   "absent.",
+        "recommended": "On 21.1.2, count the album's photos before and after "
+                       "and treat an unchanged count as failure. On 19.1.3.7 "
+                       "the methods are not there; do not call them.",
+        "tags": ["silent-failure", "media-pool", "missing-method"],
+        "submit": "bug",
+        "issue": 336,
+        "verified_on": "dir() on Studio 19.1.3.7; the None result is the reporter's re-measurement on 21.1.2.10 and was not re-measured here",
+    },
+    {
+        "symbol": "Timeline.ExportFrame",
+        "object": "Timeline",
+        "signature": "(frameOffset, settings) -> dict",
+        "reality": "WITHDRAWN. frameOffset is relative to StartFrame, valid "
+                   "from 0 through EndFrame - StartFrame - 1. On Studio "
+                   "21.1.2.10 a timeline at StartFrame 86400 and EndFrame 86880 "
+                   "accepted offset 0 and offset 479 and rejected offset 480 "
+                   "and the absolute frames 86400 and 86879. The original "
+                   "report passed absolute frames, including on a timeline "
+                   "whose StartFrame and EndFrame were both 86400. The "
+                   "rejection was the right answer to that argument. Not "
+                   "re-measured here.",
+        "recommended": "Pass a relative offset, 0 at GetStartFrame(). A caller "
+                       "that passes GetStartFrame() itself gets a rejection "
+                       "that reads like a failure. TimelineItem.ExportFrame "
+                       "addresses a clip's own frames.",
+        "tags": ["timeline", "export"],
+        "issue": 336,
+        "verified_on": "Withdrawn on the reporter's re-measurement, Studio 21.1.2.10 (Windows); not re-measured here",
+    },
+    {
+        "symbol": "TimelineItem.SetPosition / Timeline.MoveItems",
+        "object": "TimelineItem / Timeline",
+        "signature": "SetPosition(...) -> bool; MoveItems(...) -> bool",
+        "reality": "On Studio 21.1.2.10 (Windows), re-measured by the reporter, "
+                   "TimelineItem.SetPosition returned False for 0, 100, and "
+                   "-50, and the clip start was unchanged. Timeline.MoveItems "
+                   "was not callable. The first report had both methods "
+                   "returning False across ints, floats, a no-op start, both "
+                   "moveLinkedItems values, and with or without "
+                   "subframePrecision, while Timeline.SetCurrentTimecode "
+                   "succeeded in that session. This server does not call "
+                   "either method. Not re-measured here.",
+        "recommended": "Do not treat False from SetPosition as a bad argument. "
+                       "On 21.1.2.10 it returned False for every input tried, "
+                       "and MoveItems was not callable. Move the clip in the "
+                       "Edit page.",
+        "tags": ["unreliable-return", "timeline", "edit"],
+        "submit": "bug",
+        "issue": 336,
+        "verified_on": "Reported on DaVinci Resolve Studio 21.1.2.10 (Windows); not re-measured here",
+    },
+    {
+        "symbol": "TimelineItem.SetLeftOffset",
+        "object": "TimelineItem",
+        "signature": "(offset, ...) -> bool",
+        "reality": "On Studio 21.1.2.10 (Windows), SetLeftOffset(5.0, False, "
+                   "True) on a clip at frame 400 with duration 120 returned "
+                   "True, moved the start to about -86000, and grew the "
+                   "duration to about 86515. Setting the offset back to 0 "
+                   "left the clip at about -86000. The call extends the clip "
+                   "from source media. It does not nudge the edit point, and "
+                   "the edit does not come back. The clip was at frame 400 on "
+                   "a timeline whose StartFrame was 86400, so it sat outside "
+                   "the timeline's declared range; the reporter did not re-run "
+                   "it, because the first call was destructive, and the entry "
+                   "stands as that readback. A live gap probe on an older "
+                   "build recorded SetLeftOffset as absent. This server only "
+                   "reads GetLeftOffset. Not re-measured here.",
+        "recommended": "Do not call SetLeftOffset to trim a handle. There is "
+                       "no API undo. Any future wrapper has to say that the "
+                       "call extends from source media and require an explicit "
+                       "confirm before it runs.",
+        "tags": ["silent-failure", "timeline", "edit", "destructive"],
+        "submit": "bug",
+        "issue": 336,
+        "verified_on": "Reported on DaVinci Resolve Studio 21.1.2.10 (Windows); not re-measured here",
+    },
+    {
+        "symbol": "TimelineItem.AddMarker at relative frame 0",
+        "object": "TimelineItem",
+        "signature": "(frameId, color, name, note, duration, customData) -> bool",
+        "reality": "On Studio 21.1.2.10 (Windows), re-measured by the reporter "
+                   "with StartFrame 86400: Timeline.AddMarker(0) and "
+                   "Timeline.AddMarker(200) both returned True and the marker "
+                   "was present. TimelineItem.AddMarker(0) on the clip sitting "
+                   "at that StartFrame returned True and wrote nothing "
+                   "(GetMarkers count unchanged, the marker name absent). Same "
+                   "family as issue #34. The first filing recorded "
+                   "Timeline.AddMarker(0) returning False; that was the wrong "
+                   "object. This server already reports success false when "
+                   "AddMarker returns false. Not re-measured here.",
+        "recommended": "Read the marker back with GetMarkers. True from "
+                       "TimelineItem.AddMarker at relative frame 0 is not "
+                       "evidence the marker exists. Timeline.AddMarker at "
+                       "relative 0 did write the marker on this build.",
+        "tags": ["silent-failure", "timeline", "marker"],
+        "submit": "bug",
+        "issue": 336,
+        "verified_on": "Reported on DaVinci Resolve Studio 21.1.2.10 (Windows); not re-measured here",
     },
     {
         "symbol": "Media Pool folder rename",
@@ -2015,6 +2179,62 @@ API_TRUTH: List[Dict[str, Any]] = [
                        "timeline_item_color.apply_trace_plan does this itself and "
                        "reports {page: {before, switched, restored}}.",
         "tags": ["silent-failure", "color", "grade", "page", "drx", "version"],
+    },
+    {
+        "symbol": "Graph.ApplyGradeFromDRX (timeline graph, empty pTrackVer)",
+        "object": "Graph",
+        "signature": "Timeline.GetNodeGraph().ApplyGradeFromDRX(path, gradeMode) -> bool",
+        "reality": "A .drx holds the clip grade in <pClipFullVer> (VerType 0) and the "
+                   "timeline grade in <pTrackVer> (VerType 1); a timeline-graph apply "
+                   "loads <pTrackVer>. When that block has HasCorrection false, which is "
+                   "what drx generate (direct) writes and what a clip still carries, "
+                   "the apply returns True, adds no grade and replaces the existing "
+                   "timeline graph with an empty one, deleting any node on it. Copying "
+                   "the clip <Body> into <pTrackVer> with HasCorrection true applied as "
+                   "expected (0 -> 1 node, no other graph changed).",
+        "recommended": "Check the file's <pTrackVer> before a timeline apply. "
+                       "graph.apply_grade_from_drx and timeline_item_color.safe_apply_drx "
+                       "with source='timeline' refuse a .drx whose <pTrackVer> is absent or "
+                       "has HasCorrection false (DRX_NO_TIMELINE_GRADE). Clear the "
+                       "timeline graph on purpose with reset_all_grades.",
+        "tags": ["silent-failure", "color", "grade", "drx", "node-graph", "timeline"],
+        "issue": 318,
+        "mitigation": ["_refuse_empty_track_grade"],
+        "verified_on": "DaVinci Resolve Studio 21.1.1.10 (issue #318; not re-measured here)",
+        "measured": "2026-10-27 on Studio 19.1.3.7 (tests/live_drx_apply_readback_validation.py): "
+                    "every Timeline.GetNodeGraph().ApplyGradeFromDRX returned False and left the "
+                    "timeline graph at 0 nodes, with the timeline grade present or empty, so "
+                    "the empty-graph replacement does not reproduce on that build. drx "
+                    "generate's single-node path writes no <pTrackVer> at all; the multi-node "
+                    "path writes one with HasCorrection false.",
+    },
+    {
+        "symbol": "Graph.ApplyGradeFromDRX (grade lands in another graph)",
+        "object": "Graph",
+        "signature": "TimelineItem.GetNodeGraph().ApplyGradeFromDRX(path, gradeMode) -> bool",
+        "reality": "The True return does not say which graph took the grade. On a clip "
+                   "in a color group, applying to the clip's graph replaced node 1 of "
+                   "the group's pre-clip graph instead (removing the LUT the group "
+                   "shared) and left the clip graph at one empty node. The manual says "
+                   "the Node Editor's graph dropdown (Clip / Group Pre-Clip / Group "
+                   "Post-Clip / Timeline) decides where a still's grade lands; whether "
+                   "the API follows the same rule has not been confirmed.",
+        "recommended": "Read every graph the grade could land in before and after the "
+                       "apply. graph.apply_grade_from_drx and "
+                       "timeline_item_color.safe_apply_drx compare node count, labels and "
+                       "LUTs of the clip, group pre/post and timeline graphs, return "
+                       "changed_graphs, and fail with DRX_APPLIED_TO_OTHER_GRAPH when only "
+                       "an untargeted graph changed. No change at all is reported, not "
+                       "failed: a same-structure grade changes only parameters, which no "
+                       "readback reaches, so confirm with a rendered frame.",
+        "tags": ["silent-failure", "color", "grade", "drx", "node-graph", "readback"],
+        "issue": 319,
+        "mitigation": ["_apply_drx_with_readback"],
+        "verified_on": "DaVinci Resolve Studio 21.1.1.10 (issue #319; not re-measured here)",
+        "measured": "2026-10-27 on Studio 19.1.3.7 (tests/live_drx_apply_readback_validation.py): "
+                    "a clip assigned to a color group took the grade in its own graph; the "
+                    "group pre/post graphs did not change. The readback detected the clip "
+                    "change through the node label.",
     },
     {
         "symbol": "MediaPool.AppendToTimeline clipInfo endFrame (exclusive bound)",
@@ -2359,6 +2579,13 @@ API_TRUTH: List[Dict[str, Any]] = [
                    "job-mark-range checks read clean. The only truthful "
                    "readback is the timeline items themselves, which report "
                    "their real GetStart/GetEnd — before the start frame. "
+                   "On Studio 21.1.2.10 the timeline's own range is left "
+                   "untouched as well: clips placed at absolute 0/200/400 "
+                   "while StartFrame is 86400, and StartFrame stays equal to "
+                   "EndFrame (duration 0) through SetProperty and through "
+                   "closing and reopening the timeline (issue #336). A call "
+                   "that addresses the timeline by that declared range then "
+                   "behaves as it does on an empty timeline. "
                    "Verified on "
                    "Studio 20.3.2.9 (v2.17.1 probe: relative record_frame 12 "
                    "landed at 86400 + 12 = 86412, absolute preserved 86484), "
@@ -3915,6 +4142,64 @@ API_TRUTH: List[Dict[str, Any]] = [
         "verified_on": "DaVinci Resolve Studio 19.1.3.7",
         "mitigation": ["_timeline_replace_source_range_impl"],
     },
+    {
+        "symbol": "BezierSpline.SetKeyFrames (handle coordinates)",
+        "object": "Fusion BezierSpline",
+        "signature": "(keyframes, replace) -> None",
+        "reality": "A key's LH/RH handles are OFFSETS from that key, {1: dTime, 2: dValue}, "
+                   "not absolute (time, value) points. GetKeyFrames() reads them back the "
+                   "same way: Fusion's own auto-created first key returns RH {1: 2.0, "
+                   "2: -0.333} for a key at frame 0 easing toward the next one. Absolute "
+                   "coordinates are accepted without complaint and read back verbatim, so "
+                   "nothing flags the mistake; the curve is simply wrong. Measured with keys "
+                   "0 -> 1 at frames 10 -> 20: flat handles written relative ({3, 0} / "
+                   "{-3, 0}) sample 0, 0.113, 0.5, 0.887, 1 at frames 10/12/15/18/20, a clean "
+                   "ease-in-out; the same intent written absolute ({13, 0} / {17, 1}) "
+                   "samples 0, 0.015, 0.089, 0.217, 1. A whip authored with absolute handles "
+                   "moved the wrong way (0.5 -> 0.56) before snapping to its end value.",
+        "recommended": "Write handles relative to their key: RH = {segment * k, 0} and "
+                       "LH = {-segment * k, 0} gives a flat-tangent ease, where k is the handle "
+                       "length as a fraction of the segment (0.33 is a standard ease, 0.6 to "
+                       "0.75 an expo-like snap). Prove a curve by sampling "
+                       "tool.GetInput(name, frame) at a few frames, not by reading the keys "
+                       "back.",
+        "tags": ["fusion", "keyframe", "silent-failure", "units"],
+        "verified_on": "DaVinci Resolve Studio 21.0.2.4",
+        "measured": "2026-10-26 on a Fusion composition clip: BezierSpline keyed 10 -> 20 "
+                    "with relative vs absolute flat handles, connected to Blur YBlurSize, "
+                    "sampled with GetInput at frames 10/12/15/18/20; whip Transform Center "
+                    "via XYPath confirmed in rendered frames.",
+    },
+    {
+        "symbol": "BezierSpline attach (stray key at the current time)",
+        "object": "Fusion Tool input / BezierSpline",
+        "signature": "tool.AddModifier(input, 'BezierSpline') | tool[input] = comp.BezierSpline()",
+        "reality": "Connecting an EMPTY spline to an input, by either route, adds a key at "
+                   "the comp's current time holding the input's old value. Keys set "
+                   "afterwards are added next to it, and SetKeyFrames(keys, True) does not "
+                   "remove it despite the replace flag. Measured with CurrentTime 0: "
+                   "AddModifier then input[10] = 5, input[20] = 9 left keys [0, 10, 20] with "
+                   "1.0 (the old value) at frame 0, so the value drifts from 1.0 before the "
+                   "first intended key instead of holding. The stray key can be deleted with "
+                   "spline.DeleteKeyFrames(time) once other keys exist; deleting it while it "
+                   "is the only key does nothing. A spline that already has keys when it is "
+                   "connected gets no extra key.",
+        "recommended": "Build the spline first and connect it last: s = comp.BezierSpline(); "
+                       "s.SetKeyFrames(keys, True); tool[input] = s. When the spline is "
+                       "already attached, delete the stray key (DeleteKeyFrames(time)) after "
+                       "the intended keys are written, then confirm with GetKeyFrames(). "
+                       "fusion_comp add_keyframe does this itself: its first call on an "
+                       "input deletes the stray key, reports it as removed_stray_keys, and "
+                       "returns stray_keys_remaining plus a warning if it survives.",
+        "tags": ["fusion", "keyframe", "silent-failure"],
+        "mitigation": ["fusion_comp.add_keyframe", "_fusion_remove_stray_keys"],
+        "verified_on": "DaVinci Resolve Studio 21.0.2.4",
+        "measured": "2026-10-26 on a Fusion composition clip (CurrentTime 0), on a Blur: "
+                    "AddModifier + two indexed writes -> keys [0, 10, 20]; empty spline "
+                    "connected then SetKeyFrames(replace=True) -> [0, 10, 20]; "
+                    "DeleteKeyFrames(0.0) then -> [10, 20]; spline keyed before connect -> "
+                    "[10, 20].",
+    },
 
 ]
 
@@ -3973,10 +4258,21 @@ ACTION_SYMBOLS: Dict[Tuple[str, str], List[str]] = {
     ("timeline", "apply_look_to_items"): ["TimelineItem.CopyGrades"],
     ("timeline_item_color", "export_lut"): ["TimelineItem.ExportLUT"],
     ("timeline_item_color", "safe_export_lut"): ["TimelineItem.ExportLUT"],
+    ("graph", "apply_grade_from_drx"): [
+        "Graph.ApplyGradeFromDRX (timeline graph, empty pTrackVer)",
+        "Graph.ApplyGradeFromDRX (grade lands in another graph)",
+    ],
+    ("timeline_item_color", "safe_apply_drx"): [
+        "Graph.ApplyGradeFromDRX (timeline graph, empty pTrackVer)",
+        "Graph.ApplyGradeFromDRX (grade lands in another graph)",
+    ],
     ("timeline", "duplicate"): ["Timeline.DuplicateTimeline"],
     ("project_manager", "archive"): ["ProjectManager.ArchiveProject"],
     ("fusion_comp", "add_modifier"): ["Tool.AddModifier", "Tool.AddModifier (NestControl inputs)"],
-    ("fusion_comp", "add_keyframe"): ["Tool.AddModifier (NestControl inputs)"],
+    ("fusion_comp", "add_keyframe"): [
+        "Tool.AddModifier (NestControl inputs)",
+        "BezierSpline attach (stray key at the current time)",
+    ],
     ("project_manager", "safe_project_archive"): ["ProjectManager.ArchiveProject"],
     ("render", "start"): ["Project.StartRendering"],
     ("resolve_control", "set_high_priority"): [

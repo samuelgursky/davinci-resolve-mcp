@@ -2,7 +2,7 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
-## What's New in v4.16.0-beta.1 — Subtitle styling feedback prerelease
+## Unreleased — Subtitle preset inputs (draft, not validated on Studio 21.1)
 
 ### Added
 
@@ -10,24 +10,484 @@ Release history for the DaVinci Resolve MCP Server. The latest release is summar
 - `set_subtitle_preset` accepts opt-in `literal_inputs`, verifies requested values through native re-export, and retains the original timeline.
 - Word Highlight gains independent base-outline controls on shading element 4.
 
-### Studio 21.1 render validation missing — feedback requested
+### Not validated
 
-**This is a feedback prerelease. The new subtitle styling has not been visually validated on Resolve Studio 21.1.** Automated tests pass, and native Text+ input names were probed on Studio 19.1.3.7. The local free 21.1.0.15 build imported and re-exported a synthetic timeline, but rendering raised a Studio limitation and produced a black frame. Structural readback does not establish that the intended styling renders correctly.
+The new subtitle styling has not been visually validated on Resolve Studio 21.1. Native Text+ input names were probed on Studio 19.1.3.7 only. Per-word pop/scale and cue in/out transitions remain unsupported, so this does not close #295. Run `RESOLVE_VERIFY=1 venv/bin/python tests/live_subtitle_preset_validation.py` against a disposable Studio 21.1+ project before releasing.
 
-The maintainer explicitly authorized this feedback release with the limitation disclosed. Per-word pop/scale and cue in/out transitions remain unsupported. This release does not resolve all of #295.
+## What's New in v4.18.5 — The #336 ledger matches the re-measurement
 
-### Try it and report results
+@CaptRauti re-measured the six calls from v4.18.4. Three of them were the same broken timeline: `AppendToTimeline` took an absolute `recordFrame` below `StartFrame`, the clips landed outside the timeline, and `StartFrame` stayed equal to `EndFrame`.
 
-Install explicitly with `npx davinci-resolve-mcp@next setup` (or pin `@4.16.0-beta.1`). The stable npm `latest` channel remains unchanged.
+### Fixed
 
-Please test in a disposable project or backed-up duplicate timeline. On [#295](https://github.com/samuelgursky/davinci-resolve-mcp/issues/295), report your Resolve edition/build, OS and MCP version; whether the base outline appears across words while highlighting remains correct; whether caption text/timing and caption-free gaps are preserved; and whether the original timeline remains intact. Before/after rendered frames and action output are useful. #295 remains open pending feedback and the outstanding animation requests.
+- **A subtitle clipInfo is refused from Resolve 21.0** (#335, thanks @ylukin). Free 21.0.3.7 aborts on the same call as Studio 21.1.2.10 (`Sm2MpObject.cpp:546`). The floor was 21.1, so 4.18.3 still forwarded 21.0.3.7. Studio 21.0.4.5 was reported working (#169) and is refused with it. Builds older than 21.0 still forward the clipInfo. The plain `clip_ids` form is unchanged.
+
+### Documentation
+
+- **Timeline.DeleteGaps** and **Timeline.ExportFrame** are withdrawn. On a timeline whose clips start at 86400, `DeleteGaps` closes the gaps. `ExportFrame` takes a relative offset and accepts 0 through the last frame.
+- **Timeline.AddMarker** at relative 0 writes the marker. The silent success is **TimelineItem.AddMarker(0)** on the clip that sits at `StartFrame` (True, nothing written), the same family as #34.
+- **MediaPool.AddToPhotoAlbum** returns None, and the album stays empty. `CreatePhotoAlbumFromPhotos` placed two photos in the same session.
+- **TimelineItem.SetPosition** still returns False, and **Timeline.MoveItems** is not callable.
+- **TimelineItem.SetLeftOffset** stays as the original destructive readback. The clip was at frame 400 on a timeline whose `StartFrame` was 86400, and it was not re-run.
+- The **recordFrame** entry now records the duration-0 timeline that survives a reopen. `append_to_timeline` already refuses an absolute `recordFrame` below the timeline start. That refusal has been in place since v2.103.5.
+- The limitations report was regenerated (43 missing capabilities, 66 bugs).
 
 ### Validation
 
-- Focused subtitle codec/orchestration tests, full offline suite (with sandbox-blocked cases passing outside the sandbox), and release static/drift checks pass.
-- Advanced Node suite passed with 1,139 passing and 60 skipped before an additional parser test; the updated focused suite passes all 26 cases.
-- CLI/package checks pass. No source media changed.
-- Studio 21.1 animated-subtitle render acceptance was not completed; see the warning above.
+- Focused unit tests: the withdrawn entries are not `submit` bugs, the `TimelineItem` marker is, a 21.0.3.7 subtitle clipInfo never reaches `AppendToTimeline`, 21.0.4.5 is refused with it, and 19.1.3.7 still forwards.
+- Static checks: API parity, limitations and read/write drift guards, agent rules, undefined names, duplicate definitions, action-list drift, panel docs, tool counts, and release-surface drift.
+- Live Resolve on this machine is Studio 19.1.3.7. The refusal applies at 21.0 and above, so it was not exercised against the open project. The 21.0.3.7 crash and the 21.1.2.10 re-measurement were not reproduced here.
+- The control-panel guide was reviewed. No navigation or diagnostic card changed, so screenshots were not regenerated.
+
+## What's New in v4.18.4 — Silent Resolve calls from #336 are on the ledger
+
+No tool behavior changed. Six calls reported on Studio 21.1.2.10 return
+success, or an empty list, without doing the work their names suggest. They
+are now `submit: bug` entries, so `lookup_api_truth` finds them before an
+agent calls them.
+
+### Documentation
+
+- **Timeline.DeleteGaps** returns True and leaves clip starts unchanged.
+- **MediaPool.AddToPhotoAlbum** returns `[]` and the album stays empty.
+  `CreatePhotoAlbumFromPhotos` placed photos in the same session. On Studio
+  19.1.3.7 those photo-album methods are absent from `dir(MediaPool)`.
+- **Timeline.ExportFrame** reports every offset out of range when
+  `GetStartFrame()` and `GetEndFrame()` are both 86400.
+  `TimelineItem.ExportFrame` exported the same frames.
+- **TimelineItem.SetPosition** and **Timeline.MoveItems** return False for
+  every input tried in that session.
+- **TimelineItem.SetLeftOffset** returns True and extends the clip from
+  source media (a start near frame 400 jumped to about -86000). Setting the
+  offset back to 0 does not restore the edit. This server only reads
+  `GetLeftOffset`, so the ledger records the fact without a refusal gate.
+- **Timeline.AddMarker** at relative frame 0 returns False, and so does
+  `AddMarker(StartFrame)`. `AddMarker(200)` returned True. The server
+  already reports `success: false` when the API returns false.
+
+### Validation
+
+- The six symbols are findable through `lookup_api_truth`, and the
+  limitations report was regenerated (43 missing capabilities, 68 bugs).
+- Static checks: API parity, limitations and read/write drift guards, agent
+  rules, undefined names, duplicate definitions, action-list drift, panel
+  docs, tool counts, and release-surface drift.
+- Live Resolve on this machine is Studio 19.1.3.7, project "Untitled
+  Project", no current timeline. `dir(MediaPool)` confirms the photo-album
+  methods are absent. Timeline and TimelineItem methods were not probed.
+  The 21.1.2.10 results are @CaptRauti's report and were not re-measured
+  here.
+- The control-panel guide was reviewed. No navigation or diagnostic card
+  changed, so screenshots were not regenerated.
+
+## What's New in v4.18.3 — A subtitle clipInfo no longer takes Resolve down
+
+On Studio 21.1.2.10, `AppendToTimeline` with a clipInfo for an imported SRT
+aborts Resolve. The clipInfo builders now refuse that payload before the call.
+
+### Fixed
+
+- **A subtitle clipInfo is refused on Resolve 21.1+** (#335, thanks
+  @blacksky3810). `media_pool append_to_timeline` and the other clipInfo
+  builders return `SUBTITLE_APPEND_CRASH` instead of forwarding the call.
+  On Studio 21.1.2.10 that call aborts Resolve (`Sm2MpObject.cpp:546`). The
+  plain `clip_ids` form is unchanged: it does not crash, and on that build it
+  also places nothing. Builds older than 21.1 still forward the clipInfo;
+  that route was reported working on Studio 21.0.4.5 (#169). An unreadable
+  version is refused too.
+- **An allowed media root of `/` contains its files** (#334, thanks
+  @Dev-next-gen). The path check built the prefix as `root + separator`, so
+  `/` became `//` and a Windows drive root doubled its separator. Every clip
+  was then reported outside the allowed roots.
+
+### Documentation
+
+- The SRT-import `api_truth` entry now records the 21.1.2 crash and the
+  silent plain-form no-op, and the limitations report was regenerated.
+
+### Validation
+
+- Focused unit tests: the 21.1.2 clipInfo never reaches `AppendToTimeline`,
+  an unreadable version is refused, 21.0.4.5 still forwards, a video clipInfo
+  still forwards, and the granular builder returns the same code.
+- Static checks: API parity, limitations and read/write drift guards, agent
+  rules, undefined names, duplicate definitions, action-list drift, panel
+  docs, tool counts, and release-surface drift.
+- Live Resolve on this machine is Studio 19.1.3.7. The refusal applies at
+  21.1 and above, so it was not exercised against the open project. The
+  21.1.2 crash was not reproduced here.
+- Control-panel guide reviewed. No panel navigation or visible UI changed,
+  so screenshots were not regenerated.
+
+## What's New in v4.18.2 — The rest of the `$` replacement bugs
+
+v4.18.1 fixed `replace()` calls that put user text in with an interpolated
+template string. Its guard only looked for that one form, so calls whose
+replacement was a variable, a function call or a conditional were missed.
+
+### Fixed
+
+- **Splitting, trimming, adding a transition, or adding a clip to a track that
+  already has clips no longer corrupts the track when a clip name contains
+  `$`** (#333, thanks @Dev-next-gen). The rewritten clip went into the track
+  as a replacement string, so `$&` or `` $` `` in a name copied other clips into
+  the track and duplicated them.
+- **`media_ops` `relink_manifest` keeps a `$` in a target path prefix as
+  typed.** Mapping `/old/vol` to `/new/Spot $$ 30s $&` produced
+  `/new/Spot $ 30s /old/vol/...`, a path that does not exist.
+- The same form, now fixed, was also in `assemble_timeline` (the timeline's
+  pool block, which holds its name, when the media extents are rewritten),
+  in the subtitle preset writer (the preset section XML), and in the agent-rule
+  generator (generated doc sections). The other changed calls only insert hex,
+  IDs or numbers; they now use replacer functions too, so a single rule holds
+  everywhere.
+
+### Changed
+
+- The guard test now splits every `replace()` / `replaceAll()` call in
+  `resolve-advanced` and `scripts/` into its arguments, and fails unless the
+  replacement is a function or a literal with no `$` in it. Literals whose
+  `$`-sequences are backreferences (`$1`, `'\\$&'`) are allowed. The
+  `editorial` source-alias rules and the `media_ops` rename rules, where `$1`
+  is part of the feature, are listed by name. Run against the v4.18.1 sources,
+  it reports 25 call sites, including all six that #333 fixed.
+
+### Validation
+
+- Advanced Node suite on Node 20 with a fresh `npm ci`: 1,227 tests, 0 failed.
+  Python suite: 4,295 tests; the only failures are the 4 `source_media_guard`
+  path checks that always fail in a scratch worktree. With #333's fix
+  reverted, its two tests fail. The new relink test
+  fails on the v4.18.1 code with the wrong path shown above.
+- Offline file writers only. No Resolve API behaviour changed.
+
+## What's New in v4.18.1 — Names with `$` or `\` are written as typed
+
+### Fixed
+
+- **`drt assemble_project` no longer rewrites a merged timeline's name when it
+  contains `$`** (#332, thanks @Dev-next-gen). The name was inserted with a
+  replacement string, and JavaScript expands `$&`, `$'` and `$$` in one. A
+  second timeline named `R2 $& $'` wrote an `MpFolder.xml` that no longer
+  parsed, and `Spot $$ 30s` came out as `Spot $ 30s`, so a `folder` move then
+  failed to find the timeline.
+- **The same fix in 53 more places in the offline `.drp`/`.drt` writers.**
+  Caption text in `placeSubtitles`, generator, title and compound clip names,
+  media pool clip names and file paths, and every other value inserted into
+  the XML now goes in with a replacer function, so `$`-sequences stay literal.
+  A new guard test fails the advanced suite if a `replace()` call passes an
+  interpolated template as a string.
+- **The audio-only fallback clone in `cut-media` now XML-escapes the source
+  file name and path.** A source path containing `&`, such as
+  `Smith & Jones/clip.mov`, wrote invalid XML.
+- **Re-running media analysis on a clip no longer fails when the new analysis
+  text contains a backslash.** The managed block in the clip's metadata was
+  replaced with `re.sub` using the text as a replacement string, so a Windows
+  path raised `bad escape \F` and `\t` turned into a tab. The text is now
+  inserted as-is.
+
+### Validation
+
+- Advanced Node suite on Node 20 with a fresh `npm ci`: 1,224 tests, 0 failed.
+  With the fixes reverted, the guard and the caption, generator and title tests
+  fail.
+- Python suite: the new metadata test fails with `bad escape \F` without the
+  fix and passes with it.
+- Offline file writers only. No Resolve API behaviour changed.
+
+## What's New in v4.18.0 — Edit captions with Resolve open
+
+### Added
+
+- **`timeline_ai.list_captions_live` and `timeline_ai.write_captions_live`**
+  (#330, thanks @sidevconcept). Caption text and per-word timing can now be
+  edited without quitting Resolve or patching the open Project.db.
+  `write_captions_live` takes the same `replace` / `add` / `delete` shape as
+  the offline `project_db` `write_captions`. It exports the timeline as a
+  native DRT, applies the edit with the same caption codec and edit checks,
+  and imports the result as a new timeline revision. The revision is selected
+  only after Resolve's own re-export of it keeps the requested text, caption
+  bounds and word frames. If any step fails, the original timeline stays
+  selected and unchanged.
+- A caption `id` is its start frame as a string, because Resolve issues new
+  item IDs on every export. The write returns the IDs to use for the next
+  edit, including for captions it added or moved. Edits on a track where two
+  captions share a start frame are refused as ambiguous.
+- `write_captions_live` is registered as a destructive action with a native
+  dry run (medium risk, recoverable). `list_captions_live` is read-only.
+
+### Changed
+
+- `set_subtitle_preset` now shares its export → edit → import → re-export
+  steps with the caption writer. Its behaviour and result fields are the same.
+
+### Limits
+
+- Word times keep the existing codec's 60 Hz tick quantisation.
+- Adding to an empty subtitle track needs an existing caption as a template.
+  Per-caption Fusion compositions are refused.
+- The structural readback does not check every grade, marker, Fusion
+  composition or audio property carried through the native timeline import.
+
+### Validation
+
+- Python suite with the PR merged on `main`: 4,294 tests. The only failures
+  are the 4 `source_media_guard` path checks that always fail in a scratch
+  worktree.
+- Advanced Node suite on Node 20 with a fresh `npm ci`: 1,218 tests, 1,157
+  passed, 0 failed, 61 skipped.
+- Live-validated by the contributor on Studio 21.1.0.17 with a disposable
+  project copy: three captions rewritten (one containing `$`), a moved
+  caption's ID reused, an added caption deleted by its returned ID, and a
+  burned-in render checked across nine word phases. Not live-validated on the
+  maintainer's Studio 19.1.3.7.
+
+## What's New in v4.17.1 — Media analysis decodes each file once
+
+### Changed
+
+- **The readthrough pass of media analysis runs ffmpeg once instead of four
+  times** (#329, thanks @Dev-next-gen). Loudness, scene scoring, black frames
+  and silence each used to be a separate ffmpeg run, and each run decoded the
+  whole file: `-af` alone does not drop the video stream from a null output,
+  so the audio passes decoded every video frame too. The four filters now
+  share one run through `split`/`asplit`. On a 1080p H.264 file the
+  readthrough took 8.1 s instead of 22.1 s, and CPU time fell from 84.8 s to
+  30.5 s; ProRes and HEVC dropped by about the same share. The results are
+  the same as before. The parsers are unchanged.
+- The four measurements now share one exit code and one timeout. The single
+  run gets four times the old per-pass timeout, the budget of the four runs it
+  replaces. If that run times out, all four report `success: false`, where
+  before the other three could still succeed.
+
+### Validation
+
+- Python suite with the PR merged on `main`: 4,291 tests. The only failures
+  are the 4 `source_media_guard` path checks that always fail in a scratch
+  worktree. The new test compares the single run against the four separate
+  runs with the real ffmpeg on an A/V file, a video-only file and an
+  audio-only file.
+- No Resolve behaviour changed; this is ffmpeg only.
+
+## What's New in v4.17.0 — Power windows for Resolve 21
+
+### Added
+
+- **`drx generate` takes `resolveVersion`** (#328, thanks @hpaul). A major
+  number (`21`) or a version string (`"21.0.4"`). From 21 on, circle and
+  linear power windows are written the way Resolve 21 exports them: corrector
+  type 0x10004 (65540) with the full parameter set, `REF_WIDTH` 288 and an
+  identity transform matrix, and 0x10004 added to the node's corrector-type
+  list. Resolve 21 loads the older corrector-type-4 form into the Window
+  palette but renders an empty mask, which also hides the node's grade.
+  The default is unchanged, so output for Resolve 19/20 is byte-for-byte
+  what it was. Gradient and polygon/curve windows are not rewritten. The
+  format follows justhung69/resolve-mcp (MIT), pixel-verified there on free
+  21.0.4.5.
+- The node's corrector-type list is now varint encoded, because 65540 does
+  not fit in one byte. Every type id below 128 encodes to the same byte as
+  before.
+
+### Validation
+
+- Advanced Node suite on Node 20 with a fresh `npm ci`, PR merged on
+  `main`: 1,214 tests, 1,153 passed, 0 failed, 61 skipped (8 new for the
+  Resolve 21 window layout). PR CI green on Python 3.10/3.11 and Node 20/22.
+- Not live-validated on Resolve 21: the maintainer's box runs Studio
+  19.1.3.7. The window layout is checked against Resolve 21 fixtures only.
+
+## What's New in v4.16.0 — Calls name their timeline, and failures say so
+
+Eight reports from a Studio 21.1 / Windows deployment (#320–#327) and the
+open half of #318. The theme: a call that did something other than what the
+caller asked, or failed, must not look like a success.
+
+### Added
+
+- **Pin a call to a timeline** (#320). `timeline`, `timeline_item*`,
+  `timeline_markers`, `timeline_frame`, `timeline_ai`, `graph` and `render`
+  accept `timeline_id` or `timeline_name`. The server makes that timeline
+  current for the call and restores the caller's timeline afterwards,
+  verified by readback. Unknown ids (`TIMELINE_NOT_FOUND`), ambiguous names
+  (`TIMELINE_NAME_AMBIGUOUS`) and an id/name pair that disagree are refused
+  before the action runs. Before, a `timeline_id` nothing read was dropped,
+  and the write landed on whichever timeline was current.
+- **Results name the timeline acted on** (#320): `_operation.timeline`
+  `{name, id}`, plus `pinned`, `restored_current` or `restore_failed` on a
+  pinned call.
+- **Unread params are reported** (#320). A successful call carrying keys the
+  action never read returns `ignored_params` and an envelope warning. They
+  are reported after the call, not refused before it: the server has no
+  per-action schema, and a static scan of the reachable code could not bound
+  the key set for 25 of the 37 tools.
+- **`timeline_item_id` on the timeline item tools** (#323). On 21.1
+  `item_index` counts transitions, so it shifts whenever one is added or
+  removed. Every tool that resolves an item through the shared lookup
+  accepts the item's `GetUniqueId()` and refuses an unknown id with
+  `ITEM_NOT_FOUND`.
+- **`drx generate` can target the timeline** (#318).
+  `target: "timeline"` writes the grade into `<pTrackVer>`, the block a
+  timeline `ApplyGradeFromDRX` loads, in the shape the reporter applied on
+  Studio 21.1.1.10. The default stays `"clip"`.
+- **`duplicate` takes `make_current`** and returns the copy's `id` and the
+  `current` timeline (#322).
+
+### Fixed
+
+- **Failed calls set MCP `isError: true`** (#321). Every error-envelope
+  result used to arrive with `isError: false`, so spec-following hooks and
+  retry policies counted refusals as successes. The flag is set at the
+  protocol boundary; the JSON body is unchanged. `{"success": false}` without
+  an `error` key is not flagged.
+- **`timeline.duplicate` leaves the original current** (#322) unless
+  `make_current: true`. Resolve makes the copy current, so "duplicate as a
+  backup, then edit" edited the backup.
+- **FCPXML round trip on the server's own export** (#324).
+  `import_timeline_checked` accepts the bundle directory 21.1 writes for
+  FCPXML and imports the `Info.fcpxml` inside.
+- **Online image sequences are not reported missing** (#325). A path like
+  `name.[0000-8999].jpeg` is checked by its first and last frames (printf and
+  `####` patterns by one matching frame). Before, `probe_timeline_structure`
+  said `file_exists: false`, and `detect_missing_media` and
+  `build_relink_plan` listed the clips for relink.
+- **The bridge honours `allowed_media_roots` / `allowed_output_roots`**
+  (#326). `load_config` dropped both, so the policies were always the home
+  folder. The generic `call` path the MCP server uses was never gated by
+  them. The bridge's named path operations now follow the configured roots,
+  including the installer's default output root (`~/Movies`).
+
+### Performance
+
+- **The bridge keeps one connection open** (#327). Each request is still
+  signed with its own nonce; only the TCP connection is reused, retired after
+  20 s idle on the client and 30 s on the bridge. macOS loopback: 0.40 ms a
+  call per connection, 0.17 ms kept alive, and no TIME_WAIT socket per call.
+  Windows was not measured here. Re-run `scripts/install_resolve_bridge.py`
+  to update the in-Resolve copy; an older bridge keeps working, one
+  connection per call.
+
+### Validation
+
+- Full offline suite: 4,289 tests, OK. 47 new tests across the error flag,
+  pinning, unread params, duplicate, item ids, FCPXML bundles, image
+  sequences, bridge roots and bridge keep-alive (over a real loopback
+  bridge).
+- Advanced Node suite on Node 20 with a fresh `npm ci`: 1,206 tests, 0
+  failures (4 new for `target: "timeline"`).
+- Live on Studio 19.1.3.7, over MCP stdio against a disposable project with
+  synthetic media: pinned reads and writes land on the named timeline and
+  the caller's timeline comes back; unknown and conflicting selectors
+  refuse; `ignored_params`; `timeline_item_id` and its `ITEM_NOT_FOUND`;
+  `duplicate` with and without `make_current` and pinned; `isError` on
+  failures and not on successes. 21 checks, 2 cycles. The first cycle found
+  a pinned `duplicate` reporting the pinned timeline as `current` after the
+  caller's had been restored; fixed before release.
+- The 21.1-specific behaviour (transitions in `GetItemListInTrack`, FCPXML
+  bundles, timeline DRX applies) cannot be reproduced on 19.1.3.7 and is
+  not live-validated.
+
+## What's New in v4.15.5 — DRX applies say which graph changed
+
+`graph.apply_grade_from_drx` and `timeline_item_color.safe_apply_drx` no
+longer report a bare `success` from `ApplyGradeFromDRX`. They read the graphs
+back, and they refuse a timeline apply that would load no timeline grade.
+
+### Fixed
+
+- **A timeline apply of a .drx with no timeline grade is refused** (#318).
+  A .drx keeps the clip grade in `<pClipFullVer>` and the timeline grade in
+  `<pTrackVer>`. `drx generate`'s single-node path writes no `<pTrackVer>`,
+  and native stills and the multi-node path write one with
+  `HasCorrection false`. On Studio 21.1.1.10 such an apply was reported to
+  return True, add nothing and empty the timeline graph. With
+  `source="timeline"`, both actions now return `DRX_NO_TIMELINE_GRADE` before
+  the confirm token is issued and before Resolve is called.
+- **DRX applies read back every graph the grade could land in** (#319).
+  The node count, labels and LUTs of the clip graph, the clip's color-group
+  pre- and post-clip graphs and the timeline graph are read before and
+  after. The result carries `changed_graphs`, a per-graph before/after count
+  and a `verification` block, so the result no longer says
+  `readback_checked: false`. When only a graph you did not target changed,
+  the call fails with `DRX_APPLIED_TO_OTHER_GRAPH`. When no graph changed it
+  still reports success, with a `warning`: a grade with the same node
+  structure changes only parameters, which no readback reaches.
+
+### Documentation
+
+- Two `api_truth` entries for the reported behaviour, mapped to both apply
+  actions, with what Studio 19.1.3.7 did when we measured it.
+- New live harness `tests/live_drx_apply_readback_validation.py`.
+
+### Validation
+
+- Full offline suite: 4,242 tests, OK. 12 new unit tests cover the file
+  check, both refusals, the group pre-clip landing case, a verified change,
+  the no-change warning, a color-group target and `safe_apply_drx`.
+- Live on Studio 19.1.3.7, disposable project, one synthetic clip, a grade
+  from `drx generate`: 0 failures. The refusal fired and left the timeline
+  graph alone; the clip apply was detected through the node label
+  (`changed_graphs: ["item"]`); the same-structure re-apply warned; a
+  grouped clip's readback covered both group graphs.
+- Neither reported behaviour reproduces on 19.1.3.7. Every timeline-graph
+  apply returned False and changed nothing, with or without a timeline
+  grade, so a successful timeline apply was not observed. A grouped clip took
+  the grade in its own graph. Both were reported on Studio 21.1.1.10, which
+  was not available for this release.
+
+## What's New in v4.15.4 — add_keyframe no longer leaves a stray key
+
+### Fixed
+
+- **`fusion_comp(action="add_keyframe")` removes the key Fusion adds when an
+  input is first animated** (#317, thanks @assassin007-hub). Attaching an
+  empty BezierSpline keys the comp's current time with the input's old value,
+  so keying frames 10 and 20 left keys `[0, 10, 20]` and the curve ramped from
+  the old value instead of holding until the first intended key. The first
+  call on an input now deletes that key after the real one is written, reads
+  the keys back, and returns `removed_stray_keys`, or `stray_keys_remaining`
+  with a `warning` pointing to `delete_keyframe` if a key survives. A key
+  written at the current time simply overwrites it. Text Follower range
+  bounds (±1e9) are not treated as keys.
+
+### Documentation
+
+- Two measured `api_truth` entries: BezierSpline LH/RH handles are offsets
+  from their key, not absolute points; and the stray key an empty spline
+  attach leaves, now attached to `fusion_comp add_keyframe`.
+
+### Validation
+
+- CI passed on Python 3.10 and 3.11 and on the advanced Node suite under
+  Node 20 and 22. Full offline suite run against main: 4,230 tests, with only
+  the 4 `source_media_guard` failures that always occur in a scratch worktree.
+- Live behavior was measured by the contributor on Studio 21.0.2.4 (keys
+  `[0, 10, 20]` before, `[10, 20]` after `DeleteKeyFrames`). It was not
+  re-run on 19.1.3.7 for this release.
+
+## What's New in v4.15.3 — CI covers the version floors
+
+No server behavior changed. Pull requests are now tested on the oldest Python
+and Node versions the project supports, not only on newer ones.
+
+### Changed
+
+- **CI runs the Python job on Python 3.10 as well as 3.11.** 3.10 is the
+  declared floor. The bug fixed in v4.15.1 (#314) appeared only on 3.10, and
+  CI ran 3.11 alone, so it passed every check.
+- **CI runs the advanced server's own test suite on Node 20 and Node 22.**
+  The suite in `resolve-advanced/` had never run in CI. A contributor PR
+  (#312) whose code needs Node 22.15+ had a green check while 4 of its tests
+  fail on Node 20, the declared floor (`>=20.9`). Each Node version gets a
+  clean `npm ci`, because `better-sqlite3` is built for one Node version.
+
+### Validation
+
+- The first CI run with the new jobs passed on Python 3.10 and 3.11 and on
+  Node 20 and 22. Advanced suite: 1,202 tests, 0 failures on both Node
+  versions (61 skipped on Node 20, 60 on Node 22; the extra one needs a Node
+  22.16+ SQLite API).
+- No Resolve behavior changed; a live test is not required.
+
 ## What's New in v4.15.2 — Bridge installer and large marker blobs
 
 Two contributor fixes.

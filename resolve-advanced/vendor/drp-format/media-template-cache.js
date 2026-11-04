@@ -59,11 +59,11 @@ function transplantMediaElement(mpXml, seqXmls, { poolElement, mediaRef }) {
   const folderId = (mpXml.slice(start, end).match(/<MpFolder>([0-9a-f-]{36})<\/MpFolder>/) || [])[1];
   let element = poolElement;
   if (folderId) {
-    element = element.replace(/<MpFolder>[0-9a-f-]{36}<\/MpFolder>/, `<MpFolder>${folderId}</MpFolder>`);
+    element = element.replace(/<MpFolder>[0-9a-f-]{36}<\/MpFolder>/, () => `<MpFolder>${folderId}</MpFolder>`);
   }
   const outMp = mpXml.slice(0, start) + element + mpXml.slice(end);
   const outSeqs = seqXmls.map((seq) =>
-    seq.replace(/<MediaRef>[0-9a-f-]{36}<\/MediaRef>/g, `<MediaRef>${mediaRef}</MediaRef>`),
+    seq.replace(/<MediaRef>[0-9a-f-]{36}<\/MediaRef>/g, () => `<MediaRef>${mediaRef}</MediaRef>`),
   );
   return { mpXml: outMp, seqXmls: outSeqs };
 }
@@ -75,7 +75,7 @@ function insertMediaElement(mpXml, poolElement) {
   const folderId = (mpXml.match(/<Sm2MpVideoClip[^>]*>[\s\S]*?<MpFolder>([0-9a-f-]{36})<\/MpFolder>/) || [])[1];
   let element = poolElement;
   if (folderId) {
-    element = element.replace(/<MpFolder>[0-9a-f-]{36}<\/MpFolder>/, `<MpFolder>${folderId}</MpFolder>`);
+    element = element.replace(/<MpFolder>[0-9a-f-]{36}<\/MpFolder>/, () => `<MpFolder>${folderId}</MpFolder>`);
   }
   return mpXml.slice(0, close) + element + mpXml.slice(close);
 }

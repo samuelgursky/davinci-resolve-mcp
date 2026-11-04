@@ -467,7 +467,7 @@ export const drtTool = {
           } catch { return whole; }
         });
         // pool clip: uuid remap + keyed SeqRef patch + fresh numeric IDs
-        let tlNew = applyBlobs(apply(tlEl)).replace(/<ID>\d+<\/ID>/g, `<ID>${nextPoolId}<\/ID>`.replace('<\/ID>', '</ID>'));
+        let tlNew = applyBlobs(apply(tlEl)).replace(/<ID>\d+<\/ID>/g, () => `<ID>${nextPoolId}<\/ID>`.replace('<\/ID>', '</ID>'));
         nextPoolId += 1;
         const fbM = tlNew.match(/(<Sm2Sequence DbId="[^"]+">\s*<FieldsBlob>)([0-9a-fA-F]+)(<\/FieldsBlob>)/);
         if (fbM) {
@@ -475,7 +475,7 @@ export const drtTool = {
           const seqRef = dict.entries.find((e) => e.key === 'SeqRef');
           if (seqRef && remap.has(String(seqRef.value))) {
             seqRef.value = remap.get(String(seqRef.value));
-            tlNew = tlNew.replace(fbM[0], `${fbM[1]}${encodeKeyedDict({ hdr: dict.hdr, entries: dict.entries }).toString('hex')}${fbM[3]}`);
+            tlNew = tlNew.replace(fbM[0], () => `${fbM[1]}${encodeKeyedDict({ hdr: dict.hdr, entries: dict.entries }).toString('hex')}${fbM[3]}`);
           }
         }
         for (const [n, xml] of Object.entries(containers)) {
@@ -486,14 +486,14 @@ export const drtTool = {
         // Children live INSIDE <MediaVec> — an element appended after its
         // close parses fine and is silently invisible (measured: the whole
         // REEL_02 subtree vanished while every id chain checked out).
-        mpXml = mpXml.replace('</MediaVec>', `${tlNew}\n</MediaVec>`);
+        mpXml = mpXml.replace('</MediaVec>', () => `${tlNew}\n</MediaVec>`);
         for (const el of mediaEls) {
           const id = el.match(/DbId="([^"]+)"/)[1];
-          if (!mpXml.includes(`DbId="${id}"`)) mpXml = mpXml.replace('</MediaVec>', `${el}\n</MediaVec>`);
+          if (!mpXml.includes(`DbId="${id}"`)) mpXml = mpXml.replace('</MediaVec>', () => `${el}\n</MediaVec>`);
         }
         const pj2 = await zip.file('project.xml').async('string');
         for (const blob of pj2.match(/<Element>\s*<Sm2(?:Sequence|TiItem)LockableBlob DbId="[^"]+">[\s\S]*?<\/Sm2(?:Sequence|TiItem)LockableBlob>\s*<\/Element>/g) || []) {
-          pjXml = pjXml.replace('</LocableBlobSet>', `${apply(blob)}</LocableBlobSet>`);
+          pjXml = pjXml.replace('</LocableBlobSet>', () => `${apply(blob)}</LocableBlobSet>`);
         }
         // THE timeline registry (found the hard way — two invisible merges):
         // project.xml's <TimelineHandleVec> lists each pool clip's embedded
@@ -503,7 +503,7 @@ export const drtTool = {
         const vec2 = pj2.match(/<TimelineHandleVec>([\s\S]*?)<\/TimelineHandleVec>/);
         if (vec2) {
           for (const h of vec2[1].match(/<Element>[^<]*<\/Element>/g) || []) {
-            pjXml = pjXml.replace('</TimelineHandleVec>', ` ${apply(h)}\n </TimelineHandleVec>`);
+            pjXml = pjXml.replace('</TimelineHandleVec>', () => ` ${apply(h)}\n </TimelineHandleVec>`);
           }
         }
         // future merges must not collide with THIS timeline's fresh ids either
@@ -534,7 +534,7 @@ export const drtTool = {
           const hit = mpXml.match(tlRe);
           if (!hit) throw new Error(`assemble_project: could not locate pool clip for timeline ${names[i]} to move into folder ${folder}`);
           mpXml = mpXml.replace(hit[0], '');
-          bin.clips.push(hit[0].replace(/<MpFolder>[^<]*<\/MpFolder>/, `<MpFolder>${bin.id}</MpFolder>`));
+          bin.clips.push(hit[0].replace(/<MpFolder>[^<]*<\/MpFolder>/, () => `<MpFolder>${bin.id}</MpFolder>`));
         }
         // Register the bins in Master's FieldsBlob — the parent folder blob
         // is the SUBFOLDER registry (measured: with it blanked, a bin's
