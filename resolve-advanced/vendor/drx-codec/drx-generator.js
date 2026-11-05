@@ -927,6 +927,25 @@ function createNode(nodeId, xPos, yPos, colorParams = null, options = {}) {
 }
 
 /**
+ * Lum Mix value to write, or undefined to leave Resolve's default.
+ *
+ * Render-measured on Studio 21.0.4.5 (2026-10-19, 30p grey-128 clip): under the default Lum Mix
+ * (UI 100, stored 1.0) the lift/gamma/gain R/G/B channels are luminance-preserving, so gain
+ * R=G=B=1.6 rendered unchanged (127.59) and gain 1.6/1.0/0.7 rendered 190.5/114.1/76.0 (luma
+ * held). With Lum Mix 0 the same values render as per-channel multipliers (204.1 and
+ * 204.2/127.7/89.7), which is what Resolve itself writes for SetCDL. Masters and offset render
+ * the same either way.
+ *
+ * Opt-in: pass lumMixSlider (stored units; 0 is written, not dropped) for per-channel R/G/B
+ * moves. Defaulting every R/G/B move to Lum Mix 0 is NOT done: it would change the render of
+ * every existing caller and has only been measured on Studio 21.0.4.5.
+ */
+function resolveLumMix(colorParams) {
+  return typeof colorParams.lumMixSlider === 'number' && Number.isFinite(colorParams.lumMixSlider)
+    ? colorParams.lumMixSlider : undefined;
+}
+
+/**
  * Build Primary Corrector parameters (Lift/Gamma/Gain/Offset)
  */
 function buildPrimaryCorrectorParams(colorParams) {
@@ -1165,10 +1184,12 @@ function buildPrimaryCorrectorParams(colorParams) {
     paramEntries.push(createParameterEntry(PARAM_IDS.SHADOWS, colorParams.shadows));
   }
 
-  // Lum Mix slider (0.0-1.0, default 0)
-  if (colorParams.lumMixSlider !== undefined && colorParams.lumMixSlider !== 0) {
-    debugLog('[DRX] Adding lumMixSlider:', colorParams.lumMixSlider);
-    paramEntries.push(createParameterEntry(PARAM_IDS.LUM_MIX_SLIDER, colorParams.lumMixSlider));
+  // Lum Mix slider (0x8600000B, stored 0.0–1.0 = UI 0–100; Resolve's default is 1.0).
+  // See resolveLumMix: written only when the caller sets lumMixSlider.
+  const lumMix = resolveLumMix(colorParams);
+  if (lumMix !== undefined) {
+    debugLog('[DRX] Adding lumMixSlider:', lumMix);
+    paramEntries.push(createParameterEntry(PARAM_IDS.LUM_MIX_SLIDER, lumMix));
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -2252,6 +2273,8 @@ function parseAdjustments(adjustments) {
     // Highlights/Shadows sliders — direct values
     if (adjustments.highlights !== undefined) params.highlights = adjustments.highlights;
     if (adjustments.shadows !== undefined) params.shadows = adjustments.shadows;
+    // Lum Mix — 0-1 stored (UI 0-100 / 100); see resolveLumMix
+    if (adjustments.lumMixSlider !== undefined) params.lumMixSlider = adjustments.lumMixSlider;
     // Custom Curves
     if (adjustments.customCurves) params.customCurves = adjustments.customCurves;
     // HSL Curves

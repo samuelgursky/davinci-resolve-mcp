@@ -14,6 +14,33 @@ Release history for the DaVinci Resolve MCP Server. The latest release is summar
 
 The new subtitle styling has not been visually validated on Resolve Studio 21.1. Native Text+ input names were probed on Studio 19.1.3.7 only. Per-word pop/scale and cue in/out transitions remain unsupported, so this does not close #295. Run `RESOLVE_VERIFY=1 venv/bin/python tests/live_subtitle_preset_validation.py` against a disposable Studio 21.1+ project before releasing.
 
+## What's New in v4.19.0 — Studio 21 speed ramps, keyframed grades and Magic Mask clicks (offline writers)
+
+@Reaperiguess measured three things the scripting API cannot do on Studio 21 and wrote offline writers for them, each checked by renders on Studio 21.0.4.5 (Windows) (#312).
+
+### Added
+
+- **`project_db` `list_video_items` / `set_speed_ramp`** write variable-speed ramps, eased speed points included (`easeFrames`), into a closed project's `Project.db`. The ramp changes exactly two `Sm2TiItem` columns, `MediaTimemapBA` and `Duration`, and `buildRampTimemapR21` reproduces a hand-made ramp byte for byte. It uses the subtitle-write safety path: Resolve fully quit, SQLite snapshot backup, schema guard, transaction, readback.
+- **Keyframed grade parameters** (`keyframeCorrector`): one block per keyframe in a corrector's `F6`. Apply with gradeMode 2; gradeMode 0 drops the keyframes.
+- **Magic Mask 2 click authoring** (`placeMagicMaskClick`): moves the stored subject click to another clip's frame and point, and can copy a Primary into the mask node. After `ApplyGradeFromDRX`, `CreateMagicMask("BI")` tracks it.
+- **`drx generate` accepts `lumMixSlider`**, and an explicit 0 is now written (the old guard dropped it). `lumMixSlider: 0` makes lift/gamma/gain R/G/B moves per-channel, as Resolve's own `SetCDL` writes them.
+
+### Changed on landing (differences from the PR)
+
+- **Lum Mix 0 is opt-in, not the default.** The PR made every lift/gamma/gain R/G/B move write Lum Mix 0, and moved `shadowLift`, `highlightCompression` and the contrast node onto the masters. That changes the render of every existing `drx.generate` caller and has been measured only on Studio 21.0.4.5, so it is held back until the same grey-128 measurement exists on 19.1.3.7. Existing output is unchanged unless `lumMixSlider` is passed.
+- **Keyframe and Magic Mask code runs on Node 20.** It no longer needs Node 22.15's zstd: bodies decode with `fzstd`, and without native zstd they are encoded as a spec-valid stored zstd frame. Whether Resolve accepts a stored frame in a grade `<Body>` has not been measured; Node 22.15+ keeps the compressed form. Eased speed ramps still need Node 22.15+ and say so.
+- **`set_speed_ramp` refuses a trimmed clip.** A non-zero (or unreadable) source in-point `Sm2TiItem."In"` is refused, because the ramp is built from the media head and a windowed start has not been measured.
+- **`set_speed_ramp` refuses a ramp that overlaps the next clip.** The `dryRun` plan reports `next.start`, `next.overlapFrames` and `wouldRefuse`.
+
+### Fixed
+
+- The `db-patch` Windows resolve-running check filters `tasklist` by image name; an unfiltered call took over 5 s on a busy machine.
+
+### Validation
+
+- Advanced Node suite on Node 20: the four keyframe/Magic Mask tests that failed on Node 20 in the PR now pass, and new tests cover the two `set_speed_ramp` refusals.
+- Nothing here was exercised against a live Resolve: the open Resolve is Studio 19.1.3.7. The ramp, keyframe and Magic Mask results are the contributor's Studio 21.0.4.5 measurements.
+
 ## What's New in v4.18.6 — `cdl_io` keeps corrections with an empty or missing id
 
 `drx` action `cdl_io` dropped ASC CDL corrections whose `id` was empty or missing, with no warning. `parseCDL` only matched an opening tag written exactly as `<ColorCorrection id="...">` with a non-empty id and no other attribute. OpenColorIO's reference `cdl_test1.ccc` has five corrections, two of them there to check that an empty or missing id does not stop a look from loading. `cdl_io` imported three of the five, and a `.cc` holding only such a correction was refused as "not a CDL/CCC/CC document".
