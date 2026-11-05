@@ -25,10 +25,10 @@ The `space` flag unifies input units: **`space:'ui'` (default)** = Resolve panel
 
 | Parameter | `ui`→DRX factor | Status | Verified |
 |-----------|-----------------|--------|----------|
-| lift (r/g/b/master) | ×2 | ✅ | panel (0.10→0.05) + round-trip |
-| gamma (r/g/b/master) | ×4 | ✅ | panel (0.20→0.05) + round-trip |
-| gain (r/g/b/master) | ×1 | ✅ | panel (1.10→1.10) + round-trip |
-| offset (r/g/b) | ÷25, **delta from neutral** | ✅ | panel (0.04→+1.00) + round-trip |
+| lift (r/g/b/master) | ×2 | ✅ | panel (0.10→0.05) + round-trip; render R21 2026-10-19 (R/G/B need Lum Mix 0, see Studio 21 section) |
+| gamma (r/g/b/master) | ×4 | ✅ | panel (0.20→0.05) + round-trip; render R21 2026-10-19 (as lift) |
+| gain (r/g/b/master) | ×1 | ✅ | panel (1.10→1.10) + round-trip; render R21 2026-10-19 (as lift) |
+| offset (r/g/b) | ÷25, **delta from neutral** | ✅ | panel (0.04→+1.00) + round-trip; render R21 2026-10-19 |
 | saturation | ÷50 (0–100, 50=neutral) | ✅ | panel (55) + round-trip |
 | contrast | 1:1 (1.0-scale) | ✅ | panel (1.2→1.200) + round-trip |
 | pivot | 1:1 | ✅ | panel (0.5→0.500) + round-trip |
@@ -262,8 +262,9 @@ Everything below is flagged in code/tests where it applies; this list is the sum
 
 **Decoded but no write path (deliberate; transfer via Body copy works byte-exact):**
 - Tracker data (per-frame 3×3 transforms) — authoring synthetic tracks not built.
-- Keyframed/animated params — decode cracked; keyframe WRITE not built
-  (verify_grade flags keyframed grades `unverifiable`).
+- Keyframed/animated params — decode cracked; WRITE built 2026-10-19 as a library function
+  (`grade-keyframes.js`, see the Studio 21.0.4.5 section) but not yet exposed as a `drx`
+  tool action (verify_grade still flags keyframed grades `unverifiable`).
 
 **Known-soft spots (documented in place):**
 - HDR zone-def STOCK defaults: only Dark is capture-verified; other zones' F2/F4
@@ -279,6 +280,66 @@ Everything below is flagged in code/tests where it applies; this list is the sum
 - hue-axis HSL bumps whose edges land ON band slots pass through raw (nudge/snap idea).
 - Pipeline run-level status doesn't roll up when stages are driven individually (rollup
   polish); gallery ExportStills / export_frame_as_still fail HEADLESS-only.
+
+## Studio 21.0.4.5 writers — render-verified 2026-10-19
+
+Measured on Windows, Studio 21.0.4.5, throwaway projects; every claim below is a render
+measurement (frame-coded barcode clip or per-frame metric), not a readback.
+
+- **Keyframed grade params — WRITE built** (`vendor/drx-codec/grade-keyframes.js`). A keyframed
+  corrector's F6 repeats per keyframe `{F1: frame×2, F2:{F1: kind, F3:[params]}}`. kind 2 =
+  dynamic (linear): Midtone Detail 0→100 over frames 0→100 gave 0.0 / 50.1 / 75.1 % of the
+  static MD-100 detail lift at frames 0 / 50 / 75 and 100 % from frame 100. kind 1 = static
+  (hold): 0 % through frame 99, 100 % from frame 100. Apply with gradeMode 2 (gradeMode 0 drops
+  keyframes).
+- **Primary wheels render; R/G/B channels follow Lum Mix (0x8600000B) — FIXED.** The ids
+  were right all along (lift 0x06000018–1B, gain 0x0600001D–20, gamma 0x06000022–25, offset
+  0x0600007D–7F); Resolve's own `SetCDL` writes the same ids plus Lum Mix 0 (fixture
+  `r21-setcdl-slope-body.hex`). Under Resolve's default Lum Mix (UI 100, stored 1.0, written as
+  "absent") the lift/gamma/gain R/G/B channels preserve luminance, so the earlier "gain 1.6 shows
+  in the panel but does not render" was gain R=G=B: equal channel moves cancel on luma. Grey-128
+  band, ProRes render, mean R/G/B:
+
+  | written | Lum Mix | render |
+  |---|---|---|
+  | none | — | 127.59 |
+  | gain R=G=B 1.6 | unset (100) | 127.59 |
+  | gain R=G=B 1.6 | 50 | 165.86 |
+  | gain R=G=B 1.6 | 0 | 204.14 |
+  | gain master 1.6 | unset | 204.14 |
+  | gain 1.6/1.0/0.7 | unset | 190.54/114.08/76.04 (luma 127.59) |
+  | gain 1.6/1.0/0.7 | 0 (= Resolve SetCDL) | 204.16/127.71/89.67 |
+  | lift 0.1/0/−0.05 (stored) | unset / 0 | 137.86/125.39/119.17 / 140.18/127.70/121.49 |
+  | gamma 0.1/0/−0.05 (stored) | unset / 0 | 134.28/126.18/121.80 / 135.74/127.63/123.25 |
+  | offset 0.05/0/−0.05 (stored) | unset / 0 | 129.67/127.61/125.25 (both) |
+  | lift master 0.1 / gamma master 0.1 | unset | 140.35 / 135.71 |
+
+  Lum Mix is linear in its effect and the masters and offset ignore it. The varint 0x8600009B
+  `{F2:2}` that SetCDL also writes changed nothing when dropped. Generator fix: a lift/gamma/gain
+  R/G/B move now writes Lum Mix 0 unless the caller sets `lumMixSlider` (UI 0–100 in `space:'ui'`,
+  stored 0–1 in `space:'drx'`; the old guard dropped 0 and the range listed the default as 0);
+  `shadowLift`, `highlightCompression` and the simple-mode contrast node move the masters instead
+  of equal R/G/B. Proof with the fixed `drx generate` output: gain R=G=B 1.6 → 204.14,
+  gain 1.6/1.0/0.7 → 204.16/127.71/89.67 (identical to SetCDL), lift/gamma/offset R/G/B equal the
+  Lum Mix 0 rows above, and keyframed gain R=G=B 1.0→1.6 over frames 0→28 (gradeMode 2) ramped
+  127.59 → 165.86 (f14) → 204.14 (f28). Not done: a hand-typed R/G/B gain in the panel (screen
+  control was blocked by a Windows overlay), so what Lum Mix the panel itself pairs with typed
+  R/G/B values is unmeasured. Tests: `test/primary-wheels-lum-mix.test.mjs`. Evidence:
+  `D:/Temp/resolve-gain-20261019/`.
+- **Variable-speed ramps, Studio 21 form — WRITE built** (`buildRampTimemapR21` +
+  `project_db set_speed_ramp`). 21 writes protobuf KeyframesBA points (YMin/YMax -1); a ramp made
+  on the retime bar changes only `Sm2TiItem.MediaTimemapBA` and `Duration`. A written
+  100 %→25 %→200 % map rendered 240/240 frames on the predicted source frame, floor(fps×S(t));
+  Resolve's own hand ramp follows the same rule (538/538). The builder reproduces the hand ramp
+  byte-for-byte. Eased (curved) ramps: still not captured — the Inspector "Ease" options stay
+  disabled for a speed point and changing them wrote nothing.
+- **Magic Mask 2 — the click is stored, the mattes are not** (`magic-mask-author.js`). Corrector
+  type 2 holds the subject click: source frame×2, stroke id 2048, op 6, and x/y centred y-up
+  image fractions (x = u−0.5, y = 0.5−v). The tracked per-frame mattes are not in the body or
+  Project.db. An authored click (moved to another clip's frame 10, x 0.15, y 0.05) applied with
+  ApplyGradeFromDRX, then `CreateMagicMask("BI")` with no clicks, tracked all 50 frames; a
+  Saturation-0 Primary in the same node took subject saturation 170 → 4.6 while the background
+  stayed 164.6. `RegenerateMagicMask()` returned False on that fresh apply.
 
 ## Remaining gaps (follow-ups)
 - **Color Warper write on R21**: the built pin-list path matches the R21 fixture exactly

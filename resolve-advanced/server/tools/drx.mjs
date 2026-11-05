@@ -247,7 +247,10 @@ const generateSchema = z.object({
         "params obey it — no per-control cases): space:'ui' (DEFAULT) = Resolve panel numbers " +
         '(lift/gamma ~+/-0.05, gain ~0.90-1.10, offset panel-delta, saturation 0-100/50=neutral); scaled ' +
         "internally (lift x2, gamma x4, gain x1, offset x0.04, sat /50). space:'drx' = raw DRX-internal " +
-        'units (wheels raw, saturation ~1.0 neutral) for lossless/programmatic callers.'
+        'units (wheels raw, saturation ~1.0 neutral) for lossless/programmatic callers. lumMixSlider ' +
+        '(panel 0-100): unset = 0 whenever a wheel R/G/B channel moves, so R/G/B act per channel; at ' +
+        "Resolve's default 100 they preserve luminance and equal R/G/B renders unchanged. Use the " +
+        'wheel master to brighten or darken.'
     ),
   metadata: z.object({}).passthrough().optional().describe('Optional { label, width, height } metadata'),
   target: z
@@ -498,6 +501,22 @@ function normalizeGradeParams(gp = {}, warnings = null) {
         if (typeof scaled[ch] === 'number') scaled[ch] *= f;
       }
       out[w] = scaled;
+    }
+  }
+  // Lum Mix: panel 0–100, stored /100. Left unset, the encoder writes 0 whenever a lift/gamma/
+  // gain R/G/B channel moves, so the channels act as per-channel multipliers. Render-measured on
+  // Studio 21.0.4.5 (2026-10-19): Lum Mix cancels that share of an equal R/G/B move on luma,
+  // linearly (gain R=G=B 1.6 on grey 127.6: Lum Mix 0 → 204.1, 50 → 165.9, 100 → 127.6), so
+  // say so when a caller asks for that combination.
+  if (space === 'ui' && typeof out.lumMixSlider === 'number') out.lumMixSlider /= 100;
+  if (typeof out.lumMixSlider === 'number' && out.lumMixSlider > 0 && Array.isArray(warnings)) {
+    for (const [w, neutral] of [['lift', 0], ['gamma', 0], ['gain', 1]]) {
+      const v = out[w];
+      if (v && typeof v.r === 'number' && v.r === v.g && v.g === v.b && Math.abs(v.r - neutral) > 1e-6) {
+        const pct = Math.round(out.lumMixSlider * 100);
+        warnings.push(`${w} R=G=B=${v.r} with Lum Mix ${pct}: Resolve cancels ${pct}% of an equal R/G/B move ` +
+          `on luma (100 renders unchanged); use ${w}.master, or leave lumMixSlider unset for per-channel ${w}.`);
+      }
     }
   }
   // Controls the ENCODER stores as UI/50 (it expects panel-scale 0–100): saturation and the
