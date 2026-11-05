@@ -62,3 +62,18 @@ test('importCDL throws on a non-CDL document', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cdl-'));
   await assert.rejects(() => importCDL('<not-cdl/>', { outDir: dir }), /not a CDL/);
 });
+
+test('importCDL keeps a correction with an empty or missing id', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cdl-'));
+  const ccc = `<ColorCorrectionCollection xmlns="urn:ASC:CDL:v1.01">
+ <ColorCorrection id="">
+ <SOPNode><Slope>4.0 5.0 6.0</Slope><Offset>0 0 0</Offset><Power>0.9 1.0 1.2</Power></SOPNode>
+ </ColorCorrection>
+ <ColorCorrection>
+ <SatNode><Saturation>0.0</Saturation></SatNode>
+ </ColorCorrection>
+</ColorCorrectionCollection>`;
+  const r = await importCDL(ccc, { outDir: dir });
+  assert.deepEqual(r.grades.map((g) => g.id), ['cc0', 'cc1']);
+  assert.ok(r.grades.every((g) => !g.identity && fs.existsSync(g.drxPath)));
+});
