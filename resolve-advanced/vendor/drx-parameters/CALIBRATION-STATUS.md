@@ -315,11 +315,12 @@ measurement (frame-coded barcode clip or per-frame metric), not a readback.
   | lift master 0.1 / gamma master 0.1 | unset | 140.35 / 135.71 |
 
   Lum Mix is linear in its effect and the masters and offset ignore it. The varint 0x8600009B
-  `{F2:2}` that SetCDL also writes changed nothing when dropped. Generator fix: a lift/gamma/gain
-  R/G/B move now writes Lum Mix 0 unless the caller sets `lumMixSlider` (UI 0–100 in `space:'ui'`,
-  stored 0–1 in `space:'drx'`; the old guard dropped 0 and the range listed the default as 0);
-  `shadowLift`, `highlightCompression` and the simple-mode contrast node move the masters instead
-  of equal R/G/B. Proof with the fixed `drx generate` output: gain R=G=B 1.6 → 204.14,
+  `{F2:2}` that SetCDL also writes changed nothing when dropped. Generator: a caller sets `lumMixSlider` (UI 0–100 in `space:'ui'`,
+  stored 0–1 in `space:'drx'`; an explicit 0 is now written, the old guard dropped it) to get per-channel
+  R/G/B moves. This is opt-in: making Lum Mix 0 the default for every R/G/B move, and moving
+  `shadowLift`, `highlightCompression` and the simple-mode contrast node onto the masters, was
+  held back because it changes every existing caller's render and was measured only on Studio 21.0.4.5.
+  Proof with `drx generate` output that sets `lumMixSlider: 0`: gain R=G=B 1.6 → 204.14,
   gain 1.6/1.0/0.7 → 204.16/127.71/89.67 (identical to SetCDL), lift/gamma/offset R/G/B equal the
   Lum Mix 0 rows above, and keyframed gain R=G=B 1.0→1.6 over frames 0→28 (gradeMode 2) ramped
   127.59 → 165.86 (f14) → 204.14 (f28). Not done: a hand-typed R/G/B gain in the panel (screen

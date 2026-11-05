@@ -40,10 +40,10 @@ test("Resolve's own SetCDL body carries gain R/G/B with Lum Mix 0", async () => 
   assert.equal(p.get(LUM_MIX), 0);
 });
 
-test('per-channel gain/lift/gamma write Lum Mix 0 when it is unset', async () => {
+test('per-channel gain/lift/gamma leave Lum Mix at Resolve default unless asked (opt-in)', async () => {
   for (const gp of [{ gain: { r: 1.6, g: 1.6, b: 1.6 } }, { lift: { r: 0.05 } }, { gamma: { b: -0.02 } }]) {
-    const { params } = await primaryParams(gp);
-    assert.equal(params.get(LUM_MIX), 0, JSON.stringify(gp));
+    assert.equal((await primaryParams(gp)).params.has(LUM_MIX), false, JSON.stringify(gp));
+    assert.equal((await primaryParams({ ...gp, lumMixSlider: 0 })).params.get(LUM_MIX), 0, JSON.stringify(gp));
   }
 });
 
@@ -69,12 +69,11 @@ test('equal R/G/B under a non-zero Lum Mix warns how much of the move Resolve ca
   assert.ok(!(clean.warnings || []).some((w) => /cancels/.test(w)));
 });
 
-test('simple-mode shadowLift / highlightCompression / contrast node move the masters, not equal R/G/B', () => {
+test('simple-mode shadowLift / highlightCompression / contrast node keep their equal R/G/B moves', () => {
   const lift = parseAdjustments({ shadowLift: 0.5 });
-  assert.ok(lift.lift.master > 0 && lift.lift.r === 0 && lift.lift.g === 0 && lift.lift.b === 0);
+  assert.ok(lift.lift.r > 0 && lift.lift.r === lift.lift.g && lift.lift.g === lift.lift.b && lift.lift.master === 0);
   const hc = parseAdjustments({ highlightCompression: 0.5 });
-  assert.ok(hc.gain.master < 1 && hc.gain.r === 1 && hc.gain.g === 1 && hc.gain.b === 1);
+  assert.ok(hc.gain.r < 1 && hc.gain.r === hc.gain.g && hc.gain.g === hc.gain.b && hc.gain.master === 1);
   const contrast = parseAdjustmentsToNodes({ contrast: 1.4 }).find((n) => /Contrast/.test(n.label)).params;
-  assert.ok(contrast.lift.master < 0 && contrast.gain.master > 1);
-  assert.deepEqual([contrast.lift.r, contrast.gain.r], [0, 1]);
+  assert.ok(contrast.lift.r < 0 && contrast.gain.r > 1);
 });

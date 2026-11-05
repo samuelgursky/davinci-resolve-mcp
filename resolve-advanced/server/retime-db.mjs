@@ -14,6 +14,14 @@ import { openGuarded, requireResolveQuit, snapshotBackup } from './db-patch.mjs'
 const require = createRequire(import.meta.url);
 const { decodeTimemap, buildRampTimemapR21 } = require('../vendor/drp-format/media-timemap.js');
 
+// "In" is the clip's source in-point: plain decimal, or the first field of a pipe-joined composite
+// ('47|0000eaffffffef3f'). Empty reads as 0; anything else unparseable is null.
+function decodeIn(v) {
+  if (v === null || v === undefined || v === '') return 0;
+  const head = String(v).split('|', 1)[0];
+  return /^-?\d+(\.\d+)?$/.test(head) ? Number(head) : null;
+}
+
 const target = { projectDb: z.string().optional(), projectName: z.string().optional() };
 const segment = z.object({
   durationFrames: z.number().int().positive(), speed: z.number().positive(),
@@ -35,12 +43,18 @@ export const retimeSchemas = {
 const COLS = ['Sm2TiItem_id', 'Name', 'Start', 'Duration', 'MediaTimemapBA', 'Sm2TiTrack_id'];
 function videoItems(db, timeline) {
   const rows = db.prepare(`SELECT it.Sm2TiItem_id id, it.Name name, it.Start start, it.Duration duration,
-      it.MediaTimemapBA timemap, tr.Sm2TiTrack_id trackId, tl.Name timeline, sq.FrameRate fpsBlob
+      it.MediaTimemapBA timemap, it."In" inRaw, tr.Sm2TiTrack_id trackId, tl.Name timeline, sq.FrameRate fpsBlob
     FROM Sm2TiItem it JOIN Sm2TiTrack tr ON it.Sm2TiTrack_id = tr.Sm2TiTrack_id
     JOIN Sm2Sequence sq ON tr.Sequence = sq.Sm2Sequence_id
     JOIN Sm2Timeline tl ON tl.Sm2Timeline_id = sq.Sm2Timeline_id
     WHERE tr.Type = 0 ORDER BY tl.rowid, tr.rowid, CAST(it.Start AS INTEGER)`).all();
   const trackNo = new Map(); const perTrack = new Map();
+  // Rows are ordered by Start within a track, so the next row on the same track is the next clip.
+  const nextStart = new Map(); const lastOnTrack = new Map();
+  for (const r of rows) {
+    if (lastOnTrack.has(r.trackId)) nextStart.set(lastOnTrack.get(r.trackId), Number(r.start));
+    lastOnTrack.set(r.trackId, r.id);
+  }
   return rows.filter((r) => timeline == null || r.timeline === timeline).map((r) => {
     const key = r.timeline;
     if (!trackNo.has(key)) trackNo.set(key, []);
@@ -50,7 +64,8 @@ function videoItems(db, timeline) {
     let retime = null;
     try { retime = r.timemap ? decodeTimemap(Buffer.from(r.timemap)) : null; } catch (e) { retime = { error: e.message }; }
     return { id: r.id, name: r.name, timeline: r.timeline, track: list.indexOf(r.trackId) + 1, index: idx,
-      start: Number(r.start), duration: Number(r.duration), fps, retime };
+      start: Number(r.start), duration: Number(r.duration), fps, retime,
+      sourceIn: decodeIn(r.inRaw), nextStart: nextStart.has(r.id) ? nextStart.get(r.id) : null };
   });
 }
 const summary = (t) => (!t ? null : t.error ? { error: t.error } : t.form === 'identity'
@@ -75,6 +90,9 @@ export async function retimeDbAction(action, args, resolveDbPath) {
     const item = p.itemId ? all.find((i) => i.id === p.itemId) : all.find((i) => i.track === p.track && i.index === p.index);
     if (!item) throw new Error(p.itemId ? `no video item ${p.itemId}` : `no video item ${p.index} on V${p.track} of "${p.timeline}"`);
     if (!item.fps) throw new Error('unsupported timeline FrameRate encoding');
+    // The ramp is built from the media head; a windowed start has not been measured.
+    if (item.sourceIn === null) throw new Error('cannot read the clip source in-point (Sm2TiItem."In"); refusing to ramp it');
+    if (item.sourceIn !== 0) throw new Error(`clip is trimmed (source in-point ${item.sourceIn}); the ramp is built from the media head, so a windowed start is not supported yet`);
     if (item.retime?.error) throw new Error(`existing MediaTimemapBA does not decode: ${item.retime.error}`);
     if (item.retime?.form !== 'identity' && !p.allowRetimed) throw new Error('item is already retimed; pass allowRetimed:true to replace it');
     // Identity map = [02][(sourceFrames-1)/fps ...]: the media extent in seconds.
@@ -85,7 +103,12 @@ export async function retimeDbAction(action, args, resolveDbPath) {
     const plan = { item: { id: item.id, name: item.name, timeline: item.timeline, track: item.track, index: item.index },
       fps: item.fps, sourceFrames, durationFrames: built.durationFrames, sourceEndFrame: built.sourceEndFrame, eased: built.eased,
       before: { duration: item.duration, retime: summary(item.retime) } };
-    if (p.dryRun) return { dryRun: true, ...plan };
+    // A slower segment lengthens the clip; it must not run into the next clip on the track.
+    const end = item.start + built.durationFrames;
+    const overlapFrames = item.nextStart !== null && end > item.nextStart ? end - item.nextStart : 0;
+    plan.next = { start: item.nextStart, overlapFrames };
+    if (p.dryRun) return { dryRun: true, ...plan, ...(overlapFrames ? { wouldRefuse: `ramp would overlap the next clip by ${overlapFrames} frame(s)` } : {}) };
+    if (overlapFrames) throw new Error(`ramp would overlap the next clip on the track by ${overlapFrames} frame(s): it ends at ${end}, the next clip starts at ${item.nextStart}`);
     const backupPath = await snapshotBackup(dbPath);
     db.exec('BEGIN IMMEDIATE');
     try {

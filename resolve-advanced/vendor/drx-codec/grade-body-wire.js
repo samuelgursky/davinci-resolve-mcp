@@ -10,20 +10,29 @@
 
 const zlib = require('zlib');
 const { decodeProtobuf, encodeProtobuf } = require('../drp-format/protobuf-wire');
+const { zstdRawFrame } = require('../drp-format/timeline-markers-blob');
+
+let fzstd = null;
+try { fzstd = require('fzstd'); } catch (e) { /* optional; native zlib zstd covers Node 22.15+ */ }
 
 /** <Body> hex (0x81 = zstd, 0x80 = stored) → raw protobuf Buffer. */
 function decodeBody(hex) {
   const b = Buffer.from(String(hex).replace(/[^0-9a-fA-F]/g, ''), 'hex');
   if (b[0] === 0x80) return b.slice(1);
   if (b[0] !== 0x81) throw new Error(`grade body: unknown magic 0x${b[0].toString(16)}`);
-  if (typeof zlib.zstdDecompressSync !== 'function') throw new Error('grade body: needs Node 22+ (zlib zstd)');
-  return zlib.zstdDecompressSync(b.slice(1));
+  if (typeof zlib.zstdDecompressSync === 'function') return zlib.zstdDecompressSync(b.slice(1));
+  if (!fzstd) throw new Error("grade body: zstd decoding needs Node 22.15+ or the optional dep 'fzstd'");
+  return Buffer.from(fzstd.decompress(new Uint8Array(b.slice(1))));
 }
 
-/** raw protobuf Buffer → <Body> hex (0x81 + zstd), upper-case like Resolve writes it. */
+/**
+ * raw protobuf Buffer → <Body> hex (0x81 + zstd), upper-case like Resolve writes it.
+ * Without native zstd (Node < 22.15) the frame is spec-valid but stored (raw blocks, no
+ * compression); a render check of such a Body in Resolve has not been measured.
+ */
 function encodeBody(raw) {
-  if (typeof zlib.zstdCompressSync !== 'function') throw new Error('grade body: needs Node 22+ (zlib zstd)');
-  return Buffer.concat([Buffer.from([0x81]), zlib.zstdCompressSync(raw)]).toString('hex').toUpperCase();
+  const frame = typeof zlib.zstdCompressSync === 'function' ? zlib.zstdCompressSync(raw) : zstdRawFrame(raw);
+  return Buffer.concat([Buffer.from([0x81]), frame]).toString('hex').toUpperCase();
 }
 
 const bodyHexOf = (xml) => {
@@ -31,7 +40,7 @@ const bodyHexOf = (xml) => {
   if (!m) throw new Error('no <Body> in .drx');
   return m[1];
 };
-const withBodyHex = (xml, hex) => String(xml).replace(/<Body>[0-9a-fA-F]+<\/Body>/, `<Body>${hex}</Body>`);
+const withBodyHex = (xml, hex) => String(xml).replace(/<Body>[0-9a-fA-F]+<\/Body>/, () => `<Body>${hex}</Body>`);
 
 /** True when a decoded message carries varint field 1 == n (corrector type, tool id, ...). */
 const hasF1 = (n) => (fields) => fields.some((x) => x.field === 1 && x.wire === 0 && Number(x.value) === n);

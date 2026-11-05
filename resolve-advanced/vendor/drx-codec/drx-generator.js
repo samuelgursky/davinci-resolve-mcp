@@ -927,30 +927,22 @@ function createNode(nodeId, xPos, yPos, colorParams = null, options = {}) {
 }
 
 /**
- * True when any lift/gamma/gain R/G/B channel is off neutral (masters and offset excluded).
- */
-function hasRgbWheelMove(colorParams) {
-  const moved = (wheel, neutral) => wheel && ['r', 'g', 'b'].some(
-    (ch) => typeof wheel[ch] === 'number' && Math.abs(wheel[ch] - neutral) > 1e-6);
-  return Boolean(moved(colorParams.lift, 0) || moved(colorParams.gamma, 0) || moved(colorParams.gain, 1));
-}
-
-/**
  * Lum Mix value to write, or undefined to leave Resolve's default.
  *
  * Render-measured on Studio 21.0.4.5 (2026-10-19, 30p grey-128 clip): under the default Lum Mix
  * (UI 100, stored 1.0) the lift/gamma/gain R/G/B channels are luminance-preserving, so gain
  * R=G=B=1.6 rendered unchanged (127.59) and gain 1.6/1.0/0.7 rendered 190.5/114.1/76.0 (luma
  * held). With Lum Mix 0 the same values render as per-channel multipliers (204.1 and
- * 204.2/127.7/89.7), which is what Resolve itself writes for SetCDL. Masters (0x06000020 etc.)
- * and offset render the same either way. So per-channel moves default to Lum Mix 0; pass
- * lumMixSlider (stored units) to keep Resolve's luminance-preserving behaviour.
+ * 204.2/127.7/89.7), which is what Resolve itself writes for SetCDL. Masters and offset render
+ * the same either way.
+ *
+ * Opt-in: pass lumMixSlider (stored units; 0 is written, not dropped) for per-channel R/G/B
+ * moves. Defaulting every R/G/B move to Lum Mix 0 is NOT done: it would change the render of
+ * every existing caller and has only been measured on Studio 21.0.4.5.
  */
 function resolveLumMix(colorParams) {
-  if (typeof colorParams.lumMixSlider === 'number' && Number.isFinite(colorParams.lumMixSlider)) {
-    return colorParams.lumMixSlider;
-  }
-  return hasRgbWheelMove(colorParams) ? 0 : undefined;
+  return typeof colorParams.lumMixSlider === 'number' && Number.isFinite(colorParams.lumMixSlider)
+    ? colorParams.lumMixSlider : undefined;
 }
 
 /**
@@ -1193,7 +1185,7 @@ function buildPrimaryCorrectorParams(colorParams) {
   }
 
   // Lum Mix slider (0x8600000B, stored 0.0–1.0 = UI 0–100; Resolve's default is 1.0).
-  // See resolveLumMix: R/G/B wheel moves get Lum Mix 0 unless the caller sets it.
+  // See resolveLumMix: written only when the caller sets lumMixSlider.
   const lumMix = resolveLumMix(colorParams);
   if (lumMix !== undefined) {
     debugLog('[DRX] Adding lumMixSlider:', lumMix);
@@ -2281,7 +2273,7 @@ function parseAdjustments(adjustments) {
     // Highlights/Shadows sliders — direct values
     if (adjustments.highlights !== undefined) params.highlights = adjustments.highlights;
     if (adjustments.shadows !== undefined) params.shadows = adjustments.shadows;
-    // Lum Mix — 0-1 stored (UI 0-100 / 100); see resolveLumMix for the default
+    // Lum Mix — 0-1 stored (UI 0-100 / 100); see resolveLumMix
     if (adjustments.lumMixSlider !== undefined) params.lumMixSlider = adjustments.lumMixSlider;
     // Custom Curves
     if (adjustments.customCurves) params.customCurves = adjustments.customCurves;
@@ -2342,16 +2334,20 @@ function parseAdjustments(adjustments) {
     params.gain.master += e;
   }
 
-  // Apply shadow lift - only if per-channel lift not specified.
-  // Master, not equal R/G/B: under Resolve's default Lum Mix equal R/G/B moves cancel on luma
-  // (render-measured 2026-10-19, see resolveLumMix).
+  // Apply shadow lift - only if per-channel lift not specified
   if (adjustments.shadowLift && !hasPerChannelLift(adjustments)) {
-    params.lift.master += adjustments.shadowLift * 0.1;
+    const s = adjustments.shadowLift;
+    params.lift.r += s * 0.1;
+    params.lift.g += s * 0.1;
+    params.lift.b += s * 0.1;
   }
 
-  // Apply highlight compression - only if per-channel gain not specified (master, as above)
+  // Apply highlight compression - only if per-channel gain not specified
   if (adjustments.highlightCompression && !hasPerChannelGain(adjustments)) {
-    params.gain.master -= adjustments.highlightCompression * 0.1;
+    const h = adjustments.highlightCompression;
+    params.gain.r -= h * 0.1;
+    params.gain.g -= h * 0.1;
+    params.gain.b -= h * 0.1;
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -3553,13 +3549,19 @@ function parseAdjustmentsToNodes(adjustments, options = {}) {
     // Offset from unity (1.0): positive = more contrast, negative = less
     const contrastAmount = (c - 1.0) * 0.15; // Scale for subtlety
 
-    // Lower lift and raise gain on the masters. This node used to also push equal R/G/B
-    // amounts, which Resolve's default Lum Mix cancels on luma (render-measured 2026-10-19,
-    // see resolveLumMix), so the masters now carry the whole amount.
-    params.lift.master = -contrastAmount * 1.5;
-    params.gain.master = 1.0 + (contrastAmount * 1.5);
+    // Adjust lift (shadows) - lower for more contrast
+    params.lift.r = -contrastAmount;
+    params.lift.g = -contrastAmount;
+    params.lift.b = -contrastAmount;
+    params.lift.master = -contrastAmount * 0.5;
 
-    debugLog('[DRX] Contrast node: input=', c, '(offset from unity=', c - 1.0, ') lift.master=', params.lift.master, 'gain.master=', params.gain.master);
+    // Adjust gain (highlights) - raise for more contrast
+    params.gain.r = 1.0 + contrastAmount;
+    params.gain.g = 1.0 + contrastAmount;
+    params.gain.b = 1.0 + contrastAmount;
+    params.gain.master = 1.0 + (contrastAmount * 0.5);
+
+    debugLog('[DRX] Contrast node: input=', c, '(offset from unity=', c - 1.0, ') lift=', params.lift.r, 'gain=', params.gain.r);
 
     const direction = adjustments.contrast > 1.0 ? 'More' : 'Less';
     nodes.push({
