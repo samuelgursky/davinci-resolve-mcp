@@ -2,6 +2,18 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.19.2 — Media analysis says whether CLAP audio embedding actually works
+
+### Added
+
+- **`audio.verified` and `audio.last_error` in the embedding capabilities.** `audio.available` only means the packages import, which is how #343 reported `clap_audio` as available while no embedding call had ever succeeded. `verified` is true once an embedding call has succeeded in this process. `last_error` is the most recent failure of one, and the next success clears it.
+- **`probe_audio_backend()`** runs one real audio embedding (a second of silence) and one text embedding, and fills those two fields. It loads the model, so the first call may download it. Capability detection never runs it.
+
+### Not changed
+
+- `audio.available` keeps its import-level meaning.
+- Nothing calls the probe from a tool yet; it is a library function. Covered by mocked tests only: not run against a real model or a real transformers 5.x install. No Resolve behavior changed.
+
 ## What's New in v4.19.1 — CLAP audio embeddings work on transformers 5.x
 
 ### Fixed
