@@ -298,5 +298,47 @@ class AudioEmbeddingsTests(EmbeddingsBase):
             self.assertIn("install_guidance", result)
 
 
+class ClapTransformersCompatTests(unittest.TestCase):
+    """transformers 5.x renamed ``audios=`` to ``audio=`` and returns a
+    ``BaseModelOutputWithPooling`` from ``get_*_features`` (#343)."""
+
+    def test_embedding_tensor_passes_through_plain_tensor(self) -> None:
+        class Tensorish:
+            def norm(self) -> None: ...
+
+        value = Tensorish()
+        self.assertIs(embeddings._clap_embedding_tensor(value), value)
+
+    def test_embedding_tensor_unwraps_pooler_output(self) -> None:
+        class Output:
+            pooler_output = object()
+
+        out = Output()
+        self.assertIs(embeddings._clap_embedding_tensor(out), out.pooler_output)
+
+    def test_embedding_tensor_rejects_unknown_shape(self) -> None:
+        with self.assertRaises(TypeError):
+            embeddings._clap_embedding_tensor(object())
+
+    def test_process_audio_prefers_audio_keyword(self) -> None:
+        calls = []
+
+        def processor(**kwargs):
+            calls.append(sorted(kwargs))
+            return "ok"
+
+        self.assertEqual(embeddings._clap_process_audio(processor, [1]), "ok")
+        self.assertIn("audio", calls[0])
+        self.assertNotIn("audios", calls[0])
+
+    def test_process_audio_falls_back_to_audios_keyword(self) -> None:
+        def processor(**kwargs):
+            if "audio" in kwargs:
+                raise ValueError("unexpected keyword")
+            return kwargs["audios"]
+
+        self.assertEqual(embeddings._clap_process_audio(processor, [1]), [1])
+
+
 if __name__ == "__main__":
     unittest.main()

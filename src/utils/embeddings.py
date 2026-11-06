@@ -367,15 +367,39 @@ def _extract_audio_window(file_path: str, start_seconds: float, duration_seconds
     return samples if samples.size else None
 
 
+def _clap_embedding_tensor(output: Any) -> Any:
+    """Unwrap a ``get_*_features`` result to the embedding tensor.
+
+    transformers < 5 returns the tensor directly; 5.x returns a
+    ``BaseModelOutputWithPooling`` whose ``pooler_output`` is the embedding.
+    """
+    if hasattr(output, "norm"):
+        return output
+    pooled = getattr(output, "pooler_output", None)
+    if pooled is not None:
+        return pooled
+    raise TypeError(f"Unrecognised CLAP feature output: {type(output).__name__}")
+
+
+def _clap_process_audio(processor: Any, waveforms: List[Any]) -> Any:
+    """Call the CLAP processor with ``audio=`` (5.x), falling back to the
+    older ``audios=`` keyword."""
+    kwargs = {"sampling_rate": CLAP_SAMPLE_RATE, "return_tensors": "pt", "padding": True}
+    try:
+        return processor(audio=waveforms, **kwargs)
+    except (TypeError, ValueError):
+        return processor(audios=waveforms, **kwargs)
+
+
 def _clap_audio_vectors(waveforms: List[Any]) -> Tuple[List[List[float]], str]:
     backend, state = _clap_state()
     if backend == "transformers_clap":
         import torch
 
         model, processor = state
-        inputs = processor(audios=waveforms, sampling_rate=CLAP_SAMPLE_RATE, return_tensors="pt", padding=True)
+        inputs = _clap_process_audio(processor, waveforms)
         with torch.no_grad():
-            features = model.get_audio_features(**inputs)
+            features = _clap_embedding_tensor(model.get_audio_features(**inputs))
             features = features / features.norm(dim=-1, keepdim=True)
         return [[float(x) for x in row.tolist()] for row in features], f"transformers_clap:{CLAP_HF_MODEL}"
     import numpy as np
@@ -445,7 +469,7 @@ def embed_text_for_audio_query(text: str) -> Dict[str, Any]:
             model, processor = state
             inputs = processor(text=[str(text)], return_tensors="pt", padding=True)
             with torch.no_grad():
-                features = model.get_text_features(**inputs)
+                features = _clap_embedding_tensor(model.get_text_features(**inputs))
                 features = features / features.norm(dim=-1, keepdim=True)
             return {"success": True, "vector": [float(x) for x in features[0].tolist()],
                     "model": f"transformers_clap:{CLAP_HF_MODEL}"}
