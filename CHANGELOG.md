@@ -2,6 +2,17 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.19.1 — CLAP audio embeddings work on transformers 5.x
+
+### Fixed
+
+- **`media_analysis` CLAP audio embeddings on transformers 5.x** (#343, reported by @willturner-maker). The `transformers_clap` backend failed twice on 5.x: the processor rejected the old `audios=` keyword, and `get_audio_features` / `get_text_features` now return a `BaseModelOutputWithPooling` instead of a tensor, so the normalisation raised `AttributeError`. The processor is now called with `audio=` and falls back to `audios=` on older releases, and the embedding is read from `pooler_output` when the result is not a tensor. Both audio-window and text-query embedding take the same path.
+
+### Not changed
+
+- `capabilities()` still reports `clap_audio` available when `transformers` imports; it does not load the model to check it can produce embeddings.
+- Checked with fake processor and model objects for both return shapes. Not run against a real transformers 5.x install, and no Resolve behavior changed.
+
 ## What's New in v4.19.0 — Studio 21 speed ramps, keyframed grades and Magic Mask clicks (offline writers)
 
 @Reaperiguess measured three things the scripting API cannot do on Studio 21 and wrote offline writers for them, each checked by renders on Studio 21.0.4.5 (Windows) (#312).
