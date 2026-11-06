@@ -2,6 +2,17 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v4.19.3 — Timeline pin verifies the switch; audio-only media analyzes cleanly
+
+### Fixed
+
+- **A pinned timeline write can no longer land on the caller's timeline (#344).** The pin trusted the boolean `SetCurrentTimeline` returned, which can answer True and stay put. It now reads the current timeline back and returns `TIMELINE_PIN_FAILED` if the switch did not happen, restoring the caller's timeline first.
+- **`media_analysis analyze_file` on audio-only media (#345).** A file with audio and no video stream no longer fails the clip because the vision layer produced no frames. Vision is reported as `not_applicable`, so the clip registers and `build_embeddings(kinds=['audio'])` has a clip to target.
+
+### Not changed
+
+- Covered by mocked unit tests only: not run against a live Resolve or a real audio file. `probe_audio_backend()` still has no tool action.
+
 ## What's New in v4.19.2 — Media analysis says whether CLAP audio embedding actually works
 
 ### Added
