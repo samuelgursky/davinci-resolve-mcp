@@ -12,6 +12,10 @@ const INPUTS = {
   highlightRed: 'HighlightColorRed', highlightGreen: 'HighlightColorGreen', highlightBlue: 'HighlightColorBlue',
   outlineRed: 'HOutlineR', outlineGreen: 'HOutlineG', outlineBlue: 'HOutlineB',
   outlineEnabled: 'HOutline', thickness: 'HOutlineThickness',
+  // Element 4 is independent of HighlightStyle's elements 2/3/5 and shadow 8.
+  baseOutlineEnabled: 'Enabled4', baseOutlineShape: 'ElementShape4',
+  baseOutlineRed: 'Red4', baseOutlineGreen: 'Green4', baseOutlineBlue: 'Blue4',
+  baseOutlineThickness: 'Thickness4',
   // Shading element 8 on the bundled Word Highlight is a drop shadow (offset
   // plus softness), not a stroke on the unhighlighted words. HOutline remains
   // the spoken-word outline. The centred reference stores justification 3.
@@ -76,7 +80,7 @@ function literal(value) {
 function parseLiteral(value) {
   const s = value.trim();
   if (/^"(?:[^"\\]|\\.)*"$/.test(s)) return JSON.parse(s);
-  if (/^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i.test(s)) return Number(s);
+  if (/^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i.test(s) && Number.isFinite(Number(s))) return Number(s);
   const vector = /^\{\s*([^,]+),\s*([^,}]+),?\s*\}$/.exec(s);
   if (vector && [Number(vector[1]), Number(vector[2])].every(Number.isFinite)) return [Number(vector[1]), Number(vector[2])];
   throw new Error('input is not a supported literal');
@@ -86,6 +90,31 @@ function inputRange(text, name) {
   if (!matches.length) return null;
   if (matches.length !== 1) throw new Error(`ambiguous preset input ${name}`);
   return { ...table(text, new RegExp(`\\b${name}\\s*=\\s*Input\\s*\\{`, 'g')), keyStart: matches[0].index };
+}
+function literalInputs(text) {
+  const range = inputTable(text), inputs = text.slice(range.start, range.end);
+  const result = [];
+  const masked = mask(inputs);
+  let depth = 0, cursor = 0;
+  for (const match of masked.matchAll(/\b([A-Za-z_][A-Za-z0-9_]*)\s*=\s*Input\s*\{/g)) {
+    for (; cursor < match.index; cursor++) {
+      if (masked[cursor] === '{') depth++;
+      if (masked[cursor] === '}') depth--;
+    }
+    if (depth !== 0) continue;
+    const name = match[1], r = inputRange(inputs, name), body = inputs.slice(r.start, r.end);
+    const entry = { name, writable: false };
+    try {
+      if (!/^\s*Value\s*=/.test(body)) throw new Error('connected or nonliteral input');
+      entry.value = parseLiteral(body.replace(/^\s*Value\s*=\s*/, '').replace(/,\s*$/, ''));
+      // Caption text is generated from native word timing; never replace it.
+      if (name === 'StyledText') throw new Error('caption text is protected');
+      if (['Red1', 'Green1', 'Blue1', 'Alpha1', 'Type1'].includes(name)) throw new Error('use mapped text inputs to preserve fill-mode validation');
+      entry.writable = true;
+    } catch (error) { entry.reason = error.message; }
+    result.push(entry);
+  }
+  return result;
 }
 function decodePreset(blob) {
   const u = unpack(blob), values = {};
@@ -105,28 +134,39 @@ function decodePreset(blob) {
     if (!inputRange(inputs,'Type1')) values.textFillMode = 'solid';
   }
   return { templateId: u.templateId, inputs: values,
+    literalInputs: u.templateId.startsWith('Templates/Edit/Titles/Subtitles/') ? literalInputs(u.text) : [],
     parameterEditingSupported: u.templateId.startsWith('Templates/Edit/Titles/Subtitles/'),
     editableInputs: Object.keys(u.templateId === TEMPLATE ? INPUTS
       : u.templateId.startsWith('Templates/Edit/Titles/Subtitles/') ? COMMON_INPUTS : {}) };
 }
-function setPresetInputs(blob, changes) {
+function setPresetInputs(blob, changes, literalChanges = {}) {
   const u = unpack(blob);
   if (!u.templateId.startsWith('Templates/Edit/Titles/Subtitles/')) throw new Error('not a subtitle template');
   const mapping = u.templateId === TEMPLATE ? INPUTS : COMMON_INPUTS;
+  changes = { ...changes };
+  if (changes.baseOutlineEnabled === 1) changes.baseOutlineShape = 1;
   for (const key of Object.keys(changes)) if (!mapping[key]) throw new Error(`unknown or unsupported preset input ${key} for ${u.templateId}`);
+  const inventory = literalInputs(u.text);
+  for (const [name, value] of Object.entries(literalChanges)) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) throw new Error('invalid literal input identifier');
+    const entry = inventory.find(e => e.name === name);
+    if (!entry?.writable) throw new Error(`literal input ${name} is absent, connected, protected or nonliteral`);
+    if (Object.keys(changes).some(key => mapping[key] === name)) throw new Error(`duplicate mapped/literal input ${name}`);
+    if (typeof value !== typeof entry.value || Array.isArray(value) !== Array.isArray(entry.value)) throw new Error(`literal input ${name} type mismatch`);
+    literal(value); // Reject arbitrary objects, Lua, and nonfinite numbers.
+  }
   if ('textFillMode' in changes && changes.textFillMode !== 'solid') throw new Error('textFillMode only supports explicit solid fill');
   const current = decodePreset(blob).inputs;
   if (Object.keys(changes).some(key => ['textRed','textGreen','textBlue','textAlpha'].includes(key))
       && current.textFillMode !== 'solid' && changes.textFillMode !== 'solid') {
     throw new Error('Text fill is gradient/image/connected; RGB would be invisible. Supply textFillMode:"solid" explicitly to replace the fill mode');
   }
-  if (Object.entries(changes).every(([k, v]) => JSON.stringify(current[k]) === JSON.stringify(v))) return Buffer.from(blob);
+  if (!Object.keys(literalChanges).length && Object.entries(changes).every(([k, v]) => JSON.stringify(current[k]) === JSON.stringify(v))) return Buffer.from(blob);
   const range = inputTable(u.text);
   let inputs = u.text.slice(range.start, range.end);
-  for (const [key, value] of Object.entries(changes)) {
-    const name = mapping[key];
-    if (!name) throw new Error(`unknown preset input ${key}`);
-    const r = inputRange(inputs, name), replacement = `${name} = Input { Value = ${literal(key === 'textFillMode' ? 0 : value)}, }, `;
+  const writes = [...Object.entries(changes).map(([key, value]) => [mapping[key], key === 'textFillMode' ? 0 : value]), ...Object.entries(literalChanges)];
+  for (const [name, value] of writes) {
+    const r = inputRange(inputs, name), replacement = `${name} = Input { Value = ${literal(value)}, }, `;
     if (r) {
       const body = inputs.slice(r.start, r.end);
       if (!/^\s*Value\s*=/.test(body) || /\b(?:Expression|SourceOp|Source)\s*=/.test(mask(body))) {
@@ -151,6 +191,9 @@ function setPresetInputs(blob, changes) {
   const back = decodePreset(result);
   for (const [key, value] of Object.entries(changes)) {
     if (JSON.stringify(back.inputs[key]) !== JSON.stringify(value)) throw new Error(`preset readback mismatch: ${key}`);
+  }
+  for (const [name, value] of Object.entries(literalChanges)) {
+    if (JSON.stringify(back.literalInputs.find(e => e.name === name)?.value) !== JSON.stringify(value)) throw new Error(`literal preset readback mismatch: ${name}`);
   }
   return result;
 }

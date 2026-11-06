@@ -2,6 +2,18 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## Unreleased — Subtitle preset inputs (draft, not validated on Studio 21.1)
+
+### Added
+
+- `timeline_ai.list_subtitle_preset_inputs` discovers persisted Fusion inputs and identifies writable literals versus protected/connected controls.
+- `set_subtitle_preset` accepts opt-in `literal_inputs`, verifies requested values through native re-export, and retains the original timeline.
+- Word Highlight gains independent base-outline controls on shading element 4.
+
+### Not validated
+
+The new subtitle styling has not been visually validated on Resolve Studio 21.1. Native Text+ input names were probed on Studio 19.1.3.7 only. Per-word pop/scale and cue in/out transitions remain unsupported, so this does not close #295. Run `RESOLVE_VERIFY=1 venv/bin/python tests/live_subtitle_preset_validation.py` against a disposable Studio 21.1+ project before releasing.
+
 ## What's New in v4.19.3 — Timeline pin verifies the switch; audio-only media analyzes cleanly
 
 ### Fixed
