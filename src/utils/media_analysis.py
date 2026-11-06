@@ -2769,6 +2769,12 @@ def _ffprobe_summary(raw: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _is_audio_only(technical: Dict[str, Any]) -> bool:
+    """True when ffprobe found audio stream(s) and no video stream."""
+    summary = (technical or {}).get("summary") or {}
+    return not (summary.get("video") or []) and bool(summary.get("audio") or [])
+
+
 def _media_duration_seconds(record: Dict[str, Any], technical: Dict[str, Any]) -> Optional[float]:
     summary = technical.get("summary") or {}
     duration = ((summary.get("format") or {}).get("duration_seconds"))
@@ -5864,8 +5870,21 @@ async def execute_plan_async(
         transcript = _transcribe(source, artifacts, options, caps)
         vision = await _maybe_run_vision_analysis(record, motion, options, artifacts, caps, vision_runner)
         vision_pending = vision_is_pending_host_analysis(vision)
+        if (
+            vision_requested(options)
+            and not visual_analysis_completed(vision)
+            and _is_audio_only(technical)
+        ):
+            # No video stream means there is nothing to see: vision does not
+            # apply, so its non-completion is not a clip failure.
+            vision = {
+                "success": True,
+                "status": "not_applicable",
+                "reason": "Audio-only media has no video stream.",
+            }
         vision_failed = (
             vision_requested(options)
+            and vision.get("status") != "not_applicable"
             and not vision_pending
             and not visual_analysis_completed(vision)
         )
