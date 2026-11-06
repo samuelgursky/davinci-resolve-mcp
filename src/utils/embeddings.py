@@ -51,6 +51,10 @@ _EMBED_TIMEOUT_SECONDS = 120.0
 _ST_MODEL = None
 _CLIP_STATE: Optional[Tuple[Any, Any, Any]] = None  # (model, preprocess, torch)
 _CLAP_STATE: Optional[Tuple[str, Any]] = None  # (backend, state)
+# What this process has actually observed of the audio backend. ``available``
+# only means the packages import; these say whether an embedding call worked.
+_CLAP_VERIFIED = False
+_CLAP_LAST_ERROR: Optional[str] = None
 
 
 def _now() -> str:
@@ -189,6 +193,11 @@ def detect_embedding_capabilities() -> Dict[str, Any]:
             "backends": audio_backends,
             "model": CLAP_HF_MODEL if audio_backends else None,
             "ffmpeg": ffmpeg_available,
+            # ``available`` is import-level only. ``verified`` is True once an
+            # embedding call has succeeded in this process; ``last_error`` is
+            # the most recent failure of one (cleared by the next success).
+            "verified": _CLAP_VERIFIED,
+            "last_error": _CLAP_LAST_ERROR,
         },
         "install_guidance": guidance,
     }
@@ -367,15 +376,71 @@ def _extract_audio_window(file_path: str, start_seconds: float, duration_seconds
     return samples if samples.size else None
 
 
+def _clap_embedding_tensor(output: Any) -> Any:
+    """Unwrap a ``get_*_features`` result to the embedding tensor.
+
+    transformers < 5 returns the tensor directly; 5.x returns a
+    ``BaseModelOutputWithPooling`` whose ``pooler_output`` is the embedding.
+    """
+    if hasattr(output, "norm"):
+        return output
+    pooled = getattr(output, "pooler_output", None)
+    if pooled is not None:
+        return pooled
+    raise TypeError(f"Unrecognised CLAP feature output: {type(output).__name__}")
+
+
+def _clap_process_audio(processor: Any, waveforms: List[Any]) -> Any:
+    """Call the CLAP processor with ``audio=`` (5.x), falling back to the
+    older ``audios=`` keyword."""
+    kwargs = {"sampling_rate": CLAP_SAMPLE_RATE, "return_tensors": "pt", "padding": True}
+    try:
+        return processor(audio=waveforms, **kwargs)
+    except (TypeError, ValueError):
+        return processor(audios=waveforms, **kwargs)
+
+
+def _clap_record(error: Optional[BaseException]) -> None:
+    global _CLAP_VERIFIED, _CLAP_LAST_ERROR
+    if error is None:
+        _CLAP_VERIFIED, _CLAP_LAST_ERROR = True, None
+    else:
+        _CLAP_VERIFIED, _CLAP_LAST_ERROR = False, f"{type(error).__name__}: {error}"
+
+
+def probe_audio_backend() -> Dict[str, Any]:
+    """Run one real CLAP embedding on a second of silence.
+
+    Loads the model (the first call may download it), so it is never run by
+    ``detect_embedding_capabilities``. The outcome lands in that report's
+    ``audio.verified`` / ``audio.last_error``.
+    """
+    caps = detect_embedding_capabilities()["audio"]
+    if not caps["available"]:
+        return {"success": False, "error": "No audio-embedding backend available"}
+    try:
+        import numpy as np
+
+        vectors, model = _clap_audio_vectors([np.zeros(CLAP_SAMPLE_RATE, dtype=np.float32)])
+    except Exception as exc:  # noqa: BLE001
+        _clap_record(exc)
+        return {"success": False, "error": _CLAP_LAST_ERROR}
+    text = embed_text_for_audio_query("probe")  # records its own outcome
+    if not text.get("success"):
+        return {"success": False, "error": text.get("error")}
+    _clap_record(None)
+    return {"success": True, "model": model, "dimensions": len(vectors[0])}
+
+
 def _clap_audio_vectors(waveforms: List[Any]) -> Tuple[List[List[float]], str]:
     backend, state = _clap_state()
     if backend == "transformers_clap":
         import torch
 
         model, processor = state
-        inputs = processor(audios=waveforms, sampling_rate=CLAP_SAMPLE_RATE, return_tensors="pt", padding=True)
+        inputs = _clap_process_audio(processor, waveforms)
         with torch.no_grad():
-            features = model.get_audio_features(**inputs)
+            features = _clap_embedding_tensor(model.get_audio_features(**inputs))
             features = features / features.norm(dim=-1, keepdim=True)
         return [[float(x) for x in row.tolist()] for row in features], f"transformers_clap:{CLAP_HF_MODEL}"
     import numpy as np
@@ -419,7 +484,9 @@ def embed_audio_windows(file_path: str, windows: List[Tuple[float, float]]) -> D
     try:
         vectors, model = _clap_audio_vectors(waveforms)
     except Exception as exc:  # noqa: BLE001 — backend failures surface as data
+        _clap_record(exc)
         return {"success": False, "error": f"{type(exc).__name__}: {exc}"}
+    _clap_record(None)
     return {
         "success": True,
         "vectors": [vectors[slot] if slot is not None else None for slot in slots],
@@ -445,13 +512,16 @@ def embed_text_for_audio_query(text: str) -> Dict[str, Any]:
             model, processor = state
             inputs = processor(text=[str(text)], return_tensors="pt", padding=True)
             with torch.no_grad():
-                features = model.get_text_features(**inputs)
+                features = _clap_embedding_tensor(model.get_text_features(**inputs))
                 features = features / features.norm(dim=-1, keepdim=True)
+            _clap_record(None)
             return {"success": True, "vector": [float(x) for x in features[0].tolist()],
                     "model": f"transformers_clap:{CLAP_HF_MODEL}"}
         vectors = state.get_text_embedding([str(text), ""], use_tensor=False)
+        _clap_record(None)
         return {"success": True, "vector": [float(x) for x in vectors[0]], "model": "laion_clap:default"}
     except Exception as exc:  # noqa: BLE001
+        _clap_record(exc)
         return {"success": False, "error": f"{type(exc).__name__}: {exc}"}
 
 

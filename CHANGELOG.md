@@ -14,6 +14,40 @@ Release history for the DaVinci Resolve MCP Server. The latest release is summar
 
 The new subtitle styling has not been visually validated on Resolve Studio 21.1. Native Text+ input names were probed on Studio 19.1.3.7 only. Per-word pop/scale and cue in/out transitions remain unsupported, so this does not close #295. Run `RESOLVE_VERIFY=1 venv/bin/python tests/live_subtitle_preset_validation.py` against a disposable Studio 21.1+ project before releasing.
 
+## What's New in v4.19.3 — Timeline pin verifies the switch; audio-only media analyzes cleanly
+
+### Fixed
+
+- **A pinned timeline write can no longer land on the caller's timeline (#344).** The pin trusted the boolean `SetCurrentTimeline` returned, which can answer True and stay put. It now reads the current timeline back and returns `TIMELINE_PIN_FAILED` if the switch did not happen, restoring the caller's timeline first.
+- **`media_analysis analyze_file` on audio-only media (#345).** A file with audio and no video stream no longer fails the clip because the vision layer produced no frames. Vision is reported as `not_applicable`, so the clip registers and `build_embeddings(kinds=['audio'])` has a clip to target.
+
+### Not changed
+
+- Covered by mocked unit tests only: not run against a live Resolve or a real audio file. `probe_audio_backend()` still has no tool action.
+
+## What's New in v4.19.2 — Media analysis says whether CLAP audio embedding actually works
+
+### Added
+
+- **`audio.verified` and `audio.last_error` in the embedding capabilities.** `audio.available` only means the packages import, which is how #343 reported `clap_audio` as available while no embedding call had ever succeeded. `verified` is true once an embedding call has succeeded in this process. `last_error` is the most recent failure of one, and the next success clears it.
+- **`probe_audio_backend()`** runs one real audio embedding (a second of silence) and one text embedding, and fills those two fields. It loads the model, so the first call may download it. Capability detection never runs it.
+
+### Not changed
+
+- `audio.available` keeps its import-level meaning.
+- Nothing calls the probe from a tool yet; it is a library function. Covered by mocked tests only: not run against a real model or a real transformers 5.x install. No Resolve behavior changed.
+
+## What's New in v4.19.1 — CLAP audio embeddings work on transformers 5.x
+
+### Fixed
+
+- **`media_analysis` CLAP audio embeddings on transformers 5.x** (#343, reported by @willturner-maker). The `transformers_clap` backend failed twice on 5.x: the processor rejected the old `audios=` keyword, and `get_audio_features` / `get_text_features` now return a `BaseModelOutputWithPooling` instead of a tensor, so the normalisation raised `AttributeError`. The processor is now called with `audio=` and falls back to `audios=` on older releases, and the embedding is read from `pooler_output` when the result is not a tensor. Both audio-window and text-query embedding take the same path.
+
+### Not changed
+
+- `capabilities()` still reports `clap_audio` available when `transformers` imports; it does not load the model to check it can produce embeddings.
+- Checked with fake processor and model objects for both return shapes. Not run against a real transformers 5.x install, and no Resolve behavior changed.
+
 ## What's New in v4.19.0 — Studio 21 speed ramps, keyframed grades and Magic Mask clicks (offline writers)
 
 @Reaperiguess measured three things the scripting API cannot do on Studio 21 and wrote offline writers for them, each checked by renders on Studio 21.0.4.5 (Windows) (#312).

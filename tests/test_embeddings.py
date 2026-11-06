@@ -298,5 +298,99 @@ class AudioEmbeddingsTests(EmbeddingsBase):
             self.assertIn("install_guidance", result)
 
 
+class ClapTransformersCompatTests(unittest.TestCase):
+    """transformers 5.x renamed ``audios=`` to ``audio=`` and returns a
+    ``BaseModelOutputWithPooling`` from ``get_*_features`` (#343)."""
+
+    def test_embedding_tensor_passes_through_plain_tensor(self) -> None:
+        class Tensorish:
+            def norm(self) -> None: ...
+
+        value = Tensorish()
+        self.assertIs(embeddings._clap_embedding_tensor(value), value)
+
+    def test_embedding_tensor_unwraps_pooler_output(self) -> None:
+        class Output:
+            pooler_output = object()
+
+        out = Output()
+        self.assertIs(embeddings._clap_embedding_tensor(out), out.pooler_output)
+
+    def test_embedding_tensor_rejects_unknown_shape(self) -> None:
+        with self.assertRaises(TypeError):
+            embeddings._clap_embedding_tensor(object())
+
+    def test_process_audio_prefers_audio_keyword(self) -> None:
+        calls = []
+
+        def processor(**kwargs):
+            calls.append(sorted(kwargs))
+            return "ok"
+
+        self.assertEqual(embeddings._clap_process_audio(processor, [1]), "ok")
+        self.assertIn("audio", calls[0])
+        self.assertNotIn("audios", calls[0])
+
+    def test_process_audio_falls_back_to_audios_keyword(self) -> None:
+        def processor(**kwargs):
+            if "audio" in kwargs:
+                raise ValueError("unexpected keyword")
+            return kwargs["audios"]
+
+        self.assertEqual(embeddings._clap_process_audio(processor, [1]), [1])
+
+
+class ClapObservedStateTests(unittest.TestCase):
+    """``available`` is import-level; ``verified`` / ``last_error`` report what
+    an embedding call actually did (#343)."""
+
+    def setUp(self) -> None:
+        embeddings._CLAP_VERIFIED, embeddings._CLAP_LAST_ERROR = False, None
+        self.addCleanup(setattr, embeddings, "_CLAP_VERIFIED", False)
+        self.addCleanup(setattr, embeddings, "_CLAP_LAST_ERROR", None)
+        self.available = {"audio": {"available": True, "backends": ["transformers_clap"],
+                                    "model": "fake", "ffmpeg": True}, "install_guidance": {}}
+
+    def test_capabilities_start_unverified_without_an_error(self) -> None:
+        audio = embeddings.detect_embedding_capabilities()["audio"]
+        self.assertFalse(audio["verified"])
+        self.assertIsNone(audio["last_error"])
+
+    def test_a_failed_call_is_reported_then_cleared_by_a_success(self) -> None:
+        embeddings._clap_record(ValueError("boom"))
+        audio = embeddings.detect_embedding_capabilities()["audio"]
+        self.assertFalse(audio["verified"])
+        self.assertEqual(audio["last_error"], "ValueError: boom")
+        embeddings._clap_record(None)
+        audio = embeddings.detect_embedding_capabilities()["audio"]
+        self.assertTrue(audio["verified"])
+        self.assertIsNone(audio["last_error"])
+
+    def test_probe_reports_a_backend_that_imports_but_cannot_embed(self) -> None:
+        with mock.patch.object(embeddings, "detect_embedding_capabilities", return_value=self.available), \
+             mock.patch.object(embeddings, "_clap_audio_vectors", side_effect=AttributeError("no norm")):
+            result = embeddings.probe_audio_backend()
+        self.assertFalse(result["success"])
+        self.assertIn("AttributeError: no norm", result["error"])
+        self.assertEqual(embeddings._CLAP_LAST_ERROR, "AttributeError: no norm")
+
+    def test_probe_verifies_audio_and_text_paths(self) -> None:
+        with mock.patch.object(embeddings, "detect_embedding_capabilities", return_value=self.available), \
+             mock.patch.object(embeddings, "_clap_audio_vectors", return_value=([[0.1, 0.2]], "fake:clap")), \
+             mock.patch.object(embeddings, "embed_text_for_audio_query", return_value={"success": True}):
+            result = embeddings.probe_audio_backend()
+        self.assertEqual(result, {"success": True, "model": "fake:clap", "dimensions": 2})
+        self.assertTrue(embeddings._CLAP_VERIFIED)
+
+    def test_probe_fails_when_the_text_path_fails(self) -> None:
+        with mock.patch.object(embeddings, "detect_embedding_capabilities", return_value=self.available), \
+             mock.patch.object(embeddings, "_clap_audio_vectors", return_value=([[0.1]], "fake:clap")), \
+             mock.patch.object(embeddings, "embed_text_for_audio_query",
+                               return_value={"success": False, "error": "text broke"}):
+            result = embeddings.probe_audio_backend()
+        self.assertEqual(result, {"success": False, "error": "text broke"})
+        self.assertFalse(embeddings._CLAP_VERIFIED)
+
+
 if __name__ == "__main__":
     unittest.main()

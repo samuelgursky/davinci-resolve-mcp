@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 377-tool granular server instead
 """
 
-VERSION = "4.19.0"
+VERSION = "4.19.3"
 
 import base64
 import os
@@ -1897,7 +1897,18 @@ class _CallScope:
         if current is not None and current.GetUniqueId() == target.GetUniqueId():
             self.pin = (proj, None, target)
             return None
-        if not proj.SetCurrentTimeline(target):
+        switched = proj.SetCurrentTimeline(target)
+        # Verified by readback: SetCurrentTimeline can answer True and stay
+        # put, which would land a "pinned" write on the caller's timeline.
+        after = proj.GetCurrentTimeline() if switched else None
+        if not switched or after is None or after.GetUniqueId() != target.GetUniqueId():
+            if switched and current is not None:
+                # Restore state the call may have half-changed.
+                try:
+                    if not proj.SetCurrentTimeline(current):
+                        logger.warning("Could not restore the current timeline after a failed pin")
+                except Exception:
+                    logger.warning("Could not restore the current timeline after a failed pin")
             return _err(
                 f"Could not make timeline {target.GetName()!r} current to act on it",
                 code="TIMELINE_PIN_FAILED", category="resolve_api_failed",
