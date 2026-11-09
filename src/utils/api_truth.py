@@ -1830,18 +1830,21 @@ API_TRUTH: List[Dict[str, Any]] = [
                    "AddToPhotoAlbum returned None and the album stayed at 0 "
                    "photos across three argument forms. CreatePhotoAlbumFromPhotos "
                    "returned an album with 2 photos in the same session and the "
-                   "same project. On Studio 19.1.3.7 "
+                   "same project. On Studio 21.2.0.6 (Windows) the reporter "
+                   "measured the same result: None, the album at 0 photos, and "
+                   "CreatePhotoAlbumFromPhotos placing one photo in the same "
+                   "session and project. On Studio 19.1.3.7 "
                    "(2026-11-01, dir() of the open project's MediaPool), "
                    "AddToPhotoAlbum, CreateEmptyPhotoAlbum, "
                    "CreatePhotoAlbumFromPhotos, and GetCurrentPhotoAlbum are "
                    "absent.",
-        "recommended": "On 21.1.2, count the album's photos before and after "
-                       "and treat an unchanged count as failure. On 19.1.3.7 "
-                       "the methods are not there; do not call them.",
+        "recommended": "On 21.1.2 and 21.2.0, count the album's photos before "
+                       "and after and treat an unchanged count as failure. On "
+                       "19.1.3.7 the methods are not there; do not call them.",
         "tags": ["silent-failure", "media-pool", "missing-method"],
         "submit": "bug",
         "issue": 336,
-        "verified_on": "dir() on Studio 19.1.3.7; the None result is the reporter's re-measurement on 21.1.2.10 and was not re-measured here",
+        "verified_on": "dir() on Studio 19.1.3.7; the None result is the reporter's measurement on 21.1.2.10 and 21.2.0.6 (Windows) and was not re-measured here",
     },
     {
         "symbol": "Timeline.ExportFrame",
@@ -1868,72 +1871,87 @@ API_TRUTH: List[Dict[str, Any]] = [
         "symbol": "TimelineItem.SetPosition / Timeline.MoveItems",
         "object": "TimelineItem / Timeline",
         "signature": "SetPosition(...) -> bool; MoveItems(...) -> bool",
-        "reality": "On Studio 21.1.2.10 (Windows), re-measured by the reporter, "
-                   "TimelineItem.SetPosition returned False for 0, 100, and "
-                   "-50, and the clip start was unchanged. Timeline.MoveItems "
-                   "was not callable. The first report had both methods "
-                   "returning False across ints, floats, a no-op start, both "
-                   "moveLinkedItems values, and with or without "
-                   "subframePrecision, while Timeline.SetCurrentTimecode "
-                   "succeeded in that session. This server does not call "
-                   "either method. Not re-measured here.",
-        "recommended": "Do not treat False from SetPosition as a bad argument. "
-                       "On 21.1.2.10 it returned False for every input tried, "
-                       "and MoveItems was not callable. Move the clip in the "
-                       "Edit page.",
-        "tags": ["unreliable-return", "timeline", "edit"],
-        "submit": "bug",
+        "reality": "WITHDRAWN. Re-measured by the reporter on Studio 21.2.0.6 "
+                   "(Windows) on a timeline at StartFrame 86400 and EndFrame "
+                   "86640, with two clips read back at 86400 and 86600: "
+                   "TimelineItem.SetPosition returned True and the clip moved "
+                   "from 86400 to 86800, and Timeline.MoveItems returned True "
+                   "and moved it to 87000. GetPosition() and GetStart() agreed "
+                   "both times. The earlier reading was on Studio 21.1.2.10: "
+                   "SetPosition returned False for 0, 100, and -50, and "
+                   "MoveItems was not callable. The first report on that build "
+                   "was measured on a timeline whose clips sat before "
+                   "StartFrame 86400, so StartFrame and EndFrame were both "
+                   "86400. No reported input on 21.1.2.10 was at or after "
+                   "frame 86400, so that build's answer to one is not known. "
+                   "This server does not call either method. Not re-measured "
+                   "here.",
+        "recommended": "Pass a target at or after GetStartFrame() and read "
+                       "GetStart() back. False for a frame below StartFrame is "
+                       "not evidence the method is broken. See the recordFrame "
+                       "entry for the placement that built the first timeline.",
+        "tags": ["timeline", "edit"],
         "issue": 336,
-        "verified_on": "Reported on DaVinci Resolve Studio 21.1.2.10 (Windows); not re-measured here",
+        "verified_on": "Withdrawn on the reporter's re-measurement, Studio 21.2.0.6 (Windows); the 21.1.2.10 result was not repeated on a consistent timeline, and nothing was re-measured here",
     },
     {
         "symbol": "TimelineItem.SetLeftOffset",
         "object": "TimelineItem",
         "signature": "(offset, ...) -> bool",
-        "reality": "On Studio 21.1.2.10 (Windows), SetLeftOffset(5.0, False, "
-                   "True) on a clip at frame 400 with duration 120 returned "
-                   "True, moved the start to about -86000, and grew the "
-                   "duration to about 86515. Setting the offset back to 0 "
-                   "left the clip at about -86000. The call extends the clip "
-                   "from source media. It does not nudge the edit point, and "
-                   "the edit does not come back. The clip was at frame 400 on "
-                   "a timeline whose StartFrame was 86400, so it sat outside "
-                   "the timeline's declared range; the reporter did not re-run "
-                   "it, because the first call was destructive, and the entry "
-                   "stands as that readback. A live gap probe on an older "
-                   "build recorded SetLeftOffset as absent. This server only "
-                   "reads GetLeftOffset. Not re-measured here.",
-        "recommended": "Do not call SetLeftOffset to trim a handle. There is "
-                       "no API undo. Any future wrapper has to say that the "
-                       "call extends from source media and require an explicit "
-                       "confirm before it runs.",
-        "tags": ["silent-failure", "timeline", "edit", "destructive"],
-        "submit": "bug",
+        "reality": "SetLeftOffset moves the clip's start on the timeline and "
+                   "changes its source range. It is not a handle nudge that "
+                   "leaves the edit point in place. Measured by the reporter "
+                   "on Studio 21.2.0.6 (Windows), on a timeline at StartFrame "
+                   "86400: a clip at 86400 with source range 10-50 went to "
+                   "start 86395 and source start 5 on SetLeftOffset(5.0), and "
+                   "to start 86390 and source start 0 on SetLeftOffset(0.0). "
+                   "Both returned True. SetLeftOffset(-5.0) returned False. "
+                   "Both accepted calls left the clip's start below the "
+                   "timeline's StartFrame. The first report, on Studio "
+                   "21.1.2.10, had SetLeftOffset(5.0, False, True) moving a "
+                   "clip from frame 400 to about -86000 and growing it to "
+                   "about 86515 frames, with offset 0 not restoring it. That "
+                   "clip sat outside the timeline's declared range (frame 400, "
+                   "StartFrame 86400), and the result did not reproduce on a "
+                   "consistent timeline, so the call is not recorded as "
+                   "destructive. A live gap probe on an older build recorded "
+                   "SetLeftOffset as absent. This server only reads "
+                   "GetLeftOffset. Not re-measured here.",
+        "recommended": "Expect SetLeftOffset to move the clip's start as well "
+                       "as its source in point, and read GetStart() and "
+                       "GetLeftOffset() back. Check the new start against "
+                       "GetStartFrame(): the call returned True for a start "
+                       "below it. See the recordFrame entry for what a clip "
+                       "outside the timeline's range does to later calls.",
+        "tags": ["timeline", "edit", "trim"],
         "issue": 336,
-        "verified_on": "Reported on DaVinci Resolve Studio 21.1.2.10 (Windows); not re-measured here",
+        "verified_on": "Narrowed on the reporter's re-measurement, Studio 21.2.0.6 (Windows); not re-measured here",
     },
     {
         "symbol": "TimelineItem.AddMarker at relative frame 0",
         "object": "TimelineItem",
         "signature": "(frameId, color, name, note, duration, customData) -> bool",
-        "reality": "On Studio 21.1.2.10 (Windows), re-measured by the reporter "
-                   "with StartFrame 86400: Timeline.AddMarker(0) and "
-                   "Timeline.AddMarker(200) both returned True and the marker "
-                   "was present. TimelineItem.AddMarker(0) on the clip sitting "
-                   "at that StartFrame returned True and wrote nothing "
-                   "(GetMarkers count unchanged, the marker name absent). Same "
-                   "family as issue #34. The first filing recorded "
-                   "Timeline.AddMarker(0) returning False; that was the wrong "
-                   "object. This server already reports success false when "
-                   "AddMarker returns false. Not re-measured here.",
-        "recommended": "Read the marker back with GetMarkers. True from "
-                       "TimelineItem.AddMarker at relative frame 0 is not "
-                       "evidence the marker exists. Timeline.AddMarker at "
-                       "relative 0 did write the marker on this build.",
-        "tags": ["silent-failure", "timeline", "marker"],
-        "submit": "bug",
+        "reality": "WITHDRAWN. Re-measured by the reporter on Studio 21.2.0.6 "
+                   "(Windows), on a timeline at StartFrame 86400 and EndFrame "
+                   "86640: TimelineItem.AddMarker(0) on the clip sitting at "
+                   "StartFrame returned True, and TimelineItem.GetMarkers() "
+                   "showed the marker at key 0. A second marker at frame 5 "
+                   "landed as well. The earlier reading, on Studio 21.1.2.10, "
+                   "had the same call returning True with the marker absent; "
+                   "that readback was Timeline.GetMarkers(), and the 21.2.0.6 "
+                   "readback was TimelineItem.GetMarkers(). On 21.1.2.10 "
+                   "Timeline.AddMarker(0) and Timeline.AddMarker(200) both "
+                   "returned True and the marker was present. The first filing "
+                   "recorded Timeline.AddMarker(0) returning False; that was "
+                   "the wrong object. This server already reports success "
+                   "false when AddMarker returns false. Not re-measured here.",
+        "recommended": "Read a clip marker back with TimelineItem.GetMarkers(), "
+                       "and a timeline marker with Timeline.GetMarkers(). On "
+                       "21.2.0.6 a clip marker at relative frame 0 was written "
+                       "and read back.",
+        "tags": ["timeline", "marker"],
         "issue": 336,
-        "verified_on": "Reported on DaVinci Resolve Studio 21.1.2.10 (Windows); not re-measured here",
+        "verified_on": "Withdrawn on the reporter's re-measurement, Studio 21.2.0.6 (Windows); not re-measured here",
     },
     {
         "symbol": "Media Pool folder rename",

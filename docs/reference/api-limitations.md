@@ -12,7 +12,7 @@ that none exists).
 
 **Verified on:** DaVinci Resolve Studio 21.0.2
 
-**Totals:** 43 missing capabilities, 66 bugs / unreliable behaviors.
+**Totals:** 43 missing capabilities, 63 bugs / unreliable behaviors.
 
 The authoritative source is the runtime-queryable `api_truth` ledger
 (`resolve_control api_truth "<query>"`); this document is generated from
@@ -586,37 +586,10 @@ values, or automation-hostile modal prompts.
 
 - **Object:** `MediaPool`
 - **Signature:** `(clips) -> [MediaPoolItem]`
-- **Behavior:** On Studio 21.1.2.10 (Windows), re-measured by the reporter, AddToPhotoAlbum returned None and the album stayed at 0 photos across three argument forms. CreatePhotoAlbumFromPhotos returned an album with 2 photos in the same session and the same project. On Studio 19.1.3.7 (2026-11-01, dir() of the open project's MediaPool), AddToPhotoAlbum, CreateEmptyPhotoAlbum, CreatePhotoAlbumFromPhotos, and GetCurrentPhotoAlbum are absent.
-- **Workaround / current handling:** On 21.1.2, count the album's photos before and after and treat an unchanged count as failure. On 19.1.3.7 the methods are not there; do not call them.
+- **Behavior:** On Studio 21.1.2.10 (Windows), re-measured by the reporter, AddToPhotoAlbum returned None and the album stayed at 0 photos across three argument forms. CreatePhotoAlbumFromPhotos returned an album with 2 photos in the same session and the same project. On Studio 21.2.0.6 (Windows) the reporter measured the same result: None, the album at 0 photos, and CreatePhotoAlbumFromPhotos placing one photo in the same session and project. On Studio 19.1.3.7 (2026-11-01, dir() of the open project's MediaPool), AddToPhotoAlbum, CreateEmptyPhotoAlbum, CreatePhotoAlbumFromPhotos, and GetCurrentPhotoAlbum are absent.
+- **Workaround / current handling:** On 21.1.2 and 21.2.0, count the album's photos before and after and treat an unchanged count as failure. On 19.1.3.7 the methods are not there; do not call them.
 - **Reference:** [issue #336](https://github.com/samuelgursky/davinci-resolve-mcp/issues/336)
 - **Tags:** silent-failure, media-pool, missing-method
-
-### TimelineItem.SetPosition / Timeline.MoveItems
-
-- **Object:** `TimelineItem / Timeline`
-- **Signature:** `SetPosition(...) -> bool; MoveItems(...) -> bool`
-- **Behavior:** On Studio 21.1.2.10 (Windows), re-measured by the reporter, TimelineItem.SetPosition returned False for 0, 100, and -50, and the clip start was unchanged. Timeline.MoveItems was not callable. The first report had both methods returning False across ints, floats, a no-op start, both moveLinkedItems values, and with or without subframePrecision, while Timeline.SetCurrentTimecode succeeded in that session. This server does not call either method. Not re-measured here.
-- **Workaround / current handling:** Do not treat False from SetPosition as a bad argument. On 21.1.2.10 it returned False for every input tried, and MoveItems was not callable. Move the clip in the Edit page.
-- **Reference:** [issue #336](https://github.com/samuelgursky/davinci-resolve-mcp/issues/336)
-- **Tags:** unreliable-return, timeline, edit
-
-### TimelineItem.SetLeftOffset
-
-- **Object:** `TimelineItem`
-- **Signature:** `(offset, ...) -> bool`
-- **Behavior:** On Studio 21.1.2.10 (Windows), SetLeftOffset(5.0, False, True) on a clip at frame 400 with duration 120 returned True, moved the start to about -86000, and grew the duration to about 86515. Setting the offset back to 0 left the clip at about -86000. The call extends the clip from source media. It does not nudge the edit point, and the edit does not come back. The clip was at frame 400 on a timeline whose StartFrame was 86400, so it sat outside the timeline's declared range; the reporter did not re-run it, because the first call was destructive, and the entry stands as that readback. A live gap probe on an older build recorded SetLeftOffset as absent. This server only reads GetLeftOffset. Not re-measured here.
-- **Workaround / current handling:** Do not call SetLeftOffset to trim a handle. There is no API undo. Any future wrapper has to say that the call extends from source media and require an explicit confirm before it runs.
-- **Reference:** [issue #336](https://github.com/samuelgursky/davinci-resolve-mcp/issues/336)
-- **Tags:** silent-failure, timeline, edit, destructive
-
-### TimelineItem.AddMarker at relative frame 0
-
-- **Object:** `TimelineItem`
-- **Signature:** `(frameId, color, name, note, duration, customData) -> bool`
-- **Behavior:** On Studio 21.1.2.10 (Windows), re-measured by the reporter with StartFrame 86400: Timeline.AddMarker(0) and Timeline.AddMarker(200) both returned True and the marker was present. TimelineItem.AddMarker(0) on the clip sitting at that StartFrame returned True and wrote nothing (GetMarkers count unchanged, the marker name absent). Same family as issue #34. The first filing recorded Timeline.AddMarker(0) returning False; that was the wrong object. This server already reports success false when AddMarker returns false. Not re-measured here.
-- **Workaround / current handling:** Read the marker back with GetMarkers. True from TimelineItem.AddMarker at relative frame 0 is not evidence the marker exists. Timeline.AddMarker at relative 0 did write the marker on this build.
-- **Reference:** [issue #336](https://github.com/samuelgursky/davinci-resolve-mcp/issues/336)
-- **Tags:** silent-failure, timeline, marker
 
 ### hasattr() / getattr() on Resolve API objects (attribute fabrication)
 

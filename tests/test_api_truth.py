@@ -65,29 +65,44 @@ class LookupTest(unittest.TestCase):
         self.assertIn("GetEndFrame() - GetStartFrame()", entry["recommended"])
 
     def test_issue_336_corrections_are_recorded(self):
-        withdrawn = ("Timeline.DeleteGaps", "Timeline.ExportFrame")
+        # Four of the six calls first reported as broken worked once the
+        # reporter measured them on a timeline whose clips sat inside its own
+        # range. A withdrawn entry stays in the ledger, so a later reader of
+        # the issue finds the correction, but it leaves the Blackmagic report.
+        withdrawn = (
+            "Timeline.DeleteGaps",
+            "Timeline.ExportFrame",
+            "TimelineItem.SetPosition / Timeline.MoveItems",
+            "TimelineItem.AddMarker at relative frame 0",
+        )
         for symbol in withdrawn:
             entry = next(e for e in API_TRUTH if e["symbol"] == symbol)
             self.assertTrue(entry["reality"].startswith("WITHDRAWN"), symbol)
             self.assertNotIn("submit", entry)
+            self.assertNotIn("silent-failure", entry["tags"], symbol)
+            self.assertNotIn("unreliable-return", entry["tags"], symbol)
 
         album = next(e for e in API_TRUTH if e["symbol"] == "MediaPool.AddToPhotoAlbum")
         self.assertIn("returned None", album["reality"])
+        self.assertIn("21.2.0.6", album["reality"])
         self.assertEqual(album.get("submit"), "bug")
 
         position = next(
             e for e in API_TRUTH
             if e["symbol"] == "TimelineItem.SetPosition / Timeline.MoveItems"
         )
-        self.assertIn("not callable", position["reality"])
+        # The withdrawal rests on a different build from the first report, so
+        # the entry has to keep both readings and say what was never measured.
+        self.assertIn("21.2.0.6", position["reality"])
+        self.assertIn("21.1.2.10", position["reality"])
+        self.assertIn("not known", position["reality"])
 
         marker = next(
             e for e in API_TRUTH
             if e["symbol"] == "TimelineItem.AddMarker at relative frame 0"
         )
-        self.assertIn("Timeline.AddMarker(0)", marker["reality"])
-        self.assertIn("wrote nothing", marker["reality"])
-        self.assertEqual(marker.get("submit"), "bug")
+        self.assertIn("TimelineItem.GetMarkers()", marker["reality"])
+        self.assertIn("Timeline.GetMarkers()", marker["reality"])
         self.assertFalse(any(
             e["symbol"] == "Timeline.AddMarker at relative frame 0" for e in API_TRUTH
         ))
@@ -102,11 +117,16 @@ class LookupTest(unittest.TestCase):
             entry for entry in API_TRUTH
             if entry["symbol"] == "TimelineItem.SetLeftOffset"
         )
-        # The flag refuses a mapped action. Nothing calls SetLeftOffset, and
-        # the 21.1.2 result was not re-measured, so the fact stays in the
-        # ledger without a refusal that can never fire.
+        # The flag refuses a mapped action. Nothing calls SetLeftOffset, so
+        # the fact stays in the ledger without a refusal that can never fire.
         self.assertNotIn("destroys_prior_work", offset)
         self.assertIn("outside", offset["reality"])
+        # Narrowed, not withdrawn: the runaway extension came from the clip
+        # sitting outside the timeline's range, and did not reproduce.
+        self.assertFalse(offset["reality"].startswith("WITHDRAWN"))
+        self.assertIn("not recorded as destructive", offset["reality"])
+        self.assertNotIn("destructive", offset["tags"])
+        self.assertNotIn("submit", offset)
 
     def test_entries_well_formed(self):
         for e in API_TRUTH:
