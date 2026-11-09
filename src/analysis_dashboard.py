@@ -14785,17 +14785,30 @@ def _native_directory_picker(initial: Optional[str] = None) -> Dict[str, Any]:
     to expose a filesystem path.
     """
     initial_dir = initial if initial and os.path.isdir(initial) else os.path.expanduser("~")
+    # Absolute so a caller-supplied relative name can never start with "-".
+    initial_dir = os.path.abspath(initial_dir)
     if sys.platform == "darwin":
         # AppleScript picker — works without a Python Tk binding installed.
-        script = (
-            'tell application "System Events" to activate\n'
-            f'set chosenFolder to choose folder with prompt "Select a folder" default location POSIX file "{initial_dir}"\n'
-            'POSIX path of chosenFolder'
-        )
+        # The start directory comes from the HTTP request, so it is passed to
+        # the script's run handler as argv and never spliced into the script
+        # source: a directory name containing `"` would otherwise close the
+        # string literal and inject AppleScript (e.g. `do shell script`).
+        script_lines = [
+            "on run argv",
+            'tell application "System Events" to activate',
+            'set chosenFolder to choose folder with prompt "Select a folder" '
+            "default location (POSIX file (item 1 of argv))",
+            "return POSIX path of chosenFolder",
+            "end run",
+        ]
+        argv = ["osascript"]
+        for line in script_lines:
+            argv += ["-e", line]
+        argv += ["--", initial_dir]
         try:
             import subprocess
             proc = subprocess.run(
-                ["osascript", "-e", script],
+                argv,
                 stdin=subprocess.DEVNULL,
                 capture_output=True, text=True, encoding="utf-8", errors="replace",
                 timeout=120,
