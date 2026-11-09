@@ -14745,24 +14745,34 @@ def _launch_claude_code_terminal() -> Dict[str, Any]:
         iterm_running = (check.stdout or "").strip().lower() == "true"
     except Exception:
         iterm_running = False
+    # The command (repo path + claude binary) reaches the script as a run
+    # handler argument, never as interpolated AppleScript source, so a `"` or
+    # backslash in either path cannot break out of a string literal.
     if iterm_running:
-        script = (
-            'tell application "iTerm"\n'
-            '  activate\n'
-            f'  create window with default profile command "{cmd}"\n'
-            'end tell'
-        )
+        script_lines = [
+            "on run argv",
+            'tell application "iTerm"',
+            "activate",
+            "create window with default profile command (item 1 of argv)",
+            "end tell",
+            "end run",
+        ]
     else:
-        escaped = cmd.replace("\\", "\\\\").replace('"', '\\"')
-        script = (
-            'tell application "Terminal"\n'
-            '  activate\n'
-            f'  do script "{escaped}"\n'
-            'end tell'
-        )
+        script_lines = [
+            "on run argv",
+            'tell application "Terminal"',
+            "activate",
+            "do script (item 1 of argv)",
+            "end tell",
+            "end run",
+        ]
+    argv = ["osascript"]
+    for line in script_lines:
+        argv += ["-e", line]
+    argv += ["--", cmd]
     try:
         proc = subprocess.run(
-            ["osascript", "-e", script],
+            argv,
             stdin=subprocess.DEVNULL,
             capture_output=True, text=True, encoding="utf-8", errors="replace",
             timeout=15,
@@ -14785,17 +14795,30 @@ def _native_directory_picker(initial: Optional[str] = None) -> Dict[str, Any]:
     to expose a filesystem path.
     """
     initial_dir = initial if initial and os.path.isdir(initial) else os.path.expanduser("~")
+    # Absolute so a caller-supplied relative name can never start with "-".
+    initial_dir = os.path.abspath(initial_dir)
     if sys.platform == "darwin":
         # AppleScript picker — works without a Python Tk binding installed.
-        script = (
-            'tell application "System Events" to activate\n'
-            f'set chosenFolder to choose folder with prompt "Select a folder" default location POSIX file "{initial_dir}"\n'
-            'POSIX path of chosenFolder'
-        )
+        # The start directory comes from the HTTP request, so it is passed to
+        # the script's run handler as argv and never spliced into the script
+        # source: a directory name containing `"` would otherwise close the
+        # string literal and inject AppleScript (e.g. `do shell script`).
+        script_lines = [
+            "on run argv",
+            'tell application "System Events" to activate',
+            'set chosenFolder to choose folder with prompt "Select a folder" '
+            "default location (POSIX file (item 1 of argv))",
+            "return POSIX path of chosenFolder",
+            "end run",
+        ]
+        argv = ["osascript"]
+        for line in script_lines:
+            argv += ["-e", line]
+        argv += ["--", initial_dir]
         try:
             import subprocess
             proc = subprocess.run(
-                ["osascript", "-e", script],
+                argv,
                 stdin=subprocess.DEVNULL,
                 capture_output=True, text=True, encoding="utf-8", errors="replace",
                 timeout=120,
