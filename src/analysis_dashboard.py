@@ -14745,24 +14745,34 @@ def _launch_claude_code_terminal() -> Dict[str, Any]:
         iterm_running = (check.stdout or "").strip().lower() == "true"
     except Exception:
         iterm_running = False
+    # The command (repo path + claude binary) reaches the script as a run
+    # handler argument, never as interpolated AppleScript source, so a `"` or
+    # backslash in either path cannot break out of a string literal.
     if iterm_running:
-        script = (
-            'tell application "iTerm"\n'
-            '  activate\n'
-            f'  create window with default profile command "{cmd}"\n'
-            'end tell'
-        )
+        script_lines = [
+            "on run argv",
+            'tell application "iTerm"',
+            "activate",
+            "create window with default profile command (item 1 of argv)",
+            "end tell",
+            "end run",
+        ]
     else:
-        escaped = cmd.replace("\\", "\\\\").replace('"', '\\"')
-        script = (
-            'tell application "Terminal"\n'
-            '  activate\n'
-            f'  do script "{escaped}"\n'
-            'end tell'
-        )
+        script_lines = [
+            "on run argv",
+            'tell application "Terminal"',
+            "activate",
+            "do script (item 1 of argv)",
+            "end tell",
+            "end run",
+        ]
+    argv = ["osascript"]
+    for line in script_lines:
+        argv += ["-e", line]
+    argv += ["--", cmd]
     try:
         proc = subprocess.run(
-            ["osascript", "-e", script],
+            argv,
             stdin=subprocess.DEVNULL,
             capture_output=True, text=True, encoding="utf-8", errors="replace",
             timeout=15,
