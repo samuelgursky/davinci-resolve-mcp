@@ -937,11 +937,14 @@ Health check and declarative spec (v2.28.0+):
 - `diff_to_spec(spec_path | spec)` — preview drift between a declarative spec and
   the live project WITHOUT mutating. Returns `{actions, diff, change_count}`.
 - `plan_spec(spec_path | spec)` — the ordered action list as a dry run.
-- `apply_spec(spec_path | spec, dry_run?, run_hooks?, continue_on_error?)` —
+- `apply_spec(spec_path | spec, dry_run?, continue_on_error?)` —
   reconcile the project toward the spec. Idempotent (re-runs are no-ops); color/
   HDR settings apply in dependency order; markers added only when absent; explicit
-  `settings` override a named `color_preset`; before/after shell hooks run only
-  with `run_hooks=true`. The spec is YAML or JSON:
+  `settings` override a named `color_preset`. A spec's before/after `hooks` are
+  command lines, and the server does not run them: `run_hooks=true` is refused
+  with `SPEC_HOOKS_NOT_RUN`, and a successful apply lists the hooks it skipped in
+  `hooks_not_run`. Run them yourself, or have the user run
+  `davinci-resolve-mcp batch apply <spec> --run-hooks` in a terminal. The spec is YAML or JSON:
   `{project, color_preset?, settings?, timelines:[{name, fps?, settings?, markers?}], hooks?}`.
   Note: `apply_spec` reconciles the **currently open or already-existing** project;
   creating a brand-new project from a spec depends on Resolve's `CreateProject`

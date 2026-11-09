@@ -289,6 +289,12 @@ class RiskClassificationHook(LifecycleHook):
         # wrappers refuse those unless acknowledge_trap. See archive_guard.py.
         ("project_manager", "archive"),
         ("project_manager", "safe_project_archive"),
+        # Declarative project reconcile: creates the project, bins, timelines
+        # and markers the spec names, and changes project/timeline settings to
+        # match. Additive and idempotent (it never deletes), but it does alter
+        # existing settings. Spec hooks never run from an MCP call
+        # (GHSA-x2fm-g3cm-6x5w); a request for them is refused up front.
+        ("project_manager", "apply_spec"),
         # Script execution priority. App-wide, no getter on any build, and
         # before 21.1 it cannot be lowered again within the session; on 21.1
         # SetHighPriority(False) restores normal (reported, issue #207).

@@ -25,6 +25,7 @@ for (const m of ['log', 'info', 'debug']) {
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
+import { assertNoBinaryOverrides } from './spawn-guard.mjs';
 
 import { drpTool } from './tools/drp.mjs';
 import { drtTool } from './tools/drt.mjs';
@@ -75,6 +76,20 @@ const toError = (err) => ({
   content: [{ type: 'text', text: JSON.stringify({ error: err?.message || String(err) }, null, 2) }],
 });
 
+/**
+ * Run one tool call: the single path every MCP request takes into a handler.
+ * Exported so the trust boundary is testable without a stdio transport.
+ */
+export async function callTool(tool, { action, args }) {
+  try {
+    // The caller chooses data, never the program the server spawns.
+    assertNoBinaryOverrides(args || {});
+    return toContent(await tool.handler({ action, args: args || {} }));
+  } catch (err) {
+    return toError(err);
+  }
+}
+
 export async function startServer() {
   const server = new McpServer({ name: NAME, version: VERSION }, { capabilities: { tools: {} } });
 
@@ -88,13 +103,7 @@ export async function startServer() {
           args: z.object({}).passthrough().optional().describe('Action arguments'),
         },
       },
-      async ({ action, args }) => {
-        try {
-          return toContent(await tool.handler({ action, args: args || {} }));
-        } catch (err) {
-          return toError(err);
-        }
-      },
+      async ({ action, args }) => callTool(tool, { action, args }),
     );
   }
 

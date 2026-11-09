@@ -37,7 +37,8 @@ export function makeSamplers(opts = {}) {
   const DW = opts.decodeW || 1200;
   const DH = opts.decodeH || 720;
   const fps = opts.fps || 24;
-  const tmp = opts.tmpDir || fs.mkdtempSync(path.join(os.tmpdir(), 'qc-sample-'));
+  // Absolute, so the output path ffmpeg reads positionally can never start with '-'.
+  const tmp = path.resolve(opts.tmpDir || fs.mkdtempSync(path.join(os.tmpdir(), 'qc-sample-')));
   const mask = metrics.buildBurnInMask(DW, DH, opts.burnInRegions);
   let n = 0;
 

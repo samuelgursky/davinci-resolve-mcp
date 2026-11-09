@@ -32,6 +32,7 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 import { requireBetterSqlite3 } from './capabilities.mjs';
+import { binaryFromEnv } from './spawn-guard.mjs';
 
 const DISK_DB_ROOT = path.join(os.homedir(), 'Library/Application Support/Blackmagic Design/DaVinci Resolve/Resolve Disk Database/Resolve Projects');
 // Modern Studio installs keep the local library under "Resolve Project
@@ -333,8 +334,15 @@ async function pgSelectTimeline(client, { timelineId, timelineName }) {
 function pgBackup(pg) {
   if (pg && typeof pg.__backupFn === 'function') return pg.__backupFn();
   const cfg = pgConfig(pg);
-  const out = path.join(os.tmpdir(), `offline-ref-Sm2Timeline-backup-${cfg.database}.sql`);
-  const dump = pg.pgDumpPath || 'pg_dump';
+  // The database name is caller data, so it never shapes the path: it is
+  // reduced to a safe filename, and the file goes in a fresh private directory
+  // rather than a predictable name in a shared tmp (GHSA-h2fm-rcfg-jch9).
+  const safeName = String(cfg.database).replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 64) || 'database';
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'offline-ref-backup-'));
+  const out = path.join(dir, `Sm2Timeline-${safeName}.sql`);
+  // The operator picks pg_dump (PATH or RESOLVE_ADVANCED_PG_DUMP); a tool call
+  // cannot. postgres.pgDumpPath used to be accepted here and was spawned as given.
+  const dump = binaryFromEnv('RESOLVE_ADVANCED_PG_DUMP', 'pg_dump');
   const env = { ...process.env };
   if (cfg.password != null) env.PGPASSWORD = String(cfg.password);
   const r = require('node:child_process').spawnSync(
@@ -344,7 +352,7 @@ function pgBackup(pg) {
   );
   if (r.status !== 0) {
     throw new Error(
-      `pg_dump backup failed (refusing to write without a backup): ${(r.stderr || r.error?.message || 'unknown').toString().slice(-300)}. Pass postgres.pgDumpPath if pg_dump isn't on PATH.`,
+      `pg_dump backup failed (refusing to write without a backup): ${(r.stderr || r.error?.message || 'unknown').toString().slice(-300)}. If pg_dump isn't on PATH, set RESOLVE_ADVANCED_PG_DUMP to its absolute path in the server environment.`,
     );
   }
   return out;

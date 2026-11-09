@@ -49,7 +49,6 @@ const pgSchema = z
     password: z.string().optional().describe('NEVER hardcoded — pass it (Resolve default "DaVinci") or set PGPASSWORD'),
     database: z.string().optional().describe('Postgres database name (or DbName)'),
     DbName: z.string().optional().describe('Resolve DbName (alias for database)'),
-    pgDumpPath: z.string().optional().describe('Absolute path to pg_dump if not on PATH'),
   })
   .optional()
   .describe('Supply to target a PostgreSQL studio database instead of a SQLite disk DB');

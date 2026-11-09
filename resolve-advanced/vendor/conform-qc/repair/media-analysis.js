@@ -101,6 +101,10 @@ const FFPROBE_ARGS = [
 
 /** Probe one file via ffprobe. Returns the normalized record (ok:false on failure). */
 function probeMedia(path, { ffprobePath = 'ffprobe' } = {}) {
+  // ffprobe reads its input positionally: a path starting with '-' is an option.
+  if (typeof path !== 'string' || !path.length || path.startsWith('-')) {
+    return { path, ok: false, error: `refused: '${path}' would be read by ffprobe as an option; pass an absolute path` };
+  }
   const r = spawnSync(ffprobePath, [...FFPROBE_ARGS, path], { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
   if (r.status !== 0) return { path, ok: false, error: (r.stderr || 'ffprobe failed').slice(-200) };
   return parseFfprobe(r.stdout, path);

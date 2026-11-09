@@ -298,7 +298,10 @@ export const conformTool = {
       const { makeSamplers } = await import('../qc-sampler.mjs');
       const need = ['lineageDb', 'snapshotId', 'referenceMovie', 'seqW', 'seqH', 'hrW', 'hrH'];
       for (const k of need) if (a[k] == null) throw new Error(`conform.qc run needs ${k}`);
-      const s = makeSamplers(a);
+      // Never hand the raw tool arguments to a helper that spawns: makeSamplers
+      // reads opts.ffmpegPath as the program to run (GHSA-h2fm-rcfg-jch9).
+      const { ffmpegPath: _callerFfmpeg, ...samplerOpts } = a;
+      const s = makeSamplers(samplerOpts);
       // basic satisfiability: a sampled-null conform = source can't deliver → handled as turnover upstream
       const satisfiability = (cut) => {
         const src = (a.mediaMap && a.mediaMap[cut.source_basename]) || cut.source_path;

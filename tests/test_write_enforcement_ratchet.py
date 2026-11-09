@@ -141,7 +141,6 @@ UNRATED_WRITE_BACKLOG = frozenset({
     "media_storage.add_clip_mattes",
     "media_storage.add_timeline_mattes",
     "media_storage.import_to_pool",
-    "project_manager.apply_spec",
     "project_manager.create",
     "project_manager.import_project",
     "project_manager.load",

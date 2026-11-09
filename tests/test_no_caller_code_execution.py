@@ -66,6 +66,121 @@ class RemovedActionsTest(unittest.TestCase):
         dispatch.assert_not_called()
 
 
+_HOOK_SPEC = {
+    "project": "MCP_QA_spec_hooks",
+    "hooks": {"before": [{"name": "pre", "command": "bash -c 'touch /tmp/owned'"}],
+              "after": ["echo after"]},
+}
+
+
+class _FakeExecutor:
+    """Stands in for _SpecLiveExecutor: every write succeeds, nothing is live."""
+
+    def __init__(self, *_a, **_k):
+        pass
+
+    def live_state(self):
+        return {"project": "MCP_QA_spec_hooks", "settings": {}, "timelines": []}
+
+    def ensure_project(self, _name):
+        return True
+
+    def __getattr__(self, _name):
+        return lambda *a, **k: True
+
+
+class SpecHooksAreNotRunByTheServerTest(unittest.TestCase):
+    """GHSA-x2fm-g3cm-6x5w. `apply_spec` used to run each hook in the spec as a
+    command line when the same caller set `run_hooks: true`, and it was missing
+    from the destructive registry, so safe mode and the audit log never saw it.
+    A spec is caller data, so its hooks are caller-supplied code."""
+
+    def test_run_hooks_is_refused_before_the_spec_is_read_or_resolve_touched(self) -> None:
+        from src import server
+
+        pm = mock.Mock()
+        for flag in (True, "true", 1):
+            with self.subTest(run_hooks=flag), \
+                 mock.patch("subprocess.run") as run, \
+                 mock.patch.object(server, "_make_spec_hook_runner") as runner, \
+                 mock.patch.object(server, "_SpecLiveExecutor") as executor, \
+                 mock.patch.object(server._project_spec, "load_spec") as load:
+                result = server._spec_action(
+                    mock.Mock(), pm, "apply_spec",
+                    {"spec": _HOOK_SPEC, "spec_path": "/x/project.dvr.yaml", "run_hooks": flag},
+                )
+                self.assertFalse(result.get("success"), result)
+                self.assertEqual(result["error"]["code"], "SPEC_HOOKS_NOT_RUN", result)
+                self.assertIn("caller-supplied code", result["error"]["message"])
+                run.assert_not_called()
+                runner.assert_not_called()
+                executor.assert_not_called()
+                load.assert_not_called()
+        pm.assert_not_called()
+
+    def test_the_tool_entry_point_refuses_too(self) -> None:
+        """The decorated tool, not just the helper: this is the call an agent makes."""
+        from src import server
+
+        with mock.patch.object(server, "get_resolve", return_value=mock.Mock()), \
+             mock.patch("subprocess.run") as run, \
+             mock.patch.object(server, "_SpecLiveExecutor") as executor:
+            result = server.project_manager("apply_spec", {"spec": _HOOK_SPEC, "run_hooks": True})
+        self.assertIn("SPEC_HOOKS_NOT_RUN", json.dumps(result), result)
+        run.assert_not_called()
+        executor.assert_not_called()
+
+    def test_without_run_hooks_the_hooks_are_reported_not_run(self) -> None:
+        from src import server
+
+        with mock.patch("subprocess.run") as run, \
+             mock.patch.object(server, "_SpecLiveExecutor", _FakeExecutor):
+            result = server._spec_action(mock.Mock(), mock.Mock(), "apply_spec", {"spec": _HOOK_SPEC})
+        self.assertTrue(result.get("success"), result)
+        self.assertEqual([h["name"] or h["command"] for h in result["hooks_not_run"]], ["pre", "echo after"])
+        run.assert_not_called()
+
+    def test_the_terminal_cli_still_runs_hooks_it_was_told_to(self) -> None:
+        """`batch apply --run-hooks` is the person at the keyboard choosing a spec
+        file and typing the flag; that path keeps working."""
+        from src import batch_cli, server
+
+        ran = []
+        with mock.patch.object(server, "get_resolve", return_value=mock.Mock()), \
+             mock.patch.object(server, "_SpecLiveExecutor", _FakeExecutor), \
+             mock.patch.object(server, "_make_spec_hook_runner",
+                               return_value=lambda h: ran.append(h.command) or True), \
+             mock.patch.object(server._project_spec, "load_spec",
+                               return_value=server._project_spec.spec_from_dict(_HOOK_SPEC)):
+            result = batch_cli._run_spec_action("apply_spec", {"spec_path": "x.yaml", "run_hooks": True})
+        self.assertTrue(result.get("success"), result)
+        self.assertEqual(ran, ["bash -c 'touch /tmp/owned'", "echo after"])
+        self.assertNotIn("hooks_not_run", result)
+
+    def test_only_the_terminal_cli_may_allow_hooks(self) -> None:
+        """A second caller passing allow_hooks=True would reopen the hole."""
+        allowed = []
+        for path in sorted((REPO_ROOT / "src").rglob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Call) and any(
+                    kw.arg == "allow_hooks" and not (
+                        isinstance(kw.value, ast.Constant) and kw.value.value is False)
+                    for kw in node.keywords
+                ):
+                    allowed.append(path.relative_to(REPO_ROOT).as_posix())
+        self.assertEqual(allowed, ["src/batch_cli.py"])
+
+    def test_apply_spec_is_gated_and_rated(self) -> None:
+        from src.utils import destructive_hook
+        from src.utils.execution_lifecycle import classify_operation_risk
+
+        self.assertIn("apply_spec", destructive_hook.DESTRUCTIVE_ACTIONS_BY_TOOL["project_manager"])
+        risk = classify_operation_risk("project_manager", "apply_spec").to_dict()
+        self.assertTrue(risk["recognised"], risk)
+        self.assertEqual(risk["level"], "medium", risk)
+
+
 class NoExecutionPrimitivesTest(unittest.TestCase):
     #: Calls that run code handed to them. `Execute`/`RunScript` are Fusion's
     #: string/file execution entry points; `exec`/`eval` are Python's own.

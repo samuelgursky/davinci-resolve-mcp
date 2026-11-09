@@ -20,6 +20,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { requireFfmpeg } from './capabilities.mjs';
+import { assertNotOption } from './spawn-guard.mjs';
 
 // color_transfer values that are DISPLAY-referred (SDR + HDR display). Camera log
 // (SLog3/LogC/RedLog) is NOT in ffmpeg's enum — it shows as 'unknown' → we refuse unless asserted.
@@ -46,6 +47,7 @@ const DISPLAY_MATRICES = new Set(['bt709', 'smpte170m', 'bt470bg', 'fcc', 'smpte
 
 /** Probe a media file's video stream: colorspace tags + frame count + fps. */
 export function probeStream(source, { ffprobe = 'ffprobe' } = {}) {
+  assertNotOption(source, 'source'); // ffprobe reads its input positionally
   const r = spawnSync(
     ffprobe,
     [
@@ -140,7 +142,9 @@ function runFfmpegToFile(args, ffmpegPath) {
 export async function extractFrames(clips, opts = {}) {
   requireFfmpeg();
   if (!opts.outDir) throw new Error('opts.outDir required');
-  fs.mkdirSync(opts.outDir, { recursive: true });
+  // Absolute, so the output file ffmpeg reads positionally can never start with '-'.
+  const outDir = path.resolve(opts.outDir);
+  fs.mkdirSync(outDir, { recursive: true });
   const ffmpeg = opts.ffmpeg || 'ffmpeg';
   const ffprobe = opts.ffprobe || 'ffprobe';
   const frames = {};
@@ -169,7 +173,7 @@ export async function extractFrames(clips, opts = {}) {
       skipped.push({ id: c.id, reason: e.message });
       continue;
     }
-    const outPng = path.join(opts.outDir, `${c.id}.png`);
+    const outPng = path.join(outDir, `${c.id}.png`);
     const args = ['-v', 'error', '-i', src, '-vf', `select=eq(n\\,${frameIdx})`, '-vframes', '1', '-y', outPng];
     try {
       await runFfmpegToFile(args, ffmpeg);

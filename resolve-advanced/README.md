@@ -216,6 +216,14 @@ status + install hints):
 Missing features fail with a clear, actionable message rather than crashing; the server logs a one-line
 "needs setup" summary to stderr at startup.
 
+> **Choosing binaries is the operator's job, not the caller's.** A tool call cannot name the program
+> the server runs: an argument such as `ffmpegPath`, `ffprobe`, `pgDumpPath`, `findPath` or `python`
+> holding a string is refused before any handler runs (`BINARY_OVERRIDE_REFUSED`). Put the binary on
+> PATH, or set it in the server's environment. For `offline_ref` on a Postgres library, `pg_dump` comes
+> from PATH or `RESOLVE_ADVANCED_PG_DUMP` (the old `postgres.pgDumpPath` argument is gone), and each
+> backup is written to a fresh private directory under the system temp folder. A media path starting
+> with `-` is refused wherever ffprobe or ffmpeg would read it as an option (`OPTION_LIKE_PATH_REFUSED`).
+
 > **Pinning the AAF interpreter.** `aaf_probe.py` runs under `AAF_PROBE_PYTHON`, falling back to
 > `PYTHON` and then plain `python3` on PATH. `install.py` sets that pin **only inside the `mcpServers`
 > JSON entry it writes**, so a host that spawns this advanced server some other way must pin it itself —

@@ -329,7 +329,10 @@ def _run_spec_action(action: str, params: Dict[str, Any]):
     r = get_resolve()
     if r is None:
         return None
-    return _spec_action(r, r.GetProjectManager(), action, params)
+    # The terminal CLI is the one place hooks may run: the person at the
+    # keyboard chose the spec file and typed --run-hooks. MCP calls never pass
+    # allow_hooks, so the server itself does not run them.
+    return _spec_action(r, r.GetProjectManager(), action, params, allow_hooks=True)
 
 
 def _emit_spec_result(result, *, json_mode: bool) -> int:

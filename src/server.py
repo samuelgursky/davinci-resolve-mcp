@@ -21145,8 +21145,29 @@ def _make_spec_hook_runner(timeout: float = 120.0):
     return _run
 
 
-def _spec_action(r, pm, action: str, p: Dict[str, Any]) -> Dict[str, Any]:
-    """plan_spec / apply_spec / diff_to_spec — declarative project reconcile."""
+#: Why an MCP call cannot run a spec's hooks. A hook is a command line taken
+#: from the spec, and the spec arrives from the caller (inline, or a file the
+#: caller names), so running it is executing caller-supplied code: the policy
+#: this server has kept since v3.0.0 (GHSA-x2fm-g3cm-6x5w).
+_SPEC_HOOKS_REFUSAL = (
+    "project_manager.apply_spec does not run spec hooks: a hook is a command "
+    "line from the spec, and this server does not execute caller-supplied code. "
+    "Apply the spec without run_hooks and run the hook commands yourself, or run "
+    "`davinci-resolve-mcp batch apply <spec> --run-hooks` from your own terminal."
+)
+
+
+def _spec_action(r, pm, action: str, p: Dict[str, Any], *, allow_hooks: bool = False) -> Dict[str, Any]:
+    """plan_spec / apply_spec / diff_to_spec — declarative project reconcile.
+
+    `allow_hooks` is True only for the terminal batch CLI, where the person at
+    the keyboard typed `--run-hooks` for a spec file they chose. Every MCP call
+    reaches this with the default and cannot run a hook.
+    """
+    if action == "apply_spec" and _coerce_bool(p.get("run_hooks"), False) and not allow_hooks:
+        # Refuse before the spec is read or Resolve is touched, so a refused
+        # call has no partial effect.
+        return _err(_SPEC_HOOKS_REFUSAL, code="SPEC_HOOKS_NOT_RUN", category="unsupported")
     spec_path = p.get("spec_path") or p.get("path")
     try:
         if spec_path:
@@ -21166,7 +21187,7 @@ def _spec_action(r, pm, action: str, p: Dict[str, Any]) -> Dict[str, Any]:
         return _ok(project=spec.project,
                    **_project_spec.apply_spec(spec, executor, dry_run=True))
     # apply_spec
-    run_hooks = _coerce_bool(p.get("run_hooks"), False)
+    run_hooks = allow_hooks and _coerce_bool(p.get("run_hooks"), False)
     try:
         result = _project_spec.apply_spec(
             spec, executor,
@@ -21178,6 +21199,12 @@ def _spec_action(r, pm, action: str, p: Dict[str, Any]) -> Dict[str, Any]:
     except _project_spec.SpecError as exc:
         return _err(str(exc), code="SPEC_APPLY_FAILED",
                     category="batch_partial", state=exc.state)
+    if spec.hooks and not run_hooks:
+        # Say so: a caller relying on an `after` hook must not read success as
+        # "the hook ran".
+        result["hooks_not_run"] = [
+            {"when": h.when, "name": h.name, "command": h.command} for h in spec.hooks
+        ]
     return _ok(**result) if result.get("success") else {"success": False, **result}
 
 
@@ -21435,10 +21462,12 @@ def project_manager(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         declarative spec WITHOUT mutating. Spec is YAML/JSON: {project, color_preset?, settings?,
         timelines:[{name,fps?,settings?,markers?}], hooks?}.
       plan_spec(spec_path|spec) -> {dry_run, actions, diff, change_count} — same as apply with dry_run.
-      apply_spec(spec_path|spec, dry_run?, run_hooks?, continue_on_error?) -> {success, applied, failures}
+      apply_spec(spec_path|spec, dry_run?, continue_on_error?) -> {success, applied, failures, hooks_not_run?}
         Reconcile the project toward the spec (idempotent: re-runs are no-ops). Color/HDR
-        settings are applied in dependency order; markers only added if absent. Hooks run only
-        when run_hooks=true (executes shell from the spec — opt-in).
+        settings are applied in dependency order; markers only added if absent. Spec hooks
+        never run from an MCP call: run_hooks=true is refused (SPEC_HOOKS_NOT_RUN), and a
+        spec's hooks come back in hooks_not_run. Run them yourself, or use
+        `davinci-resolve-mcp batch apply <spec> --run-hooks` in a terminal.
     """
     p = _params(params)
     r = get_resolve()

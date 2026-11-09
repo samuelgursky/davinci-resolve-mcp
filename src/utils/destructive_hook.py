@@ -104,8 +104,12 @@ DESTRUCTIVE_ACTIONS_BY_TOOL: Dict[str, FrozenSet[str]] = {
         "delete_by_color",
         "delete_by_custom_data",
     }),
-    "project_manager": frozenset({"archive", "delete", "safe_project_archive",
-                                  "safe_project_delete"}),
+    # apply_spec creates projects, bins and timelines and changes settings.
+    # It was missing here, so safe mode and the audit log never saw it, while
+    # it could also run shell hooks from the spec (GHSA-x2fm-g3cm-6x5w). The
+    # hooks no longer run from an MCP call; this entry makes the rest gated.
+    "project_manager": frozenset({"apply_spec", "archive", "delete",
+                                  "safe_project_archive", "safe_project_delete"}),
     "project_settings": frozenset({"delete_color_group"}),
     "render": frozenset({"delete_all_jobs", "delete_job", "delete_preset"}),
     "render_presets": frozenset({"delete_burnin"}),
@@ -384,6 +388,7 @@ NATIVE_DRY_RUN_ACTIONS: frozenset = frozenset({
     ("script_plugin", "safe_remove_extension"),
     ("project_manager", "safe_project_delete"),
     ("project_manager", "safe_project_archive"),
+    ("project_manager", "apply_spec"),
     ("lut", "attenuate"),
     ("lut", "install"),
     ("lut", "remove"),

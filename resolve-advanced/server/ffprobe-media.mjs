@@ -5,6 +5,7 @@
  */
 import { spawnSync } from 'node:child_process';
 import { requireFfmpeg } from './capabilities.mjs';
+import { assertNotOption } from './spawn-guard.mjs';
 
 /** Parse an "a/b" rational string → number (0 on divide-by-zero). */
 export function ratio(s) {
@@ -21,6 +22,7 @@ export function ratio(s) {
  */
 export function probeMedia(file, opts = {}) {
   requireFfmpeg();
+  assertNotOption(file, 'file'); // ffprobe reads its input positionally
   const ffprobe = opts.ffprobe || 'ffprobe';
   const r = spawnSync(ffprobe, ['-v', 'error', '-show_streams', '-show_format', '-of', 'json', file], {
     encoding: 'utf8',
