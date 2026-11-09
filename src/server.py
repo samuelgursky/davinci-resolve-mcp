@@ -83,7 +83,7 @@ from src.utils.page_lock import (
     restoring_page as _restoring_page,
     page_lock as _page_lock,
 )
-from src.utils.proc import safe_run, windows_pid_alive
+from src.utils.proc import OPTION_LIKE_PATH_REFUSED, option_like_path_error, safe_run, windows_pid_alive
 from src.utils.readback import verify_by_readback, verification_stats as _verification_stats
 from src.utils import operation_result as _operation_result
 from src.utils import operation_log as _operation_log
@@ -10382,6 +10382,11 @@ def _extract_clip_frames(clip, p: Dict[str, Any]) -> Dict[str, Any]:
     if not shutil.which("ffmpeg"):
         return _err("ffmpeg not found on PATH")
     out_dir = p.get("output_dir") or tempfile.mkdtemp(prefix="mcp_frames_")
+    # Each frame path is ffmpeg's bare output operand, so a directory starting
+    # with "-" would make it an option (#350).
+    refused = option_like_path_error(out_dir, "output_dir")
+    if refused:
+        return _err(refused, code=OPTION_LIKE_PATH_REFUSED, category="invalid_input", retryable=False)
     try:
         os.makedirs(out_dir, exist_ok=True)
     except OSError as exc:
@@ -15343,6 +15348,9 @@ def _ffprobe_media_summary(path: str) -> Optional[Dict[str, Any]]:
     ffprobe = shutil.which("ffprobe")
     if not ffprobe:
         return None
+    refused = option_like_path_error(path)
+    if refused:
+        return {"error": refused, "code": OPTION_LIKE_PATH_REFUSED}
     try:
         proc = subprocess.run(
             [ffprobe, "-v", "error", "-show_entries",
@@ -15383,6 +15391,9 @@ def _probe_media_file(path: str):
             "error": "ffprobe is not installed or not on PATH",
             "path": path,
         }
+    refused = option_like_path_error(path)
+    if refused:
+        return {"success": False, "code": OPTION_LIKE_PATH_REFUSED, "error": refused, "path": path}
     try:
         proc = subprocess.run(
             [

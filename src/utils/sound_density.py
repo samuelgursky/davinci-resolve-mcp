@@ -219,7 +219,10 @@ def measure_track_levels(
         cmd = ["ffmpeg", "-v", "error", "-i", path, "-vn", "-ac", "1",
                "-ar", str(rate), "-f", "f32le", "-"]
         if duration_seconds:
-            cmd[4:4] = ["-t", str(duration_seconds)]
+            # Before "-i", so it limits the input read. Index 4 is the path:
+            # inserting there left "-i -t <dur> <path>", which made "-t" the
+            # input and the caller's path a bare output filename (#350).
+            cmd[3:3] = ["-t", str(duration_seconds)]
         try:
             proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, timeout=120)
         except (subprocess.SubprocessError, OSError) as exc:

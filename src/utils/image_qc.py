@@ -53,6 +53,7 @@ except ImportError:  # pragma: no cover - exercised on minimal installs
     _np = None
 
 from src.utils import colorimetry as _cm
+from src.utils.proc import option_like_path_error
 
 #: Every public entry point calls `_require()` before touching numpy, so the
 #: internals below treat `_np` as present. Declared machine-readably rather
@@ -183,6 +184,10 @@ def _decode_frame(
 
 def _probe_color_transfer(path: str) -> Optional[str]:
     if not shutil.which("ffprobe"):
+        return None
+    if option_like_path_error(path):
+        # Not spawned: ffprobe would read it as an option (#350). The transfer
+        # is then unknown, the same answer as ffprobe being absent.
         return None
     args = [
         "ffprobe", "-v", "error", "-select_streams", "v:0",

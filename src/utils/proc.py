@@ -8,9 +8,33 @@ than re-applied at every call site.
 
 ``windows_pid_alive`` lives here too: the Windows replacement for the
 ``os.kill(pid, 0)`` liveness probe, which on Windows terminates the process.
+
+``option_like_path_error`` is the Python twin of ``assertNotOption`` in
+``resolve-advanced/server/spawn-guard.mjs``. A caller path that lands in a
+positional argv slot and starts with ``-`` is read by the child as an option:
+ffprobe given ``-report`` writes a log into its working directory (#350).
+Check it wherever a caller path is the bare operand of a spawned program.
 """
 import subprocess
 from typing import Any, Optional
+
+#: Error code shared with the advanced server's ``assertNotOption``.
+OPTION_LIKE_PATH_REFUSED = "OPTION_LIKE_PATH_REFUSED"
+
+
+def option_like_path_error(value: Any, label: str = "path") -> Optional[str]:
+    """Why ``value`` cannot be a positional argv operand, or None when it can.
+
+    A string starting with ``-`` is refused, not rewritten to ``./-...``, so a
+    path gets the same answer from this server and the advanced one. An
+    absolute path or a ``./`` prefix passes.
+    """
+    if isinstance(value, str) and value.startswith("-"):
+        return (
+            f"{label} '{value}' starts with '-', so the program would read it as "
+            "an option. Pass it as an absolute path or prefix it with ./"
+        )
+    return None
 
 
 def safe_run(*args: Any, **kwargs: Any) -> "subprocess.CompletedProcess":

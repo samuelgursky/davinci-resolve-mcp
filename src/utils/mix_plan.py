@@ -57,6 +57,7 @@ import tempfile
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from . import delivery_targets, loudness_parse
+from .proc import option_like_path_error
 
 try:
     import numpy as _np
@@ -179,6 +180,9 @@ def probe_duration(path: str) -> float:
     """Duration in seconds via ffprobe, or 0.0 when it cannot be read."""
     if not shutil.which("ffprobe"):
         raise MixPlanError("ffprobe is required to read stem durations")
+    refused = option_like_path_error(path, "stem path")
+    if refused:
+        raise MixPlanError(refused)
     code, stdout, _ = _run(
         ["ffprobe", "-v", "error", "-show_entries", "format=duration",
          "-of", "default=nw=1:nk=1", path]
@@ -382,6 +386,9 @@ def duck_envelope(
 
 
 def _write_wav(path: str, mix: "Any") -> str:
+    refused = option_like_path_error(path, "output_path")
+    if refused:
+        raise MixPlanError(refused)
     directory = os.path.dirname(os.path.abspath(path))
     if directory:
         os.makedirs(directory, exist_ok=True)

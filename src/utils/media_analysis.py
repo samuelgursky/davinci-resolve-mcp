@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from src.utils import analysis_caps as _analysis_caps
+from src.utils.proc import OPTION_LIKE_PATH_REFUSED, option_like_path_error
 
 # Caps preference reader — server.py registers a provider that reads the
 # media-analysis prefs file. Until then, the default preset is used.
@@ -2690,6 +2691,9 @@ def _parse_float(value: Any) -> Optional[float]:
 
 
 def _ffprobe(path: str) -> Dict[str, Any]:
+    refused = option_like_path_error(path)
+    if refused:
+        return {"success": False, "code": OPTION_LIKE_PATH_REFUSED, "error": refused}
     code, stdout, stderr = _run_command([
         "ffprobe",
         "-v",
@@ -4277,6 +4281,11 @@ def _transcribe_with_whisper_cli(path: str, artifacts: Dict[str, Any], transcrip
     whisper = shutil.which("whisper")
     if not whisper:
         return {"success": False, "status": "skipped", "backend": "whisper_cli", "reason": "whisper CLI not found"}
+    refused = option_like_path_error(path)
+    if refused:
+        # The path is whisper's bare first operand, so argparse would read it
+        # as an option (#350).
+        return {"success": False, "backend": "whisper_cli", "code": OPTION_LIKE_PATH_REFUSED, "error": refused}
     work_dir = os.path.join(os.path.dirname(artifacts.get("transcript_json") or artifacts["analysis_json"]), "transcript-work")
     os.makedirs(work_dir, exist_ok=True)
     # Default to capturing per-word timestamps so editor / word-snap features
