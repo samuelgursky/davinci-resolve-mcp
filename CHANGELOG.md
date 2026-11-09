@@ -2,6 +2,32 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v5.0.0 — A tool call can no longer run a command or choose the program the server spawns
+
+**A breaking security release.** It fixes two reports made through GitHub's private vulnerability reporting: [GHSA-x2fm-g3cm-6x5w](https://github.com/samuelgursky/davinci-resolve-mcp/security/advisories/GHSA-x2fm-g3cm-6x5w), reported by Artur Chlebicki (@Artur12555), and [GHSA-h2fm-rcfg-jch9](https://github.com/samuelgursky/davinci-resolve-mcp/security/advisories/GHSA-h2fm-rcfg-jch9), reported by @3099404236. Thank you both.
+
+### Removed (breaking)
+
+- **`project_manager apply_spec` no longer runs spec hooks.** A hook is a command line taken from the spec, and the spec comes from the caller (inline, or any file the caller names), so `run_hooks: true` ran caller-chosen commands as the user, e.g. `bash -c '…'`. That broke the v3.0.0 rule that this server does not execute caller-supplied code. `run_hooks: true` is now refused with `SPEC_HOOKS_NOT_RUN` before the spec is read or Resolve is touched. A successful apply lists the hooks it did not run in `hooks_not_run`, so a caller relying on an `after` hook doesn't read success as "the hook ran".
+- **`offline_ref`'s `postgres.pgDumpPath` argument.** It was spawned as given, so a caller could name any executable.
+
+### Security
+
+- **`apply_spec` is gated.** It was missing from the destructive registry, so safe mode and `logs/security-audit.jsonl` never saw it. It is now registered and rated MEDIUM (it creates projects, bins and timelines and changes settings, but never deletes).
+- **The advanced server refuses a caller-chosen binary at its one entry point.** Tool arguments are `passthrough()`, and helpers take the binary to run as an option, so `conform qc run` forwarded a caller's `ffmpegPath` straight to `spawnSync`. Every tool call is now checked before its handler runs. A string under `ffmpeg`, `ffprobe`, `ffmpegPath`, `ffprobePath`, `pgDumpPath`, `findPath` or `python`, at any depth, returns `BINARY_OVERRIDE_REFUSED`. A source scan in the suite fails if a new option that selects a binary is missing from that list.
+- **The `pg_dump` backup path no longer comes from the database name.** It used to be `/tmp/offline-ref-Sm2Timeline-backup-${database}.sql`, so `../` in the name escaped the temp folder. The name is now reduced to a safe filename, and the backup goes in a fresh private directory.
+- **Option-like media paths are refused.** A path starting with `-`, passed where ffprobe or ffmpeg read their input or output positionally, was parsed as an option. With the guard removed, the test run showed `-report` making ffprobe write a log file. Those paths are now refused (`OPTION_LIKE_PATH_REFUSED`), or made absolute where the server builds the path itself.
+
+### Migration
+
+- Spec hooks: apply without `run_hooks`, then run the commands yourself. A person at a terminal can still use `davinci-resolve-mcp batch apply <spec> --run-hooks`, which keeps hooks because the person chose the file and typed the flag.
+- `pg_dump` not on PATH: set `RESOLVE_ADVANCED_PG_DUMP` to its absolute path in the advanced server's environment.
+
+### Not changed
+
+- The Python server's own ffprobe calls (`_probe_media_file`, `_ffprobe_media_summary`, `media_analysis._ffprobe`, `mix_plan.probe_duration`) still pass a caller path positionally. They are the same leading-dash shape and are not covered here.
+- Covered by unit tests and mutation checks only. No Resolve or Postgres server was involved: the `pg_dump` test uses a stand-in script.
+
 ## What's New in v4.19.3 — Timeline pin verifies the switch; audio-only media analyzes cleanly
 
 ### Fixed
