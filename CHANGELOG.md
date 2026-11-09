@@ -2,6 +2,29 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v5.0.2 — A caller path that starts with "-" is no longer handed to a program as an option
+
+Closes the gap the v5.0.0 notes left open under **Not changed**, reported with a reachability check in #350.
+
+### Security
+
+- **Option-like paths are refused before a program is spawned (#350).** A caller path that is the bare operand of ffprobe, ffmpeg or whisper and starts with `-` was read as an option: ffprobe given a file named `-report` writes a log into its working folder before it notices there is no input. The Python server now refuses it with `OPTION_LIKE_PATH_REFUSED`, the same code the advanced server's `assertNotOption` returns. An absolute path, or one prefixed with `./`, still works. Guarded sites:
+  - the proxy compatibility check, on its own or in `link_proxy` (`_probe_media_file`), and the render and quick-export readbacks (`_ffprobe_media_summary`)
+  - `media_pool_item extract_frames`, for its `output_dir`
+  - media analysis's ffprobe pass, and the whisper CLI's input path
+  - `mix_plan`'s stem probes and its premix `output_path`
+  - `assess_grade` / `grade_loop`'s colour-transfer probe, which reports the transfer as unknown instead of spawning
+
+  The four sites named in v5.0.0 were joined by four more, found by sweeping every spawn under `src/` for a caller path in a positional slot.
+
+### Fixed
+
+- **`edit_engine sound_density_audit` with `duration_seconds`.** The duration limit was inserted between `-i` and the media path, so `-t` became ffmpeg's input and the caller's path a bare output filename. Every call that set `duration_seconds` failed. The limit now goes before `-i`.
+
+### Not changed
+
+- Covered by unit tests with mutation checks: each guard, reverted, fails its own test. Nothing was run against a live ffprobe, ffmpeg, whisper or Resolve.
+
 ## What's New in v5.0.1 — Three more Resolve calls reported as broken in #336 are withdrawn
 
 A ledger correction. No tool behavior changed.
