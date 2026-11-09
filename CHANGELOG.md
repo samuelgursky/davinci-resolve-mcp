@@ -2,6 +2,17 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v5.0.3 — The control panel no longer builds AppleScript from a folder name
+
+### Security
+
+- **The panel's folder picker passed its start folder into AppleScript source.** On macOS, the picker put the request's `initial` folder inside a string literal in the script it ran with `osascript`, checked only for being an existing directory. A folder whose name contained `"` could close the literal and run AppleScript of its own, such as `do shell script`. The script is now fixed text that reads the folder as a run-handler argument, and the folder is made absolute first. The endpoint sits behind the panel's token and Host/Origin gate and answers loopback clients only, so a caller needed a valid panel session on the same machine and a folder with that name to exist.
+- **The panel's Claude Code terminal launcher, same shape.** It put its `cd <repo> && <claude>` command inside an AppleScript string. The iTerm branch did no escaping, and the Terminal branch escaped by hand. Neither value comes from the request, but both branches now pass the command as an argument the same way.
+
+### Not changed
+
+- Covered by unit tests with a mutation check: restoring the old code fails all five new tests. One live measurement on macOS: `osascript -e 'on run argv' … -- <path>` delivers the path as the only argument, with quotes, backslashes and a leading `-` intact. The picker and the launcher themselves were not opened.
+
 ## What's New in v5.0.2 — A caller path that starts with "-" is no longer handed to a program as an option
 
 Closes the gap the v5.0.0 notes left open under **Not changed**, reported with a reachability check in #350.
