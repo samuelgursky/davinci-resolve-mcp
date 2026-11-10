@@ -407,6 +407,25 @@ from src.utils.sync_detection import detect_sync_event_capabilities
 from src.utils import analysis_memory
 
 
+def _winget_ffmpeg_bin() -> str | None:
+    """Find a complete Gyan.FFmpeg archive in WinGet's per-user package directory."""
+    local_appdata = os.environ.get("LOCALAPPDATA")
+    if not local_appdata or not Path(local_appdata).is_absolute():
+        return None
+    packages = Path(local_appdata) / "Microsoft" / "WinGet" / "Packages"
+    try:
+        candidates = sorted(packages.glob("Gyan.FFmpeg_Microsoft.Winget.Source_*/ffmpeg-*/bin"))
+    except OSError:
+        return None
+    for candidate in candidates:
+        try:
+            if (candidate / "ffmpeg.exe").is_file() and (candidate / "ffprobe.exe").is_file():
+                return str(candidate)
+        except OSError:
+            continue
+    return None
+
+
 def _ensure_path_includes_standard_tool_dirs() -> None:
     """Augment os.environ['PATH'] with common tool install dirs.
 
@@ -425,6 +444,9 @@ def _ensure_path_includes_standard_tool_dirs() -> None:
     So the tool was installed, working, and invisible, and `capabilities`
     reported `whisper_cli.available: false` with no hint as to why (#153, where
     the workaround that appeared to fix it was a shim placed on PATH by hand).
+
+    On Windows, a GUI client may also omit WinGet's FFmpeg links from PATH.
+    Append the complete package's bin directory so existing tools keep priority.
     """
     candidates = [
         # The venv this server is running from, first: a tool installed
@@ -449,6 +471,12 @@ def _ensure_path_includes_standard_tool_dirs() -> None:
     script_dir = candidates[0]
     front = [script_dir] if (script_dir in existing or script_dir in additions) else []
     ordered = front + [d for d in additions if d != script_dir] + [p for p in parts if p != script_dir]
+    if sys.platform == "win32":
+        winget_bin = _winget_ffmpeg_bin()
+        if winget_bin:
+            normalized = os.path.normcase(os.path.normpath(winget_bin))
+            if all(os.path.normcase(os.path.normpath(d)) != normalized for d in ordered):
+                ordered.append(winget_bin)
     if ordered != parts:
         os.environ["PATH"] = os.pathsep.join(ordered)
 

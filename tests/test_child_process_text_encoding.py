@@ -26,7 +26,9 @@ import ast
 import os
 import pathlib
 import sys
+import tempfile
 import unittest
+from unittest import mock
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
@@ -59,7 +61,6 @@ class InterpreterScriptDirOnPathTests(unittest.TestCase):
         must not be prepended in front of it. The test above only catches this
         on a host whose PATH lacks Homebrew, so pin PATH here (reported from a
         macOS run in #273)."""
-        from unittest import mock
         from src.utils import media_analysis
 
         script_dir = os.path.dirname(os.path.abspath(sys.executable))
@@ -80,6 +81,49 @@ class InterpreterScriptDirOnPathTests(unittest.TestCase):
         before = os.environ.get("PATH", "")
         media_analysis._ensure_path_includes_standard_tool_dirs()
         self.assertEqual(os.environ.get("PATH", ""), before)
+
+
+class WinGetFFmpegOnPathTests(unittest.TestCase):
+    def setUp(self) -> None:
+        from src.utils import media_analysis
+
+        self.ensure_path = media_analysis._ensure_path_includes_standard_tool_dirs
+        appdata = tempfile.TemporaryDirectory()
+        self.addCleanup(appdata.cleanup)
+        self.bin_dir = pathlib.Path(appdata.name).joinpath(
+            "Microsoft", "WinGet", "Packages", "Gyan.FFmpeg_Microsoft.Winget.Source_fixture",
+            "ffmpeg-9.0.2-full_build", "bin",
+        )
+        self.bin_dir.mkdir(parents=True)
+        (self.bin_dir / "ffmpeg.exe").touch()
+        self.script_dir = os.path.dirname(os.path.abspath(sys.executable))
+        self.explicit_dir = str(pathlib.Path(appdata.name) / "explicit-tools")
+        self.env = {
+            "LOCALAPPDATA": appdata.name,
+            "PATH": os.pathsep.join([self.explicit_dir, self.script_dir]),
+        }
+
+    def test_complete_winget_package_is_a_fallback_without_duplicates(self) -> None:
+        (self.bin_dir / "ffprobe.exe").touch()
+        with mock.patch.object(sys, "platform", "win32"), mock.patch.dict(os.environ, self.env, clear=True):
+            self.ensure_path()
+            path = os.environ["PATH"]
+            entries = path.split(os.pathsep)
+            self.assertEqual(entries[0], self.script_dir)
+            self.assertLess(entries.index(self.explicit_dir), entries.index(str(self.bin_dir)))
+            self.ensure_path()
+            self.assertEqual(os.environ["PATH"], path)
+
+    def test_incomplete_winget_package_is_not_added(self) -> None:
+        with mock.patch.object(sys, "platform", "win32"), mock.patch.dict(os.environ, self.env, clear=True):
+            self.ensure_path()
+            self.assertNotIn(str(self.bin_dir), os.environ["PATH"].split(os.pathsep))
+
+    def test_winget_discovery_is_windows_only(self) -> None:
+        (self.bin_dir / "ffprobe.exe").touch()
+        with mock.patch.object(sys, "platform", "linux"), mock.patch.dict(os.environ, self.env, clear=True):
+            self.ensure_path()
+            self.assertNotIn(str(self.bin_dir), os.environ["PATH"].split(os.pathsep))
 
 
 class ChildOutputDecodingTests(unittest.TestCase):
