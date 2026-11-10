@@ -2,6 +2,18 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v5.0.5 — fast-xml-parser 5.12.0
+
+From #347 (Dependabot).
+
+### Dependencies
+
+- **`fast-xml-parser` 5.11.2 → 5.12.0** in the root package and in `resolve-advanced`. A minor release: a faster fallback for stop nodes, metadata offsets kept for CRLF input, and a CommonJS typing fix.
+
+### Not changed
+
+- No server behavior changed. The Node advanced suite passed on a fresh `npm ci`, and the Python suite passed.
+
 ## What's New in v5.0.4 — Media analysis finds FFmpeg installed through WinGet on Windows
 
 Fixes #346, from #349 by @jsdhwfmax.
