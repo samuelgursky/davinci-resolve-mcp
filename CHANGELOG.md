@@ -2,6 +2,18 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v5.0.7 — No logging error on Windows consoles with a legacy code page
+
+Fixes the first half of #352, from #355 by @CaptRauti.
+
+### Fixed
+
+- **The timeline brain migration message could not be encoded on some Windows consoles.** It contained `→` (U+2192), which code page 1256 cannot encode, so a log handler on such a stream printed a `--- Logging error ---` traceback once per migration step instead of the message. The message now uses `->`. A new test fails if a logger call in that module uses a character cp1256 cannot encode.
+
+### Not changed
+
+- The second half of #352 (a `resolve_bridge` test that fails when the repository and `%TEMP%` are on different drives) is a test portability issue and is not in this release. No Resolve behavior changed, so no live Resolve run.
+
 ## What's New in v5.0.6 — `search_api`, `describe_api` and `api_surface` work on npm installs again
 
 Fixes #351, from #354 by @CaptRauti.
