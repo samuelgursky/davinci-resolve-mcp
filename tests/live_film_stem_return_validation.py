@@ -34,7 +34,7 @@ async def run(ntsc=False):
             start_frame=30,end_frame=54,tail_frames=6,start_sample=48048,end_sample=96096,
             sample_count=48048,body_sample_count=38438,tail_sample_count=9610)
         manifest['stems'][0]['sha256']=hashlib.sha256((scratch/'music.wav').read_bytes()).hexdigest()
-        (scratch/'manifest.json').write_text(json.dumps(manifest))
+        (scratch/'manifest.json').write_text(json.dumps(manifest), encoding='utf-8')
     name='_val_film_return_'+uuid.uuid4().hex[:10]
     tl=pool.CreateEmptyTimeline(name)
     if not tl: raise RuntimeError('Could not create disposable timeline')

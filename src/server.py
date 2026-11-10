@@ -27955,7 +27955,7 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
     if action == "film_stems_return":
         from src.utils.film_stem_return import prepare_return
         try:
-            return prepare_return(proj, p["delivery_dir"], preview=p.get("preview", True),
+            return prepare_return(proj, p["delivery_dir"], preview=_coerce_bool(p.get("preview"), True),
                                   expected_timeline_id=p.get("expected_timeline_id"),
                                   expected_fingerprint=p.get("expected_fingerprint"))
         except (ValueError, TypeError, OSError) as exc:

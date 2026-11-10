@@ -78,7 +78,7 @@ def package(root):
         'body_sample_count':36000, 'tail_sample_count':12000,
         'stems':[{'name':'music','file':'music.wav','channels':2,
                   'sha256':hashlib.sha256(path.read_bytes()).hexdigest(), 'tail_not_quiet':False}]}
-    (root/'manifest.json').write_text(json.dumps(manifest))
+    (root/'manifest.json').write_text(json.dumps(manifest), encoding='utf-8')
     return manifest
 
 
@@ -94,7 +94,7 @@ class FilmStemReturnTests(unittest.TestCase):
     def add_second_stem(self):
         (self.root/'fx.wav').write_bytes((self.root/'music.wav').read_bytes())
         self.manifest['stems'].append(dict(self.manifest['stems'][0], name='fx', file='fx.wav'))
-        (self.root/'manifest.json').write_text(json.dumps(self.manifest))
+        (self.root/'manifest.json').write_text(json.dumps(self.manifest), encoding='utf-8')
 
     def test_incomplete_import_preserves_known_receipts(self):
         self.add_second_stem()
@@ -165,7 +165,7 @@ class FilmStemReturnTests(unittest.TestCase):
             with self.subTest(size=len(data)):
                 path.write_bytes(data)
                 self.manifest['stems'][0]['sha256'] = hashlib.sha256(data).hexdigest()
-                (self.root/'manifest.json').write_text(json.dumps(self.manifest))
+                (self.root/'manifest.json').write_text(json.dumps(self.manifest), encoding='utf-8')
                 with self.assertRaises(ValueError): self.preview()
                 self.assertEqual(self.project.pool.imports, [])
                 self.assertEqual(len(self.project.tl.tracks), 1)
@@ -198,10 +198,10 @@ class FilmStemReturnTests(unittest.TestCase):
     def test_bad_hash_and_bad_clock_refuse(self):
         for key, value in [('sample_count', 1), ('start_sample', 0)]:
             bad = dict(self.manifest, **{key:value})
-            (self.root/'manifest.json').write_text(json.dumps(bad))
+            (self.root/'manifest.json').write_text(json.dumps(bad), encoding='utf-8')
             with self.assertRaises(ValueError): self.preview()
-        (self.root/'manifest.json').write_text(json.dumps(self.manifest))
-        with (self.root/'music.wav').open('ab') as stream: stream.write(b'x')
+        (self.root/'manifest.json').write_text(json.dumps(self.manifest), encoding='utf-8')
+        with (self.root/'music.wav').open(mode='ab') as stream: stream.write(b'x')
         with self.assertRaises(ValueError): self.preview()
     def test_rate_mismatch_refuses_before_mutation(self):
         self.project.tl.fps='25'
@@ -224,7 +224,7 @@ class FilmStemReturnTests(unittest.TestCase):
         with self.assertRaises(ValueError): self.preview()
     def test_manifest_paths_cannot_escape(self):
         self.manifest['stems'][0]['file']='../music.wav'
-        (self.root/'manifest.json').write_text(json.dumps(self.manifest))
+        (self.root/'manifest.json').write_text(json.dumps(self.manifest), encoding='utf-8')
         with self.assertRaises(ValueError): self.preview()
 
     def test_ntsc_uses_absolute_sample_endpoints(self):
@@ -236,7 +236,7 @@ class FilmStemReturnTests(unittest.TestCase):
             start_frame=1,end_frame=2,tail_frames=0,start_sample=1602,end_sample=3203,
             sample_count=1601,body_sample_count=1601,tail_sample_count=0)
         self.manifest['stems'][0]['sha256']=hashlib.sha256(path.read_bytes()).hexdigest()
-        (self.root/'manifest.json').write_text(json.dumps(self.manifest))
+        (self.root/'manifest.json').write_text(json.dumps(self.manifest), encoding='utf-8')
         self.project.tl.fps='29.97'; self.project.tl.start=0
         result=self.preview()
         self.assertEqual(result['record_frame'],1)
