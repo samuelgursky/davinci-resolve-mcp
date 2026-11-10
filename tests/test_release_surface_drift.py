@@ -55,5 +55,46 @@ class ReleaseSurfaces(unittest.TestCase):
                       "(port the GitHub Release notes; see docs/process/release-process.md)")
 
 
+class PackagingSurfaces(unittest.TestCase):
+    """The published tarball must carry what the server reads from the repo.
+
+    `resolve_control` resolves the typed stub by relative path
+    (`docs/reference/DaVinciResolveScript.pyi`), so the `files` list in
+    package.json is what decides whether a managed install can answer
+    search_api/describe_api/api_surface at all. v5.0.x shipped without it:
+    every stub-backed action failed with TYPED_API_QUERY while a source
+    checkout worked, because a source checkout is not what npm installs.
+    A `.pyi` matches none of the markdown or `.txt` globs, so it has to be
+    named — or the glob has to be widened. This guard fails when neither is
+    true, which is the state that reached npm.
+    """
+
+    def test_typed_stub_is_shipped(self):
+        from fnmatch import fnmatch
+
+        stub = "docs/reference/DaVinciResolveScript.pyi"
+        files = json.loads((REPO / "package.json").read_text(encoding="utf-8"))["files"]
+
+        def covered(path, entries):
+            for entry in entries:
+                if entry.startswith("!"):
+                    continue
+                if entry.endswith("/") and path.startswith(entry):
+                    return True
+                if fnmatch(path, entry):
+                    return True
+            return False
+
+        self.assertTrue(
+            covered(stub, files),
+            f"package.json 'files' does not cover {stub}, so npm installs a tarball "
+            "where search_api/describe_api/api_surface raise TYPED_API_QUERY. "
+            "Name the file or widen the glob.",
+        )
+        self.assertTrue((REPO / stub).is_file(),
+                        f"{stub} is missing from the checkout — the packaging guard "
+                        "would pass while the file it ships does not exist")
+
+
 if __name__ == "__main__":
     unittest.main()
