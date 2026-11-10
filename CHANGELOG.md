@@ -2,6 +2,18 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v5.0.4 — Media analysis finds FFmpeg installed through WinGet on Windows
+
+Fixes #346, from #349 by @jsdhwfmax.
+
+### Fixed
+
+- **FFmpeg installed through WinGet could be invisible on Windows.** A GUI client (OpenCode in the report) may start the server with a PATH that lacks WinGet's FFmpeg links, so `media_analysis` reported `ffmpeg` and `ffprobe` as unavailable while both worked in a terminal. On Windows the server now looks for the per-user `Gyan.FFmpeg` package under `%LOCALAPPDATA%\Microsoft\WinGet\Packages` and appends its `bin` folder to its own PATH when both executables are there. It is appended last, so a tool already on PATH keeps priority, and a folder already present under another spelling is not added twice.
+
+### Not changed
+
+- macOS and Linux are untouched; the lookup only runs on Windows. Validated by the contributor's Windows run and by @0x-70da on Windows 10 with a real WinGet FFmpeg 9.0.2 install with the WinGet entry removed from PATH; @CaptRauti confirmed the directory layout on a current install. The offline suite passed here on macOS. No Resolve behavior changed, so no live Resolve run.
+
 ## What's New in v5.0.3 — The control panel no longer builds AppleScript from a folder name
 
 ### Security
