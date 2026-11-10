@@ -275,5 +275,46 @@ class ConnectionCacheKeying(unittest.TestCase):
         )
 
 
+class LegacyCodePageLogging(unittest.TestCase):
+    """Log messages must survive a handler whose stream is a legacy code page.
+
+    A StreamHandler bound to a cp1256 stream (Windows console code page 720,
+    as in the bug report) raises UnicodeEncodeError on a character that code
+    page lacks. logging swallows it into a "--- Logging error ---" traceback
+    on stderr and carries on, so the symptom is noise repeated once per
+    migration step rather than a crash — easy to ship and hard to notice.
+
+    U+2192 RIGHTWARDS ARROW is not in cp1256; U+2014 EM DASH is. That is why
+    only the migration message could raise. Keeping logger call sites inside
+    cp1256 keeps the invariant simple: if the character set survives the
+    narrowest code page this project runs on, it survives the rest.
+    """
+
+    def test_logger_call_sites_are_legacy_code_page_safe(self):
+        import io
+        import re
+
+        path = timeline_brain_db.__file__
+        offenders = []
+        for number, line in enumerate(io.open(path, encoding="utf-8"), 1):
+            stripped = line.strip()
+            if not re.match(r"^logger\.(debug|info|warning|warn|error|exception|critical)\(", stripped):
+                continue
+            for char in stripped:
+                if ord(char) < 128:
+                    continue
+                try:
+                    char.encode("cp1256")
+                except UnicodeEncodeError:
+                    offenders.append(f"{path}:{number} {char!r} (U+{ord(char):04X})")
+                    break
+        self.assertEqual(
+            offenders, [],
+            msg="these logger call sites contain a character cp1256 cannot encode; "
+                "logging will print a '--- Logging error ---' traceback instead of "
+                "the message on such a console:\n" + "\n".join(offenders),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

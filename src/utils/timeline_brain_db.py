@@ -149,7 +149,7 @@ def _run_pending_migrations(conn: sqlite3.Connection) -> None:
         if target > SCHEMA_VERSION:
             break
         migration = _MIGRATIONS[target]
-        logger.info("Running timeline_brain_db migration: v%d → v%d", target - 1, target)
+        logger.info("Running timeline_brain_db migration: v%d -> v%d", target - 1, target)
         migration(conn)
         _write_schema_version(conn, target)
         conn.commit()
