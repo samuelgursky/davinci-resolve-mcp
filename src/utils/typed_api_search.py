@@ -1,4 +1,4 @@
-"""Query the shipped Resolve 21.1 typed stub from inside the server.
+"""Query the Resolve typed stub from inside the server.
 
 PR #205 landed Blackmagic's `DaVinciResolveScript.pyi` in `docs/reference/`, and
 `scripts/audit_typed_api.py` can turn it into a full inventory — but only from a
@@ -25,14 +25,70 @@ from typing import Any, Dict, List, Optional
 
 STUB_RELATIVE = os.path.join("docs", "reference", "DaVinciResolveScript.pyi")
 MAX_RESULTS = 200
+STUB_SOURCES = ("auto", "shipped", "installed")
 
 
 class TypedApiError(ValueError):
     """The stub is missing, unparseable, or the query was unusable."""
 
 
-def stub_path(project_dir: str) -> str:
-    return os.path.join(project_dir, STUB_RELATIVE)
+def installed_stub_path() -> Optional[str]:
+    """The stub the installed Resolve writes next to its scripting API.
+
+    The copy in `docs/reference` is a snapshot of the build it was pinned at.
+    Resolve installs its own stub alongside the scripting API and refreshes it
+    with the build, so on a newer Resolve that file is the accurate inventory.
+    Reading it is what stops a 21.2 server from reporting 21.2 methods as
+    nonexistent — a wrong answer rather than an error, which is the worse
+    failure mode. An explicit RESOLVE_SCRIPT_API wins over the platform
+    default, same as everywhere else in this server.
+
+    Best effort: a broken or absent install must not take down the query path,
+    and the shipped copy still works without one.
+    """
+    try:
+        from .platform import get_resolve_paths
+
+        api_path = (get_resolve_paths() or {}).get("api_path")
+        if api_path:
+            candidate = os.path.join(api_path, "DaVinciResolveScript.pyi")
+            if os.path.isfile(candidate):
+                return candidate
+    except Exception:
+        return None
+    return None
+
+
+def stub_path(project_dir: str, source: str = "auto") -> Optional[str]:
+    """Resolve which stub to read.
+
+    `auto` prefers the installed build's stub and falls back to the shipped
+    copy. `shipped` forces the pinned file — the inventory tests use it,
+    because they assert the 21.1 revision and would otherwise flip their
+    expected counts on any machine with a newer Resolve installed. `installed`
+    refuses instead of silently falling back, for callers that specifically
+    want the live build's inventory.
+
+    Returns None when the requested stub is not there; `load` turns that into
+    one error message naming both locations.
+    """
+    if source not in STUB_SOURCES:
+        raise TypedApiError(
+            f"source must be one of {', '.join(STUB_SOURCES)}, not {source!r}"
+        )
+    if source in ("auto", "installed"):
+        installed = installed_stub_path()
+        if installed:
+            return installed
+        if source == "installed":
+            raise TypedApiError(
+                "No installed Resolve typed stub found. Resolve writes "
+                "DaVinciResolveScript.pyi next to its scripting API; set "
+                "RESOLVE_SCRIPT_API to that Scripting directory if this install "
+                "keeps it elsewhere."
+            )
+    shipped = os.path.join(project_dir, STUB_RELATIVE)
+    return shipped if os.path.isfile(shipped) else None
 
 
 @lru_cache(maxsize=4)
@@ -78,14 +134,29 @@ def _inventory(path: str, mtime: float) -> Dict[str, Any]:
     return {"methods": methods, "option_types": option_types}
 
 
-def load(project_dir: str) -> Dict[str, Any]:
-    path = stub_path(project_dir)
-    if not os.path.isfile(path):
+def load(project_dir: str, source: str = "auto") -> Dict[str, Any]:
+    """Parse the stub, and say which copy answered.
+
+    `stub` and `stub_source` are added to the parsed inventory so every caller
+    can report them. The parsed inventory itself is cached and shared, so this
+    returns a copy rather than mutating it.
+    """
+    path = stub_path(project_dir, source)
+    if path is None:
+        shipped = os.path.join(project_dir, STUB_RELATIVE)
         raise TypedApiError(
-            f"Typed API stub not found at {STUB_RELATIVE}. It ships with this "
-            "repository; a source checkout is required for API search."
+            "Typed API stub not found. Checked the installed Resolve stub "
+            "(none found) and the shipped copy at "
+            f"{shipped}. Run from a source checkout with the shipped stub, "
+            "install Resolve so its own stub exists, or set RESOLVE_SCRIPT_API "
+            "to the Scripting directory."
         )
-    return _inventory(path, os.path.getmtime(path))
+    inventory = _inventory(path, os.path.getmtime(path))
+    return {
+        **inventory,
+        "stub": path,
+        "stub_source": "installed" if path == installed_stub_path() else "shipped",
+    }
 
 
 @lru_cache(maxsize=4)
@@ -139,7 +210,7 @@ def _source_fingerprint(project_dir: str) -> str:
 
 
 def search(project_dir: str, pattern: str, *, kind: str = "all",
-           limit: int = 50) -> Dict[str, Any]:
+           limit: int = 50, source: str = "auto") -> Dict[str, Any]:
     """Case-insensitive regex over method names, signatures, types and docs."""
     if not isinstance(pattern, str) or not pattern.strip():
         raise TypedApiError("pattern is required")
@@ -154,7 +225,7 @@ def search(project_dir: str, pattern: str, *, kind: str = "all",
     except (TypeError, ValueError):
         raise TypedApiError("limit must be an integer")
 
-    inventory = load(project_dir)
+    inventory = load(project_dir, source)
     wrapped = _wrapped_names(project_dir, _source_fingerprint(project_dir))
 
     methods: List[Dict[str, Any]] = []
@@ -199,23 +270,25 @@ def search(project_dir: str, pattern: str, *, kind: str = "all",
         "truncated": total > limit,
         "methods": methods[:limit],
         "option_types": options[:limit],
-        "stub": STUB_RELATIVE,
+        "stub": inventory["stub"],
+        "stub_source": inventory["stub_source"],
         "note": ("referenced_in_this_server is executable syntax only — a name that "
                  "appears solely in a docstring or comment is not counted."),
     }
 
 
-def describe(project_dir: str, symbol: str) -> Dict[str, Any]:
+def describe(project_dir: str, symbol: str, source: str = "auto") -> Dict[str, Any]:
     """Full detail for one `Class.Method` or one TypedDict name."""
     if not isinstance(symbol, str) or not symbol.strip():
         raise TypedApiError("symbol is required")
-    inventory = load(project_dir)
+    inventory = load(project_dir, source)
     key = symbol.strip()
 
     if key in inventory["option_types"]:
         fields = inventory["option_types"][key]
         return {"symbol": key, "kind": "option_type", "field_count": len(fields),
-                "fields": fields, "stub": STUB_RELATIVE}
+                "fields": fields, "stub": inventory["stub"],
+                "stub_source": inventory["stub_source"]}
 
     row = inventory["methods"].get(key)
     if row is None:
@@ -229,8 +302,10 @@ def describe(project_dir: str, symbol: str) -> Dict[str, Any]:
             )
         else:
             raise TypedApiError(
-                f"{symbol!r} is not in the Resolve 21.1 typed stub. Use search to "
-                "find the right name."
+                f"{symbol!r} is not in the typed stub that answered ({inventory['stub']}, "
+                f"source={inventory['stub_source']}). Use search to find the right name; "
+                "pass source='installed' to read the running build's inventory instead "
+                "of the shipped copy."
             )
 
     wrapped = _wrapped_names(project_dir, _source_fingerprint(project_dir))
@@ -244,15 +319,17 @@ def describe(project_dir: str, symbol: str) -> Dict[str, Any]:
         "description": row["description"],
         "referenced_in_this_server": bool(references),
         "source_files": references,
-        "stub": STUB_RELATIVE,
+        "stub": inventory["stub"],
+        "stub_source": inventory["stub_source"],
     }
 
 
-def summary(project_dir: str) -> Dict[str, Any]:
-    inventory = load(project_dir)
+def summary(project_dir: str, source: str = "auto") -> Dict[str, Any]:
+    inventory = load(project_dir, source)
     field_total = sum(len(fields) for fields in inventory["option_types"].values())
     return {
-        "stub": STUB_RELATIVE,
+        "stub": inventory["stub"],
+        "stub_source": inventory["stub_source"],
         "methods": len(inventory["methods"]),
         "option_types": len(inventory["option_types"]),
         "option_fields": field_total,

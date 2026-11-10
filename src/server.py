@@ -18706,15 +18706,20 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
       set_keyframe_mode(mode) -> {success}
       quit() -> {success}
       get_fairlight_presets() -> {presets}
-      search_api(pattern, kind?, limit?) -> {methods, option_types, total_matches}
-        — regex over the shipped Resolve 21.1 typed stub. Each hit says whether
-          THIS server references the method, and where, so it doubles as a
-          parity check. kind: 'all' (default) | 'methods' | 'options'.
+      search_api(pattern, kind?, limit?, source?) -> {methods, option_types, total_matches, stub, stub_source}
+        — regex over the Resolve typed stub. Each hit says whether THIS server
+          references the method, and where, so it doubles as a parity check.
+          kind: 'all' (default) | 'methods' | 'options'.
+          source: 'auto' (default) reads the stub the installed Resolve ships and
+          falls back to the shipped copy; 'shipped' forces the pinned file;
+          'installed' refuses when no install is found. The reply names the stub
+          that answered, because "absent" from an outdated inventory is not the
+          same as absent from the running build.
           No connection needed.
-      describe_api(symbol) -> {signatures, stub_line, description, source_files}
+      describe_api(symbol, source?) -> {signatures, stub_line, description, source_files, stub, stub_source}
         — one 'Class.Method' or one TypedDict name. No connection needed.
-      api_surface() -> {methods, option_types, option_fields, objects}
-        — what the shipped stub contains. No connection needed.
+      api_surface(source?) -> {methods, option_types, option_fields, objects, stub, stub_source}
+        — what the answering stub contains. No connection needed.
       set_high_priority(high?) -> {success, high_priority, signature, reversible, readback: null}
         — script execution priority. high: true (default, the old meaning)
           or false for normal. Resolve 21.1+ calls SetHighPriority(bool) and
@@ -18780,17 +18785,19 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         try:
             return typed_api_search.search(
                 project_dir, p.get("pattern"),
-                kind=p.get("kind", "all"), limit=p.get("limit", 50))
+                kind=p.get("kind", "all"), limit=p.get("limit", 50),
+                source=p.get("source", "auto"))
         except typed_api_search.TypedApiError as exc:
             return _err(str(exc), code="TYPED_API_QUERY", category="invalid_input")
     elif action == "describe_api":
         try:
-            return typed_api_search.describe(project_dir, p.get("symbol"))
+            return typed_api_search.describe(project_dir, p.get("symbol"),
+                                             source=p.get("source", "auto"))
         except typed_api_search.TypedApiError as exc:
             return _err(str(exc), code="TYPED_API_QUERY", category="invalid_input")
     elif action == "api_surface":
         try:
-            return typed_api_search.summary(project_dir)
+            return typed_api_search.summary(project_dir, source=p.get("source", "auto"))
         except typed_api_search.TypedApiError as exc:
             return _err(str(exc), code="TYPED_API_QUERY", category="invalid_input")
     elif action == "api_truth":
