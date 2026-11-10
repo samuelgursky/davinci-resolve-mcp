@@ -2,6 +2,19 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v5.0.6 — `search_api`, `describe_api` and `api_surface` work on npm installs again
+
+Fixes #351, from #354 by @CaptRauti.
+
+### Fixed
+
+- **The typed API stub was missing from the npm package.** `package.json` `files` listed the markdown docs and the `.txt` scripting reference, but nothing matched `docs/reference/DaVinciResolveScript.pyi`. A source checkout had the stub and every npm install (including `npx davinci-resolve-mcp sync`) did not, so all three stub-backed `resolve_control` actions failed with `TYPED_API_QUERY`. The stub is now named in `files`.
+- A new drift test fails when the `files` list stops covering the stub, or when the stub is missing from the checkout.
+
+### Not changed
+
+- The shipped stub is still the Resolve 21.1 revision. On a 21.2 install, `search_api` does not yet know the methods 21.2 added (for example `ExportThumbnails`, `GetCDL`). No Resolve behavior changed, so no live Resolve run; `npm pack --dry-run` lists the stub.
+
 ## What's New in v5.0.5 — fast-xml-parser 5.12.0
 
 From #347 (Dependabot).
