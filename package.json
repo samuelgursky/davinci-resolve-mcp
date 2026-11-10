@@ -44,6 +44,7 @@
     "resolve-advanced/README.md",
     "docs/**/*.md",
     "docs/reference/resolve_scripting_api.txt",
+    "docs/reference/DaVinciResolveScript.pyi",
     "examples/**/*.md",
     "scripts/**/*.py",
     "scripts/edit_subtitle_timeline.mjs",
