@@ -151,18 +151,21 @@ _EVIDENCE_GATES: List[Dict[str, Any]] = [
     {
         "symbol": "Timeline.GetSelectedClips",
         "introduced_in": "21.0.4",
-        "source": "reported",
-        "note": "Reported against 21.0.4.5 and listed in the shipped scripting "
-                "README. This repo's selection helper duck-probes three names and "
-                "reaches it by luck on builds that have it, so an absence here "
-                "degrades rather than errors.",
+        "source": "measured",
+        "note": "Measured on free 21.0.4.5 through the in-app bridge "
+                "(tests/live_resolve2104_validation.py): [] with nothing selected, "
+                "the clicked timeline item after a click. First reported against 21.0.4.5 "
+                "and listed in the shipped scripting README.",
         "issue": 131,
     },
     {
         "symbol": "MediaPoolItem.GetTimeline",
         "introduced_in": "21.0.4",
-        "source": "reported",
-        "note": "Reported against 21.0.4.5. Not reachable through this server yet.",
+        "source": "measured",
+        "note": "Measured on free 21.0.4.5 through the in-app bridge "
+                "(tests/live_resolve2104_validation.py): returns the timeline for a "
+                "timeline item and None for a plain clip. First reported against "
+                "21.0.4.5.",
         "issue": 131,
     },
     {
