@@ -3,6 +3,7 @@
 from src.granular.common import *  # noqa: F401,F403
 import os
 from src.utils import typed_api_search
+from src.utils.preset_files import preset_export_file
 from src.utils.app_control import set_high_priority as set_resolve_high_priority
 
 resolve = ResolveProxy()
@@ -501,17 +502,25 @@ def import_render_preset(preset_path: str) -> Dict[str, Any]:
 
 @mcp.tool()
 def export_render_preset(preset_name: str, export_path: str) -> Dict[str, Any]:
-    """Export a render preset to a file.
+    """Export a render preset as an .xml file inside a folder.
+
+    Resolve treats ``export_path`` as a folder: it creates the folder if needed
+    and writes ``<preset_name>.xml`` inside it (measured on 21.0.4.5). A path
+    ending in ``.xml`` becomes a folder of that name. On success the returned
+    ``export_file`` is the file to pass to the matching import tool.
 
     Args:
         preset_name: Name of the render preset to export.
-        export_path: Absolute path where the preset file will be saved.
+        export_path: Absolute path of the folder the preset file is written into.
     """
     resolve = get_resolve()
     if resolve is None:
         return {"error": "Not connected to DaVinci Resolve"}
     result = resolve.ExportRenderPreset(preset_name, export_path)
-    return {"success": bool(result), "preset_name": preset_name, "export_path": export_path}
+    out = {"success": bool(result), "preset_name": preset_name, "export_path": export_path}
+    if result:
+        out["export_file"] = preset_export_file(export_path, preset_name)
+    return out
 
 
 @mcp.tool()
@@ -530,17 +539,25 @@ def import_burn_in_preset(preset_path: str) -> Dict[str, Any]:
 
 @mcp.tool()
 def export_burn_in_preset(preset_name: str, export_path: str) -> Dict[str, Any]:
-    """Export a burn-in preset to a file.
+    """Export a burn-in preset as an .xml file inside a folder.
+
+    Resolve treats ``export_path`` as a folder: it creates the folder if needed
+    and writes ``<preset_name>.xml`` inside it (measured on 21.0.4.5). A path
+    ending in ``.xml`` becomes a folder of that name. On success the returned
+    ``export_file`` is the file to pass to the matching import tool.
 
     Args:
         preset_name: Name of the burn-in preset to export.
-        export_path: Absolute path where the preset file will be saved.
+        export_path: Absolute path of the folder the preset file is written into.
     """
     resolve = get_resolve()
     if resolve is None:
         return {"error": "Not connected to DaVinci Resolve"}
     result = resolve.ExportBurnInPreset(preset_name, export_path)
-    return {"success": bool(result), "preset_name": preset_name, "export_path": export_path}
+    out = {"success": bool(result), "preset_name": preset_name, "export_path": export_path}
+    if result:
+        out["export_file"] = preset_export_file(export_path, preset_name)
+    return out
 
 
 @mcp.tool()
