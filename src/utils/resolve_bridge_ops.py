@@ -593,10 +593,26 @@ class ResolveOperations:
             handle = value.get("__handle__")
             if handle is not None:
                 return self._resolve_target(handle)
+            if "__pairs__" in value:
+                # A dict with non-string keys (see the client's _encode_argument).
+                pairs = value["__pairs__"]
+                if len(value) != 1 or not isinstance(pairs, list):
+                    raise OperationError("invalid_arguments", "__pairs__ must be the only key and hold a list")
+                return {self._decode_key(pair): self._decode(pair[1]) for pair in pairs}
             return {k: self._decode(v) for k, v in value.items()}
         if isinstance(value, list):
             return [self._decode(v) for v in value]
         return value
+
+    @staticmethod
+    def _decode_key(pair: Any) -> Any:
+        """The key of one ``[key, value]`` pair; only JSON scalars can be dict keys."""
+        if not (isinstance(pair, list) and len(pair) == 2):
+            raise OperationError("invalid_arguments", "a __pairs__ entry must be [key, value]")
+        key = pair[0]
+        if not (key is None or isinstance(key, (bool, int, float, str))):
+            raise OperationError("invalid_arguments", "a __pairs__ key must be a number, string, bool or null")
+        return key
 
     def op_call(self, arguments: Dict[str, Any]) -> Any:
         """Invoke one method on a live Resolve object. See the module docstring.
