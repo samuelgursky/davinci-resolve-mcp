@@ -39,6 +39,24 @@ class BlockRuleTests(unittest.TestCase):
             for line in block["lines"]:
                 self.assertLessEqual(len(line), captions.DEFAULT_MAX_CHARS_PER_LINE, line)
 
+    def test_a_token_longer_than_the_line_cap_is_not_cut_off(self) -> None:
+        url = "https://example.com/" + "a" * 60
+        words = [
+            {"word": "See", "start": 0.0, "end": 0.3},
+            {"word": url, "start": 0.4, "end": 1.2},
+        ]
+        blocks = captions.build_blocks(words)
+        kept = "".join("".join(block["lines"]) for block in blocks).replace(" ", "")
+        self.assertEqual(kept, "See" + url)
+        for block in blocks:
+            for line in block["lines"]:
+                self.assertLessEqual(len(line), captions.DEFAULT_MAX_CHARS_PER_LINE, line)
+
+    def test_the_pieces_of_a_split_word_wrap_like_other_text(self) -> None:
+        word = "b" * 50 + " ok"
+        blocks = captions.build_blocks([{"word": word, "start": 0.0, "end": 1.0}])
+        self.assertEqual(blocks[0]["lines"], ["b" * 42, "b" * 8 + " ok"])
+
     def test_no_block_exceeds_the_line_cap(self) -> None:
         for block in self.blocks:
             self.assertLessEqual(len(block["lines"]), captions.DEFAULT_MAX_LINES, block)
