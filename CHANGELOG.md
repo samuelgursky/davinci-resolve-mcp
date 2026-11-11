@@ -2,6 +2,23 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v5.2.1 — Resolve 21.0.4 calls live-tested
+
+From #359 by @Ghoul0718. The twelve Resolve 21.0.4 scripting additions were guarded and unit-tested but had never been run live here, for want of a 21.0.4 build. This release records a live run on free 21.0.4.5 through the in-app bridge. No server behaviour changes.
+
+### Added
+
+- **`tests/live_resolve2104_validation.py`**, a live harness for the 21.0.4 additions (in-app bridge by default, `--native` for Studio, `--read-only` to list only). It refuses to start if a render is running or a previous run left anything behind, uses `ZZ_r2104_` names for every preset and project it creates, restores the preset list, and deletes its disposable project after switching back to the original. `LoadUserPreferencesPreset` is never called.
+
+### Changed
+
+- **API coverage:** ten 21.0.4 methods are now ✅ live-tested and `DeleteBurnInPreset` is ⚠️, tested on a missing name only, since no scripting call creates a burn-in preset to delete. Live-tested methods go from 338 to 349 of 361. `LoadUserPreferencesPreset` stays untested by design: it swaps the user's global preferences for the session.
+- **`Timeline.GetSelectedClips` and `MediaPoolItem.GetTimeline`** move from `reported` to `measured` in the version-evidence table. The note saying `GetTimeline` was not reachable through this server is gone; `get_clip_timeline` has wired it since an earlier release.
+
+### Not verified here
+
+- The live results are the contributor's, from free 21.0.4.5 on macOS. This maintainer machine runs Studio 19.1.3.7 and could not rerun the harness. They agree with the earlier contributor reports from Studio 21.0.4.5 (#131, #135–#138, #139).
+
 ## What's New in v5.2.0 — Film scoring handoff and stem return
 
 From #358 by @veridian69. A read-mostly workflow for handing picture to a composer and checking what comes back. Guides: `docs/guides/film-workflow.md`, `docs/guides/film-cues.md`, `docs/guides/film-picture-changes.md`.
