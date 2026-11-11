@@ -61,3 +61,30 @@ class FilmLifecycleTests(unittest.TestCase):
                 ctx.pre_state={'duration_frames':0}
                 result=hook.after_tool_call(ctx,{},1)
                 self.assertEqual(result is not None,preview)
+
+
+class FilmStemsReturnRiskTests(unittest.TestCase):
+    """Applying film_stems_return imports media and adds tracks; preview reads."""
+
+    def test_preview_is_a_recognised_read(self):
+        from src.utils.destructive_hook import is_destructive
+        from src.utils.execution_lifecycle import RiskLevel, classify_operation_risk
+        for params in ({}, {'preview': True}, {'preview': 'true'}, {'preview': 'unparseable'}):
+            with self.subTest(params=params):
+                risk = classify_operation_risk('timeline', 'film_stems_return', params)
+                self.assertTrue(risk.recognised)
+                self.assertFalse(risk.destructive)
+                self.assertEqual(risk.level, RiskLevel.LOW)
+                self.assertFalse(is_destructive('timeline', 'film_stems_return', params))
+
+    def test_apply_is_a_recognised_mutation_that_archives(self):
+        from src.utils.destructive_hook import is_destructive
+        from src.utils.execution_lifecycle import BlastRadius, RiskLevel, classify_operation_risk
+        for params in ({'preview': False}, {'preview': 'false'}, {'preview': 0}):
+            with self.subTest(params=params):
+                risk = classify_operation_risk('timeline', 'film_stems_return', params)
+                self.assertTrue(risk.recognised)
+                self.assertTrue(risk.destructive)
+                self.assertEqual(risk.level, RiskLevel.MEDIUM)
+                self.assertEqual(risk.blast_radius, BlastRadius.TIMELINE)
+                self.assertTrue(is_destructive('timeline', 'film_stems_return', params))

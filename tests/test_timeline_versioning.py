@@ -88,6 +88,8 @@ class _MockMediaPool:
         self.root.subfolders.append(sub)
         self.added_subfolders.append(name)
         return sub
+    def GetCurrentFolder(self) -> object:
+        return self.current_folder
     def SetCurrentFolder(self, folder: object) -> bool:
         self.current_folder = folder
         return True
@@ -159,6 +161,32 @@ class TimelineVersioning(unittest.TestCase):
         self.assertIn("Archive", self.project._media_pool.added_subfolders)
         # Current timeline restored to original after duplication.
         self.assertIs(self.project.GetCurrentTimeline(), self.timeline)
+
+    def test_archive_restores_the_current_bin(self) -> None:
+        # The destructive action that runs after the archive may import media
+        # (timeline.film_stems_return does), and ImportMedia lands in the
+        # current bin. Leaving it on Archive filed new media there.
+        pool = self.project._media_pool
+        user_bin = object()
+        pool.current_folder = user_bin
+        result = timeline_versioning.archive_current_timeline(
+            resolve=None, project=self.project, project_root=self.project_root,
+            reason="test",
+        )
+        self.assertTrue(result["success"], msg=result)
+        self.assertIs(pool.current_folder, user_bin)
+
+    def test_archive_restores_the_current_bin_when_duplicate_fails(self) -> None:
+        pool = self.project._media_pool
+        user_bin = object()
+        pool.current_folder = user_bin
+        self.timeline.DuplicateTimeline = lambda name: None  # type: ignore[method-assign]
+        result = timeline_versioning.archive_current_timeline(
+            resolve=None, project=self.project, project_root=self.project_root,
+            reason="test",
+        )
+        self.assertFalse(result["success"])
+        self.assertIs(pool.current_folder, user_bin)
 
     def test_archive_snapshots_timeline_timebase(self) -> None:
         # v14: fps + start frame are recorded so timeline_strata can convert

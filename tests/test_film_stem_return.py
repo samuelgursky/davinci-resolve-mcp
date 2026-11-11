@@ -265,3 +265,41 @@ class FilmStemReturnTests(unittest.TestCase):
 
 
 if __name__ == '__main__': unittest.main()
+
+
+class SymlinkedPathTests(unittest.TestCase):
+    """Resolve reports the path it was handed; the audit resolves symlinks.
+
+    On macOS /var, /tmp and many volumes are symlinks, so a previous import
+    reported as /var/... never matched the audited /private/var/... path and
+    the duplicate check was skipped. Built here with an explicit symlink so it
+    fails on every platform, not only where the temp dir happens to be one.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        base = Path(self.tmp.name)
+        self.real = base / 'real'; self.real.mkdir()
+        self.link = base / 'link'
+        try:
+            self.link.symlink_to(self.real, target_is_directory=True)
+        except (OSError, NotImplementedError) as exc:
+            self.skipTest(f'symlinks unavailable: {exc}')
+        package(self.real)
+        self.project = Project()
+
+    def _existing(self, start, duration):
+        reported = str(self.link / 'music.wav')  # unresolved, as Resolve reports it
+        self.project.tl.tracks[0][1].append(Item(Media(reported), start, duration))
+
+    def test_existing_stem_via_symlink_is_a_conflict(self):
+        self._existing(10, 24)
+        with self.assertRaises(ValueError):
+            mod.prepare_return(self.project, str(self.link))
+
+    def test_existing_stem_via_symlink_is_already_present(self):
+        first = mod.prepare_return(self.project, str(self.real))
+        self.project.tl.tracks[0] = (first['track_names'][0], [])
+        self._existing(first['record_frame'], first['duration_frames'])
+        self.assertEqual(mod.prepare_return(self.project, str(self.real))['status'],
+                         'already_present')

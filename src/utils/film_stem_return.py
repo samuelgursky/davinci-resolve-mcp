@@ -88,7 +88,12 @@ def audit_package(delivery_dir):
             'capture_alignment_verified':False}
 
 
-def _path(value): return os.path.normcase(os.path.abspath(value)) if value else ''
+def _path(value):
+    # realpath, not abspath: audit_package resolves the delivery root, so stem
+    # paths come back with symlinks resolved (/private/var/... on macOS), while
+    # Resolve reports the path it was handed (/var/...). Comparing unresolved
+    # forms never matched, so a previous import went undetected.
+    return os.path.normcase(os.path.realpath(value)) if value else ''
 
 
 def _number(value):

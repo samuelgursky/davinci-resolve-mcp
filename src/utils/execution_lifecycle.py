@@ -30,6 +30,22 @@ from src.utils.bool_params import coerce_bool
 logger = logging.getLogger("resolve-mcp.execution-lifecycle")
 
 
+#: Actions whose plan-only flag is `preview`, defaulting to True: the call
+#: mutates only when `preview` is explicitly false. Shared with
+#: destructive_hook, which uses it to skip archiving a preview call.
+PREVIEW_DEFAULT_TRUE_ACTIONS: frozenset = frozenset({
+    ("timeline", "film_stems_return"),
+})
+
+
+def is_preview_only(tool_name: str, action: str, params: Optional[Dict[str, Any]]) -> bool:
+    """True iff this is a `preview`-gated action called in preview mode."""
+    if (tool_name, action) not in PREVIEW_DEFAULT_TRUE_ACTIONS:
+        return False
+    value = params.get("preview") if isinstance(params, dict) else None
+    return coerce_bool(value, True)
+
+
 class RiskLevel(str, enum.Enum):
     """Categorized risk level for tool operations."""
     LOW = "low"            # Read-only queries, info probes, and known-reversible edits
@@ -320,6 +336,12 @@ class RiskClassificationHook(LifecycleHook):
         ("timeline", "insert_fusion_composition"),
         ("timeline", "insert_ofx_generator"),
         ("media_pool", "append_to_timeline"),
+        # Applied (preview=false): imports the stems into the pool and appends
+        # each onto a NEW audio track. Existing tracks are refused rather than
+        # touched, but the pool and the track list change and a partial failure
+        # is left in place for review. The preview call is classified read-only
+        # before this table is consulted (PREVIEW_DEFAULT_TRUE_ACTIONS).
+        ("timeline", "film_stems_return"),
         # Timeline-wide settings. No content lost, but a wrong start timecode
         # silently invalidates every conform and reference built against it.
         ("timeline", "set_setting"),
@@ -423,6 +445,19 @@ class RiskClassificationHook(LifecycleHook):
         recognised = True
 
         pair = (tool_name, action)
+
+        if is_preview_only(tool_name, action, params):
+            # Preview reads the package and the timeline and returns a plan
+            # with a fingerprint; nothing is written until preview=false.
+            return RiskAssessment(
+                level=RiskLevel.LOW,
+                destructive=False,
+                blast_radius=BlastRadius.ITEM,
+                confirmation_required=False,
+                snapshot_available=None,
+                reasons=[f"Preview of '{action}': read-only plan, nothing is written"],
+                recognised=True,
+            )
 
         if pair in cls._CRITICAL_ACTIONS:
             level = RiskLevel.CRITICAL

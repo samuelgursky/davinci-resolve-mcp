@@ -156,11 +156,26 @@ def archive_current_timeline(
 
     # Resolve duplication must happen on the live timeline; pin current folder
     # to Archive bin first so the duplicate lands there directly.
+    # The caller's current bin is restored afterwards: the destructive action
+    # that runs next may import media (timeline.film_stems_return does), and
+    # ImportMedia lands in the CURRENT bin, i.e. the Archive bin if left there.
+    try:
+        prior_folder = media_pool.GetCurrentFolder()
+    except Exception:
+        prior_folder = None
     archive_bin = _ensure_archive_bin(media_pool)
     if not media_pool.SetCurrentFolder(archive_bin):
         return {"success": False, "error": "Failed to set Archive as current bin"}
 
-    dup = tl.DuplicateTimeline(archived_name)
+    try:
+        dup = tl.DuplicateTimeline(archived_name)
+    finally:
+        if prior_folder is not None:
+            try:
+                if not media_pool.SetCurrentFolder(prior_folder):
+                    logger.warning("could not restore the current bin after archiving")
+            except Exception as exc:
+                logger.warning("could not restore the current bin after archiving: %s", exc)
     if dup is None:
         return {"success": False, "error": f"DuplicateTimeline('{archived_name}') failed"}
 

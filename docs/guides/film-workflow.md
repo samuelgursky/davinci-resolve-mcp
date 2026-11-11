@@ -85,6 +85,13 @@ readable media receipts. `partially_created_unknown` means the API may have
 created additional media without usable receipts. Nothing is automatically deleted
 and no rollback is promised. Existing tracks and clips are never replaced.
 
+The preview is rated a low-risk read and archives nothing. The apply call is
+rated medium risk on the timeline. Like other timeline edits, it first archives
+a copy of the timeline to the Archive bin (once per run); the imported stems
+still land in the bin that was current before the call.
+Existing stems are matched by their resolved path, so a delivery folder reached
+through a symlink (such as `/tmp` or `/var` on macOS) is still recognised.
+
 ## Preflight the handoff
 
 Call `timeline(action="film_preflight", params={...})`. Optional evidence:

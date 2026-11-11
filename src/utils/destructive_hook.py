@@ -43,6 +43,7 @@ from src.utils.execution_lifecycle import (
     RiskClassificationHook,
     RiskLevel,
     classify_operation_risk,
+    is_preview_only,
 )
 
 logger = logging.getLogger("resolve-mcp.destructive-hook")
@@ -183,6 +184,10 @@ DESTRUCTIVE_ACTIONS_BY_TOOL: Dict[str, FrozenSet[str]] = {
         "clear_mark_in_out",
         "set_title_text",
         "import_into_timeline",
+        # Imports the stems and appends each onto a new audio track. Only the
+        # apply call (preview=false) mutates; is_preview_only keeps the default
+        # preview call from archiving a version.
+        "film_stems_return",
     }),
     "timeline_markers": frozenset({
         "add",
@@ -348,6 +353,10 @@ DRY_RUN_DEFAULT_TRUE_ACTIONS: frozenset = frozenset({
     ("timeline", "ripple_insert"),
 })
 
+# Actions whose plan-only flag is `preview` rather than `dry_run` are listed
+# in execution_lifecycle.PREVIEW_DEFAULT_TRUE_ACTIONS, so the risk rating and
+# the archive decision read one table.
+
 
 # ── Native dry-run allowlist ────────────────────────────────────────────────
 #
@@ -458,6 +467,8 @@ def _payload_is_plan_only(
     tool_name: str, action: str, params: Optional[Dict[str, Any]],
 ) -> bool:
     """True iff this call only produces a plan and mutates nothing."""
+    if is_preview_only(tool_name, action, params):
+        return True
     dry_run = explicit_bool_param(params, "dry_run", "dryRun")
     if (tool_name, action) in NATIVE_DRY_RUN_ACTIONS and dry_run is True:
         return True
