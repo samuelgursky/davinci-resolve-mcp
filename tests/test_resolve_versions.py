@@ -77,7 +77,7 @@ class AvailabilityTest(unittest.TestCase):
         measured = availability("Resolve.GetFairlightPresets", "21.0.4")
         self.assertEqual(measured["source"], "measured")
 
-        reported = availability("Timeline.GetSelectedClips", "19.1.3.7")
+        reported = availability("MediaPoolItem.GetTranscription", "19.1.3.7")
         self.assertEqual(reported["source"], "reported")
 
     def test_unparseable_live_version_is_unknown_not_unavailable(self):

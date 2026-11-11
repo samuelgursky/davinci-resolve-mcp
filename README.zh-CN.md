@@ -234,9 +234,9 @@ DRX 调色写入**针对 Resolve Studio 做过实机校准**：调色参数默�
 | Advanced（离线）工具 | **18**——.drp/.drt/.drx + 数据库创作，无需 Resolve 运行 |
 | 内核 action | 9 个复合工具下 **136** 个带护栏的工作流 action |
 | API 方法覆盖 | **361/361**（100%） |
-| 实机测试方法数 | **338/361**（93.6%） |
-| 实机测试通过率 | **338/338**（100%） |
-| 测试环境 | DaVinci Resolve 19.1.3 Studio + 20.3.2 Studio + 21.0.2 Studio + 21.0.3 **免费版**（经内置桥接） |
+| 实机测试方法数 | **349/361**（96.7%） |
+| 实机测试通过率 | **349/349**（100%） |
+| 测试环境 | DaVinci Resolve 19.1.3 Studio + 20.3.2 Studio + 21.0.2 Studio + 21.0.3 与 21.0.4 **免费版**（经内置桥接） |
 
 逐方法状态见 [API 覆盖与测试结果](docs/reference/api-coverage.md)。当前工作流支持见 [内核 action 覆盖](docs/kernels/README.md)。
 
