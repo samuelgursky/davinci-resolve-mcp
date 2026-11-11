@@ -217,6 +217,11 @@ The open-source servers are complete and fully functional on their own.
 
 ## What You Can Do
 
+For scoring to picture, the [Resolve / Live film workflow](docs/guides/film-workflow.md)
+adds picture/cue baselines, change reports, verified new-track stem return and
+evidence-based handoff preflight. It preserves source media and reports missing
+calibration or delivery evidence explicitly.
+
 ```text
 "List all projects and open the one called 'My Film'"
 "Create a timeline called 'Assembly Cut' from all clips in the current bin"

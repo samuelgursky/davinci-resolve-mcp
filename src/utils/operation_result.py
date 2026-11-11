@@ -110,6 +110,20 @@ def normalize_status(raw: Any) -> str:
     if raw.get("status") == "confirmation_required" or raw.get("confirmation_required") is True:
         return "blocked"
 
+    # These film schemas define report outcomes, including partial mutations
+    # accompanied by an error. Do not infer these meanings for other schemas.
+    if raw.get("schema") == "film-preflight/v1":
+        film_statuses = {
+            "failed": "failed", "incomplete": "blocked",
+            "warnings": "partial", "passed": "success",
+        }
+        status = raw.get("status")
+        if isinstance(status, str) and status in film_statuses:
+            return film_statuses[status]
+    if (raw.get("schema") == "film-stem-return/v1"
+            and raw.get("status") == "partial_failure"):
+        return "partial"
+
     if raw.get("error"):
         return "failed"
     if raw.get("success") is False:

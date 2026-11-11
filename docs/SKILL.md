@@ -1887,6 +1887,21 @@ helpers:
 
 **`timeline_markers`** — Markers and playhead on the current timeline.
 
+`export_cue_sheet(color?)` returns read-only `film-cues/v1` picture cues with
+relative integer frames, rational frame rate, seconds and production metadata.
+Use it for Ableton scoring handoff; never add the timeline's absolute start frame
+to the cue offsets. See `docs/guides/film-cues.md` for the interchange contract.
+
+`compare_cue_sheets(before, after, identity_map?, before_snapshot?, after_snapshot?)` compares supplied film cue
+documents offline. Positional marker IDs are not stable identities; no score
+movement is performed. On `timeline`, `film_snapshot` captures a picture baseline,
+`film_stems_return` previews or verifies a new-track import from film-stems/v1,
+and `film_preflight` combines picture, media, stem, saved-tempo, calibration and
+loudness checks without treating unknowns as passes. See
+`docs/guides/film-workflow.md` and `docs/guides/film-picture-changes.md`.
+Supply both snapshots to include conservative cue impact from changed video
+structure, including picture edits beneath unchanged cue markers.
+
 Key actions: `add(frame|frame_id|timecode?, color?, name?, note?, duration?)`, `get_all`,
 `get_current_timecode`, `set_current_timecode(timecode)`,
 `get_current_video_item`, `get_thumbnail`, `get_thumbnail_image`
