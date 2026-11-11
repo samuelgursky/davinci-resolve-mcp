@@ -457,7 +457,7 @@ class OperationSurfaceTests(unittest.TestCase):
         from src.utils import resolve_bridge_ops as rbo
         inside = os.path.join(self.ROOT, "b.mov")
         open(inside, "w", encoding="utf-8").close()
-        root = os.path.abspath(os.sep)
+        root = Path(self.ROOT).anchor
         ops = rbo.ResolveOperations(
             FakeResolve(clips=[("inside", inside)]), media_roots=[root], output_roots=[root],
         )
