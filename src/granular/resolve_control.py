@@ -772,42 +772,56 @@ _PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(_
 
 
 @mcp.tool(annotations=READ_ONLY_TOOL)
-def search_resolve_api(pattern: str, kind: str = "all", limit: int = 50) -> Dict[str, Any]:
-    """Search the shipped Resolve 21.1 typed API stub. Needs no connection.
+def search_resolve_api(pattern: str, kind: str = "all", limit: int = 50,
+                       source: str = "auto") -> Dict[str, Any]:
+    """Search the Resolve typed API stub. Needs no connection.
 
     `api_truth` answers what is broken; this answers what exists. Each hit also
     reports whether THIS server references the method and in which files, so a
-    search doubles as a parity check.
+    search doubles as a parity check. The reply names the stub that answered
+    (`stub`, `stub_source`), because "absent" from an outdated inventory is not
+    the same as absent from the running build.
 
     Args:
         pattern: Case-insensitive regular expression, e.g. "marker" or "(Get|Set)Setting".
         kind: 'all' (default), 'methods', or 'options' for TypedDicts only.
         limit: Maximum results per section (capped at 200).
+        source: 'auto' (default) prefers the stub the installed Resolve ships and
+            falls back to the shipped copy; 'shipped' forces the pinned file;
+            'installed' refuses when no install is found.
     """
     try:
-        return typed_api_search.search(_PROJECT_DIR, pattern, kind=kind, limit=limit)
+        return typed_api_search.search(_PROJECT_DIR, pattern, kind=kind, limit=limit,
+                                       source=source)
     except typed_api_search.TypedApiError as exc:
         return {"error": str(exc)}
 
 
 @mcp.tool(annotations=READ_ONLY_TOOL)
-def describe_resolve_api(symbol: str) -> Dict[str, Any]:
+def describe_resolve_api(symbol: str, source: str = "auto") -> Dict[str, Any]:
     """Full typed detail for one Resolve API symbol. Needs no connection.
 
     Args:
         symbol: 'Class.Method' (e.g. "Project.GetName"), a bare method name when
             it is unambiguous, or a TypedDict name (e.g. "RenderSettings").
+        source: 'auto' (default) prefers the installed build's stub; 'shipped'
+            forces the pinned copy; 'installed' refuses without an install.
     """
     try:
-        return typed_api_search.describe(_PROJECT_DIR, symbol)
+        return typed_api_search.describe(_PROJECT_DIR, symbol, source=source)
     except typed_api_search.TypedApiError as exc:
         return {"error": str(exc)}
 
 
 @mcp.tool(annotations=READ_ONLY_TOOL)
-def get_resolve_api_surface() -> Dict[str, Any]:
-    """Counts and object list for the shipped typed stub. Needs no connection."""
+def get_resolve_api_surface(source: str = "auto") -> Dict[str, Any]:
+    """Counts and object list for the typed stub. Needs no connection.
+
+    Args:
+        source: 'auto' (default) prefers the installed build's stub; 'shipped'
+            forces the pinned copy; 'installed' refuses without an install.
+    """
     try:
-        return typed_api_search.summary(_PROJECT_DIR)
+        return typed_api_search.summary(_PROJECT_DIR, source=source)
     except typed_api_search.TypedApiError as exc:
         return {"error": str(exc)}

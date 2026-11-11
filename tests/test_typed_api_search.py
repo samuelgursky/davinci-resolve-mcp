@@ -18,15 +18,32 @@ from src.utils import typed_api_search as api
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+# These tests assert the pinned 21.1 inventory, so they must read the copy in
+# docs/reference. The default is "auto", which prefers whatever stub the
+# installed Resolve ships — on a 21.2 machine that is a different inventory
+# (530 methods, not 410) and these counts would flip without anything being
+# wrong. Pinning "shipped" keeps the assertion about the file, not the machine.
+def _search(pattern, **kwargs):
+    return api.search(PROJECT_DIR, pattern, source="shipped", **kwargs)
+
+
+def _describe(symbol):
+    return api.describe(PROJECT_DIR, symbol, source="shipped")
+
+
+def _summary():
+    return api.summary(PROJECT_DIR, source="shipped")
+
+
 class SurfaceTests(unittest.TestCase):
     def test_stub_matches_the_published_21_1_inventory(self):
-        out = api.summary(PROJECT_DIR)
+        out = _summary()
         self.assertEqual(out["methods"], 410)
         self.assertEqual(out["option_types"], 46)
         self.assertEqual(out["option_fields"], 513)
 
     def test_every_scriptable_object_is_represented(self):
-        objects = api.summary(PROJECT_DIR)["objects"]
+        objects = _summary()["objects"]
         for expected in ("Resolve", "ProjectManager", "Project", "MediaPool",
                          "MediaPoolItem", "MediaStorage", "Timeline",
                          "TimelineItem", "Folder", "Graph", "Gallery"):
@@ -35,37 +52,37 @@ class SurfaceTests(unittest.TestCase):
 
 class SearchTests(unittest.TestCase):
     def test_exact_method_lookup_returns_the_21_1_signature(self):
-        out = api.search(PROJECT_DIR, "SetHighPriority")
+        out = _search("SetHighPriority")
         self.assertEqual(out["total_matches"], 1)
         row = out["methods"][0]
         self.assertEqual(row["symbol"], "Resolve.SetHighPriority")
         self.assertIn("highPriority: bool", row["signatures"][0])
 
     def test_search_is_case_insensitive_and_regex_capable(self):
-        loose = api.search(PROJECT_DIR, "sethighpriority")
+        loose = _search("sethighpriority")
         self.assertEqual(loose["total_matches"], 1)
-        grouped = api.search(PROJECT_DIR, r"^Resolve\.(Get|Set)HighPriority$")
+        grouped = _search(r"^Resolve\.(Get|Set)HighPriority$")
         self.assertEqual(grouped["total_matches"], 0)  # matched against text, not anchored keys
-        alternation = api.search(PROJECT_DIR, "GetCurrentPage|SetHighPriority", kind="methods")
+        alternation = _search("GetCurrentPage|SetHighPriority", kind="methods")
         self.assertGreaterEqual(alternation["total_matches"], 2)
 
     def test_kind_filters_each_section(self):
-        methods_only = api.search(PROJECT_DIR, "render", kind="methods")
+        methods_only = _search("render", kind="methods")
         self.assertEqual(methods_only["option_types"], [])
-        options_only = api.search(PROJECT_DIR, "render", kind="options")
+        options_only = _search("render", kind="options")
         self.assertEqual(options_only["methods"], [])
 
     def test_typed_dict_name_returns_all_of_its_fields(self):
-        out = api.search(PROJECT_DIR, "^AutoCaptionSettings$", kind="options")
+        out = _search("^AutoCaptionSettings$", kind="options")
         self.assertEqual(len(out["option_types"]), 1)
         self.assertEqual(len(out["option_types"][0]["matched_fields"]), 5)
 
     def test_descriptions_are_searchable(self):
-        out = api.search(PROJECT_DIR, "script execution priority", kind="methods")
+        out = _search("script execution priority", kind="methods")
         self.assertEqual([r["symbol"] for r in out["methods"]], ["Resolve.SetHighPriority"])
 
     def test_limit_is_applied_and_truncation_is_declared(self):
-        out = api.search(PROJECT_DIR, "Get", kind="methods", limit=3)
+        out = _search("Get", kind="methods", limit=3)
         self.assertEqual(len(out["methods"]), 3)
         self.assertTrue(out["truncated"])
         self.assertGreater(out["total_matches"], 3)
@@ -73,22 +90,22 @@ class SearchTests(unittest.TestCase):
     def test_bad_input_is_refused(self):
         for bad in ("", "   ", None):
             with self.assertRaises(api.TypedApiError):
-                api.search(PROJECT_DIR, bad)
+                _search(bad)
         with self.assertRaises(api.TypedApiError):
-            api.search(PROJECT_DIR, "valid", kind="nonsense")
+            _search("valid", kind="nonsense")
         with self.assertRaises(api.TypedApiError):
-            api.search(PROJECT_DIR, "unbalanced(")
+            _search("unbalanced(")
 
 
 class CoverageFlagTests(unittest.TestCase):
     def test_a_method_this_server_calls_is_flagged_with_its_files(self):
-        row = api.describe(PROJECT_DIR, "MediaPool.AppendToTimeline")
+        row = _describe("MediaPool.AppendToTimeline")
         self.assertTrue(row["referenced_in_this_server"])
         self.assertTrue(any(path.startswith("src/") for path in row["source_files"]))
 
     def test_the_flag_reflects_executable_syntax_not_prose(self):
         # Every flagged name must appear as real syntax somewhere under src/.
-        out = api.search(PROJECT_DIR, "Timeline", kind="methods", limit=200)
+        out = _search("Timeline", kind="methods", limit=200)
         flagged = [r for r in out["methods"] if r["referenced_in_this_server"]]
         self.assertTrue(flagged)
         for row in flagged:
@@ -97,26 +114,26 @@ class CoverageFlagTests(unittest.TestCase):
 
 class DescribeTests(unittest.TestCase):
     def test_qualified_symbol_resolves(self):
-        row = api.describe(PROJECT_DIR, "Resolve.GetCurrentPage")
+        row = _describe("Resolve.GetCurrentPage")
         self.assertEqual(row["kind"], "method")
         self.assertEqual(row["object"], "Resolve")
 
     def test_unambiguous_bare_name_resolves(self):
-        self.assertEqual(api.describe(PROJECT_DIR, "SetHighPriority")["object"], "Resolve")
+        self.assertEqual(_describe("SetHighPriority")["object"], "Resolve")
 
     def test_ambiguous_bare_name_lists_the_candidates(self):
         with self.assertRaises(api.TypedApiError) as caught:
-            api.describe(PROJECT_DIR, "GetName")
+            _describe("GetName")
         self.assertIn("more than one object", str(caught.exception))
 
     def test_typed_dict_symbol_returns_its_fields(self):
-        row = api.describe(PROJECT_DIR, "ImportOptions")
+        row = _describe("ImportOptions")
         self.assertEqual(row["kind"], "option_type")
         self.assertIn("sourceClipsFolders", row["fields"])
 
     def test_unknown_symbol_is_refused_with_guidance(self):
         with self.assertRaises(api.TypedApiError) as caught:
-            api.describe(PROJECT_DIR, "Resolve.MakeCoffee")
+            _describe("Resolve.MakeCoffee")
         self.assertIn("search", str(caught.exception))
 
 
@@ -144,9 +161,57 @@ class BothInterfacesTests(unittest.TestCase):
         self.assertIn("error", granular.search_resolve_api("unbalanced("))
 
     def test_both_work_without_a_resolve_connection(self):
-        # These read a shipped file; nothing here touches Resolve.
-        self.assertEqual(granular.get_resolve_api_surface()["methods"], 410)
-        self.assertEqual(compound.resolve_control("api_surface", {})["methods"], 410)
+        # These read a stub file; nothing here touches Resolve. The default is
+        # "auto", so the count depends on which stub answered — assert the two
+        # interfaces agree rather than pinning a number that is machine-specific.
+        g = granular.get_resolve_api_surface()
+        c = compound.resolve_control("api_surface", {})
+        self.assertGreater(g["methods"], 400)
+        self.assertEqual(g["methods"], c["methods"])
+        self.assertIn(g.get("stub_source"), ("shipped", "installed"))
+
+
+class StubSourceTests(unittest.TestCase):
+    """The inventory must say which copy answered, and "auto" must prefer live.
+
+    The shipped stub is a snapshot of the build it was pinned at. A server
+    running against a newer Resolve that still reads the shipped copy reports
+    methods that do exist as nonexistent — a wrong answer, which is worse than
+    an error. "auto" reads the installed build's stub when there is one.
+    """
+
+    def test_shipped_source_reports_the_pinned_copy(self):
+        out = _summary()
+        self.assertEqual(out["stub_source"], "shipped")
+        self.assertEqual(out["stub"], os.path.join(PROJECT_DIR, api.STUB_RELATIVE))
+
+    def test_auto_reports_a_known_source(self):
+        out = api.summary(PROJECT_DIR)
+        self.assertIn(out["stub_source"], ("shipped", "installed"))
+        self.assertTrue(os.path.isfile(out["stub"]))
+
+    def test_auto_prefers_the_installed_stub_when_one_exists(self):
+        installed = api.installed_stub_path()
+        if not installed:
+            self.skipTest("no Resolve install on this machine — nothing to prefer")
+        out = api.summary(PROJECT_DIR)
+        self.assertEqual(out["stub_source"], "installed")
+        self.assertEqual(out["stub"], installed)
+
+    def test_installed_source_refuses_without_an_install(self):
+        if api.installed_stub_path():
+            self.skipTest("this machine has an installed stub, so there is no refusal to test")
+        with self.assertRaises(api.TypedApiError) as caught:
+            api.summary(PROJECT_DIR, source="installed")
+        self.assertIn("RESOLVE_SCRIPT_API", str(caught.exception))
+
+    def test_unknown_source_is_refused(self):
+        with self.assertRaises(api.TypedApiError):
+            api.summary(PROJECT_DIR, source="whatever")
+
+    def test_search_and_describe_report_the_source_too(self):
+        for out in (_search("Multicam"), _describe("Project.GetName")):
+            self.assertEqual(out["stub_source"], "shipped")
 
 
 if __name__ == "__main__":
