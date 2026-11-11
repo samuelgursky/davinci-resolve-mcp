@@ -2,6 +2,18 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v5.2.2 — Long words in captions are no longer cut off
+
+From #360 by @goranai.
+
+### Fixed
+
+- **`edit_engine` `generate_captions` dropped the end of any word too long for one caption line.** A URL was the usual case: everything after the first `max_chars_per_line` characters was missing from the SRT and WebVTT text. The word is now cut into line-length pieces and wrapped like other text, so nothing is dropped and every line stays within the character limit. The same fix covers one transcript word with an inner no-break space that did not fit `max_lines`.
+
+### Changed
+
+- A caption block that contains such a word can now have more lines than `max_lines` (an 85-character word gives three lines). The block keeps its original timing; captions never invent timings inside a word. Blocks without an over-long word are unchanged.
+
 ## What's New in v5.2.1 — Resolve 21.0.4 calls live-tested
 
 From #359 by @Ghoul0718. The twelve Resolve 21.0.4 scripting additions were guarded and unit-tested but had never been run live here, for want of a 21.0.4 build. This release records a live run on free 21.0.4.5 through the in-app bridge. No server behaviour changes.
