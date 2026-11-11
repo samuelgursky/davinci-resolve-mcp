@@ -2,6 +2,27 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v5.2.0 — Film scoring handoff and stem return
+
+From #358 by @veridian69. A read-mostly workflow for handing picture to a composer and checking what comes back. Guides: `docs/guides/film-workflow.md`, `docs/guides/film-cues.md`, `docs/guides/film-picture-changes.md`.
+
+### Added
+
+- **Cue sheets.** `timeline_markers(action="export_cue_sheet")` returns read-only `film-cues/v1` cues with relative integer frames, a rational frame rate, seconds and production metadata. `compare_cue_sheets` diffs two cue documents offline.
+- **Picture baseline.** `timeline(action="film_snapshot")` captures a read-only structural snapshot and picture fingerprint. Given before and after snapshots, `compare_cue_sheets` reports the cues that overlap changed video.
+- **Stem return.** `timeline(action="film_stems_return")` previews by default. With `preview=false`, plus the `timeline_id` and `fingerprint` from the preview, it verifies a `film-stems/v1` package (PCM 24-bit WAV headers, sample counts, SHA-256) and imports each stem onto a new audio track, checking every placement against the timeline. A stale preview refuses. Existing tracks are never replaced and nothing is rolled back automatically.
+- **Preflight.** `timeline(action="film_preflight")` combines picture, media, stem, tempo, calibration and loudness checks, and reports missing evidence as unknown rather than passed.
+
+### Fixed on landing
+
+- **Stems imported earlier went undetected on macOS.** Existing stems are now matched by resolved path, so a delivery folder under `/tmp`, `/var` or another symlink is recognised and a second import is refused.
+- **Stem return had no risk rating.** The preview is a low-risk read and archives nothing. The apply call is rated medium risk on the timeline and archives the timeline first, like other timeline edits.
+- **Archiving left the Archive bin current.** The archive taken before every destructive edit now puts the previous media pool bin back, so media imported by the edit that follows no longer lands in Archive.
+
+### Not verified
+
+- The live film validation scripts (`tests/live_film_*_validation.py`) were not run against Resolve. Everything above is covered by unit tests against fakes.
+
 ## What's New in v5.1.0 — API search reads the installed Resolve's own stub
 
 Completes #351, from #356 by @CaptRauti. v5.0.6 put the typed stub back in the npm package; this release stops it answering for builds newer than itself.
