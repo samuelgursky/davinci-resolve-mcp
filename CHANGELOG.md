@@ -2,6 +2,18 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v5.0.8 — A bridge test no longer fails when the repository and the temp folder are on different drives
+
+Fixes the second half of #352, from #357 by @0x-70da.
+
+### Fixed
+
+- **`test_a_filesystem_root_media_root_contains_its_files` depended on the drive of the current folder.** The test took its allowed root from `os.path.abspath(os.sep)`, which on Windows is the root of the current working directory's drive. Its fixture comes from `tempfile.mkdtemp()`. With the repository on `E:\` and `%TEMP%` on `C:\`, the server correctly rejected the fixture as outside the root and the test failed. The root now comes from the fixture itself (`Path(self.ROOT).anchor`).
+
+### Not changed
+
+- Test-only change; no server behavior changed, so no live Resolve run. The contributor confirmed the failure and the fix on the affected Windows setup.
+
 ## What's New in v5.0.7 — No logging error on Windows consoles with a legacy code page
 
 Fixes the first half of #352, from #355 by @CaptRauti.
