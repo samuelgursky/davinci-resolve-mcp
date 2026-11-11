@@ -146,7 +146,15 @@ def build_blocks(
         text = " ".join(_clean(w) for w in current)
         lines = _wrap(text, max_chars_per_line, max_lines)
         if lines is None:
-            lines = [text[:max_chars_per_line]]
+            # One word that will not fit: longer than the line cap (a URL,
+            # say) or more lines than max_lines. Split it into line-cap pieces
+            # rather than cutting it off.
+            pieces = [
+                token[i:i + max_chars_per_line]
+                for token in text.split()
+                for i in range(0, len(token), max_chars_per_line)
+            ]
+            lines = _wrap(" ".join(pieces), max_chars_per_line, len(pieces))
         blocks.append({
             "start_seconds": _word_time(current[0], "start_seconds", "start"),
             "end_seconds": (
