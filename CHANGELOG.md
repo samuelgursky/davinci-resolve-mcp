@@ -2,6 +2,23 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v5.1.0 — API search reads the installed Resolve's own stub
+
+Completes #351, from #356 by @CaptRauti. v5.0.6 put the typed stub back in the npm package; this release stops it answering for builds newer than itself.
+
+### Added
+
+- **`source` on `search_api`, `describe_api` and `api_surface`** (and the granular `search_resolve_api`, `describe_resolve_api`, `get_resolve_api_surface`). `auto`, the default, reads the `DaVinciResolveScript.pyi` that Resolve installs next to its scripting API and falls back to the copy shipped in `docs/reference`. `shipped` always reads the shipped copy. `installed` refuses rather than falling back. `RESOLVE_SCRIPT_API` still overrides the platform default location.
+- **Every reply says which stub answered**: `stub` (the absolute path) and `stub_source` (`installed` or `shipped`). A "symbol not found" error now names the stub that answered and suggests `source='installed'`.
+
+### Changed
+
+- **Results can now differ between machines.** On a Resolve that installs a newer stub, the default answers from that build. The contributor measured Studio 21.2.0.6 on Windows: 530 methods against the shipped 410, including `ExportThumbnails`, the AutoColor calls and `GetCDL`/`SetCDL`, which the shipped copy reports as absent. Pass `source='shipped'` for the pinned 21.1 inventory.
+
+### Not changed
+
+- The shipped stub is still the 21.1 revision, and the 21.1 inventory tests now pin `source='shipped'`. On this machine (Resolve Studio 19.1.3.7, which installs no stub) `auto` falls back to the shipped copy; the installed path was measured by the contributor on 21.2.0.6 only. No Resolve API is called, so no live Resolve run.
+
 ## What's New in v5.0.8 — A bridge test no longer fails when the repository and the temp folder are on different drives
 
 Fixes the second half of #352, from #357 by @0x-70da.

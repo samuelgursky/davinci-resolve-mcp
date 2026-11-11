@@ -35,22 +35,34 @@ Compound `resolve_control`, none of which need a Resolve connection:
   guessing.
 - `api_surface()` — counts and the object list.
 
+All three take `source` (v5.1.0, #356): `auto` (the default) reads the stub the
+installed Resolve writes next to its scripting API and falls back to the copy
+shipped in `docs/reference`; `shipped` always reads the shipped copy;
+`installed` refuses instead of falling back. Every reply carries `stub` (the
+path that answered) and `stub_source` (`installed` or `shipped`).
+
 Granular twins: `search_resolve_api`, `describe_resolve_api`,
 `get_resolve_api_surface`. Tool count 384 → 387. The granular tools carry the read-only annotation, since
 for the granular server the MCP annotation is the signal a client reads.
 
 ## Self-consistency
 
-The parser reports **410 methods, 46 TypedDicts, 513 fields**, independently
-matching the inventory published in `resolve-211-typed-api.md` and the
-disposition ledgers built during the 21.1 audit. That agreement is asserted in
-`tests/test_typed_api_search.py`, so a stub refresh that changes the surface
-will fail the suite rather than drift quietly.
+On the shipped stub the parser reports **410 methods, 46 TypedDicts, 513
+fields**, independently matching the inventory published in
+`resolve-211-typed-api.md` and the disposition ledgers built during the 21.1
+audit. That agreement is asserted in `tests/test_typed_api_search.py` with
+`source='shipped'`, so a stub refresh that changes the surface will fail the
+suite rather than drift quietly, and the assertion does not depend on which
+Resolve is installed on the test machine.
 
 ## Scope
 
-This reads the stub shipped in this repository; it does not query a running
-Resolve, and it will report a missing stub rather than guessing. It therefore
-describes the API of the Resolve version whose stub is checked in — 21.1.0.14 —
-not whatever build happens to be installed. Refreshing the stub is the existing
-documented process in `resolve-211-typed-api.md`.
+None of this queries a running Resolve; it parses a stub file, and it reports a
+missing stub rather than guessing. With the default `auto`, a machine whose
+Resolve installs a stub answers from that build. The contributor of #356
+measured Studio 21.2.0.6 on Windows at 530 methods against the shipped 410. A
+Resolve that installs no stub, such as 19.x, falls back to the shipped copy,
+which describes 21.1.0.14. Results can therefore differ between machines;
+`stub_source` says which inventory answered, and `source='shipped'` gives the
+pinned one. Refreshing the shipped stub is the existing documented process in
+`resolve-211-typed-api.md`.
