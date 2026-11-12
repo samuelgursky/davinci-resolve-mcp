@@ -290,11 +290,22 @@ class BridgeTransport:
 
 
 def _encode_argument(value: Any) -> Any:
-    """Send a proxy back as the handle it stands for."""
+    """Send a proxy back as the handle it stands for.
+
+    A dict whose keys are not all strings goes as ``{"__pairs__": [[k, v], ...]}``.
+    JSON object keys are always strings, so ``{resolve.AUDIO_SYNC_MODE: ...}``
+    would otherwise reach Resolve keyed by ``"1.0"`` instead of the constant, and
+    Resolve ignores keys it does not recognise (AutoSyncAudio returned False on
+    21.0.4.5 for exactly this reason). The bridge rebuilds the dict with the
+    original keys. A dict that itself has a ``"__pairs__"`` key goes the same way,
+    so the marker is never ambiguous on the wire.
+    """
     if isinstance(value, BridgeProxy):
         return {"__handle__": value._handle}
     if isinstance(value, dict):
-        return {k: _encode_argument(v) for k, v in value.items()}
+        if "__pairs__" not in value and all(isinstance(k, str) for k in value):
+            return {k: _encode_argument(v) for k, v in value.items()}
+        return {"__pairs__": [[k, _encode_argument(v)] for k, v in value.items()]}
     if isinstance(value, (list, tuple)):
         return [_encode_argument(v) for v in value]
     return value

@@ -372,6 +372,9 @@ class FakeResolve:
 
     # media pool
     def GetRootFolder(self): return _FakeFolder(self._clips)
+    def AutoSyncAudio(self, clips, settings):
+        self.last_sync_settings = settings
+        return True
 
 
 class _FakeTimeline:
@@ -1620,6 +1623,44 @@ class ProxyTests(unittest.TestCase):
         self.assertIsInstance(formats, dict)
         self.assertEqual(formats.get("QuickTime"), "mov")
         self.assertIn("Alpha", self.resolve.GetProjectManager().GetProjectListInCurrentFolder())
+
+    def test_dict_arguments_keep_number_keys(self) -> None:
+        """Resolve's settings dicts are keyed by its constants, which are numbers.
+
+        JSON object keys are strings, so {resolve.AUDIO_SYNC_MODE: ...} used to
+        arrive keyed by "1.0". Resolve ignored it and AutoSyncAudio returned
+        False over the bridge (free 21.0.4.5).
+        """
+        media_pool = self.resolve.GetProjectManager().GetCurrentProject().GetMediaPool()
+        settings = {1.0: 2.0, 3: "auto", "plain": True}
+        self.assertTrue(media_pool.AutoSyncAudio([], settings))
+        received = self.fake.last_sync_settings
+        self.assertEqual(received, settings)
+        self.assertEqual({type(k) for k in received}, {float, int, str})
+
+    def test_string_keyed_dicts_go_as_plain_json_objects(self) -> None:
+        encoded = self.rbc._encode_argument({"a": 1, "b": {"c": 2}})
+        self.assertEqual(encoded, {"a": 1, "b": {"c": 2}})
+        self.assertEqual(self.rbc._encode_argument({1.0: {2: 3}}),
+                         {"__pairs__": [[1.0, {"__pairs__": [[2, 3]]}]]})
+
+    def test_bool_none_and_marker_keys_survive_the_bridge(self) -> None:
+        media_pool = self.resolve.GetProjectManager().GetCurrentProject().GetMediaPool()
+        for settings in ({True: "t", None: "n"}, {"__pairs__": [[1, 2]]}, {2: self.resolve}):
+            with self.subTest(settings=settings):
+                media_pool.AutoSyncAudio([], settings)
+                received = self.fake.last_sync_settings
+                if 2 in settings:  # a proxy value arrives as the live object
+                    self.assertIs(received[2], self.fake)
+                else:
+                    self.assertEqual(received, settings)
+
+    def test_malformed_pairs_are_refused(self) -> None:
+        for bad in ({"__pairs__": [[1]]}, {"__pairs__": [[[1], 2]]}, {"__pairs__": [[{"a": 1}, 2]]},
+                    {"__pairs__": ["x"]}, {"__pairs__": "x"}, {"__pairs__": [], "other": 1}):
+            with self.subTest(value=bad):
+                with self.assertRaises(self.rbo.OperationError):
+                    self.ops._decode(bad)
 
     def test_false_is_passed_through_not_raised(self) -> None:
         """Transparency includes the ugly parts.
