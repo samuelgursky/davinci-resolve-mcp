@@ -9609,6 +9609,29 @@ def _probe_interchange_roundtrip(proj, mp, tl, p: Dict[str, Any]):
     import_path = export_result.get("primary_file") or export_result.get("path") or path
     import_options = dict(p.get("import_options") or {})
     requested_key = str(spec["requested"]).lower()
+    # Resolve makes an imported timeline current, and deleting it leaves Resolve
+    # to pick another (in practice the last in the list). The probe only reads,
+    # so it puts back whatever was current when it started, and proves it, before
+    # every return from here on (#364).
+    try:
+        original_current = proj.GetCurrentTimeline()
+    except Exception:
+        original_current = None
+
+    def _restore_current():
+        if original_current is None:
+            return {"restored": None, "reason": "no current timeline when the probe started"}
+        ok, detail = _resolve_writes.set_current_timeline(proj, original_current)
+        if ok:
+            return {"restored": True}
+        logger.warning("probe_interchange_roundtrip could not restore the current timeline: %s", detail)
+        return {"restored": False,
+                "error": ("The round-trip probe could not make the timeline that was current "
+                          f"when it started ({detail.get('wanted_timeline_id')!r}) current again; "
+                          f"the current timeline is {detail.get('current_timeline_id')!r}. "
+                          "Set it before any call that works on the current timeline."),
+                "state": detail}
+
     if "drt" not in requested_key:
         import_options.setdefault("timelineName", p.get("imported_timeline_name", f"{tl.GetName()} {spec['requested']} Roundtrip"))
         import_options.setdefault("importSourceClips", _coerce_bool(p.get("import_source_clips"), False))
@@ -9622,7 +9645,8 @@ def _probe_interchange_roundtrip(proj, mp, tl, p: Dict[str, Any]):
         },
     )
     if import_result.get("error") or not import_result.get("success"):
-        return {"success": False, "stage": "import", "export": export_result, "import": import_result}
+        return {"success": False, "stage": "import", "export": export_result, "import": import_result,
+                "current_timeline": _restore_current()}
     imported_tl = None
     if import_result.get("id"):
         imported_tl, _ = _timeline_by_selector(proj, {"right_timeline_id": import_result["id"]}, prefix="right")
@@ -9640,6 +9664,7 @@ def _probe_interchange_roundtrip(proj, mp, tl, p: Dict[str, Any]):
         "import": import_result,
         "comparison": comparison,
         "cleanup": cleanup_result,
+        "current_timeline": _restore_current(),
     }
 
 
@@ -27897,7 +27922,9 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         first with the advanced MCP drt.list_sequences / editorial.list_sequences to get
         [{id, name, eventCount}] for a "which sequence?" picker. Requires Resolve open.
       compare_timelines(right_timeline_id?|right_timeline_index?|left_snapshot?, right_snapshot?) -> {match, differences}
-      probe_interchange_roundtrip(format?, output_dir?, cleanup_imported?) -> {success, export, import, comparison}
+      probe_interchange_roundtrip(format?, output_dir?, cleanup_imported?) -> {success, export, import, comparison, cleanup, current_timeline}
+        Puts back the timeline that was current when it started (the import makes
+        its copy current); current_timeline.restored says whether that took.
       detect_missing_media(sanitized?|sanitize_paths?, omit_raw_paths?) -> {missing, missing_count, diagnosis}
       build_relink_plan(search_roots, max_depth?, max_seconds?, max_files_scanned?, skip_search_when_volume_missing?, sanitized?) -> {candidates, diagnosis}
       conform_boundary_report(...) -> {capabilities, timeline, gaps_overlaps, source_ranges, missing_media}

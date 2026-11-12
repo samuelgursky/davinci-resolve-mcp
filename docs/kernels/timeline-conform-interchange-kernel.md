@@ -34,7 +34,7 @@ All actions are exposed through `timeline`.
 | `export_timeline_checked` | Resolve export aliases and guard timeline export paths to temp locations by default. |
 | `import_timeline_checked` | Guard timeline imports from temp locations and normalize import options. |
 | `compare_timelines` | Compare current timeline to another timeline or two supplied snapshots. |
-| `probe_interchange_roundtrip` | Export, import, compare, and optionally delete the imported timeline. |
+| `probe_interchange_roundtrip` | Export, import, compare, and optionally delete the imported timeline, then make the starting timeline current again. |
 | `detect_missing_media` | Detect missing/offline media using Resolve status fields and file-path existence, with a sanitized diagnosis block for mounted-volume/folder/file failure modes. |
 | `build_relink_plan` | Read-only, bounded search-root scan for relink candidates by missing file basename. Skips broad scans by default when the source volume is not mounted. |
 | `conform_boundary_report` | Return capabilities, timeline structure, gaps/overlaps, source ranges, and missing-media summary. |
