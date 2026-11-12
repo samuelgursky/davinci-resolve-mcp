@@ -2,6 +2,19 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v5.2.6 — Preset exports report the file Resolve writes
+
+From #362 by @Ghoul0718.
+
+### Fixed
+
+- **Render and burn-in preset exports named the wrong file.** `ExportRenderPreset(presetName, exportPath)` and `ExportBurnInPreset` treat `exportPath` as a folder: Resolve creates it and writes `<presetName>.xml` inside, so a path ending in `.xml` becomes a folder of that name (measured on free 21.0.4.5, macOS). The tools echoed the path back as if it were the file, and the import tools could not read it. `export_render_preset` and `export_burn_in_preset` now return `export_file`, and `render_presets` `export_render` / `export_burnin` return `file`: the `.xml` to give the matching import. A failed export returns no file. The `projectlevel.export_burn_in_preset` probe checks the written `.xml` instead of the folder.
+- On landing, the helper was made to check what is on disk: if a build writes the exact path it is given, that path is reported instead. Only the folder behaviour has been measured.
+
+### Not verified here
+
+- The folder behaviour is the contributor's measurement on free 21.0.4.5. This machine runs Studio 19.1.3.7 and did not measure it. `ExportLayoutPreset` and `ExportUserPreferencesPreset` wrote the exact file on the same build and are unchanged.
+
 ## What's New in v5.2.5 — The bridge keeps number keys in settings dicts
 
 From #361 by @Ghoul0718.
