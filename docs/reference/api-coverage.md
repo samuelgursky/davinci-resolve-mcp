@@ -139,7 +139,7 @@ source, these summaries are downstream of it:
 | Phase 5 | 6/6 | 100% | Scene cuts, subtitles from audio, graph node cache/tools/enable |
 | Resolve 20 delta | 12/12 | 100% | Resolve 20.0-20.2.2 scripting additions live-tested on 20.3.2 |
 | Resolve 21 delta | 7/7 | 100% | Resolve 21.0 additions that could be executed, live-tested on Studio 21.0.2.4 (`tests/live_resolve21_validation.py`). The other 6 need an AI Extras pack or are unsafe to run — counted as untested, not as passes |
-| Resolve 21.0.4 delta | 11/11 | 100% | Resolve 21.0.4 additions live-tested on free 21.0.4.5 through the in-app bridge (`tests/live_resolve2104_validation.py`). `DeleteBurnInPreset` is tested on a missing name only (⚠️). `LoadUserPreferencesPreset` swaps the user's global preferences, so it is not executed and stays untested |
+| Resolve 21.0.4 delta | 11/11 | 100% | Resolve 21.0.4 additions live-tested on free 21.0.4.5 through the in-app bridge (`tests/live_resolve2104_validation.py`; `DeleteBurnInPreset` on an existing preset in `tests/live_preset_fixture_validation.py`). `LoadUserPreferencesPreset` swaps the user's global preferences, so it is not executed and stays untested |
 | **Total** | **349/349** | **100%** | **96.7% of the 361 covered methods tested live** |
 
 #### Resolve 21 delta detail
@@ -187,7 +187,8 @@ close them. Eleven of the twelve 21.0.4 rows are now live-tested on free 21.0.4.
 through the in-app bridge (`tests/live_resolve2104_validation.py`); they had
 carried contributor reports from Studio 21.0.4.5 (issue #131, issues #135–#138,
 PR #139), and the live run agrees with them. `DeleteBurnInPreset` is tested on a
-missing name only, because no scripting API creates a burn-in preset to delete.
+missing name and on a preset saved by hand, because no scripting API creates a
+burn-in preset to delete.
 `LoadUserPreferencesPreset` stays untested: it swaps the user's global
 preferences for the session, so it is not executed. Likewise
 `DisableBackgroundTasksForCurrentResolveSession` is a
@@ -223,20 +224,20 @@ Every method in the DaVinci Resolve Scripting API and its test status. Methods a
 | 10 | `UpdateLayoutPreset(presetName)` | ✅ | Updates existing preset |
 | 11 | `ExportLayoutPreset(presetName, presetFilePath)` | ✅ | Exports preset to file |
 | 12 | `DeleteLayoutPreset(presetName)` | ✅ | Deletes preset |
-| 13 | `SaveLayoutPreset(presetName)` | ⚠️ | API accepts; returns `False` when preset name conflicts |
+| 13 | `SaveLayoutPreset(presetName)` | ✅ | Saves a fresh name (listed by `GetLayoutPresetList` afterwards); returns `False` for an existing name and does not list it twice. Live on free 21.0.4.5 through the in-app bridge (`tests/live_preset_fixture_validation.py`) |
 | 14 | `ImportLayoutPreset(presetFilePath, presetName)` | ✅ | Imports preset from file |
 | 15 | `Quit()` | ✅ | Quits DaVinci Resolve |
-| 16 | `ImportRenderPreset(presetPath)` | ⚠️ | API accepts; needs valid preset file |
-| 17 | `ExportRenderPreset(presetName, exportPath)` | ⚠️ | API accepts; needs valid preset name |
-| 18 | `ImportBurnInPreset(presetPath)` | ⚠️ | API accepts; needs valid preset file |
-| 19 | `ExportBurnInPreset(presetName, exportPath)` | ⚠️ | API accepts; needs valid preset name |
+| 16 | `ImportRenderPreset(presetPath)` | ✅ | Takes the exported `.xml` file; after `DeleteRenderPreset` the import restores the preset under its exported name. Live on free 21.0.4.5 through the in-app bridge (`tests/live_preset_fixture_validation.py`) |
+| 17 | `ExportRenderPreset(presetName, exportPath)` | ✅ | **`exportPath` is a folder**: Resolve creates it and writes `<presetName>.xml` inside (a path ending in `.xml` becomes a folder of that name). Live on free 21.0.4.5 through the in-app bridge (`tests/live_preset_fixture_validation.py`) |
+| 18 | `ImportBurnInPreset(presetPath)` | ✅ | Takes the exported `.xml` file; after `DeleteBurnInPreset` the import restores the preset. Live on free 21.0.4.5 through the in-app bridge, on a preset saved by hand in Workspace > Data Burn-In (`tests/live_preset_fixture_validation.py --burnin-wait`) |
+| 19 | `ExportBurnInPreset(presetName, exportPath)` | ✅ | **`exportPath` is a folder**, as for `ExportRenderPreset`: Resolve writes `<presetName>.xml` inside it. Live on free 21.0.4.5 through the in-app bridge (`tests/live_preset_fixture_validation.py --burnin-wait`) |
 | 20 | `GetKeyframeMode()` | ✅ | Returns keyframe mode |
 | 21 | `SetKeyframeMode(keyframeMode)` | ⚠️ | API accepts; mode must match valid enum |
 | 22 | `GetFairlightPresets()` | ✅ | Returns a preset map. Live on 20.3.2 Studio and 21.0.3 free; **absent below 20.2.2** — confirmed missing on 19.1.3, so the version floor is verified from both sides |
 | 23 | `DisableBackgroundTasksForCurrentResolveSession()` | 🔬 | Resolve 21.0. Present in `dir()`; **not executed** — session-wide, returns `None`, no `Enable...` counterpart, so no undo short of restarting Resolve |
 | 24 | `GetLayoutPresetList()` | ✅ | Resolve 21.0.4. Returns a list (live-tested on free 21.0.4.5 through the in-app bridge (`tests/live_resolve2104_validation.py`)); also reported via a save→list→delete round-trip on Studio 21.0.4.5 in issue #137 |
 | 25 | `GetBurnInPresetList()` | ✅ | Resolve 21.0.4. Returns a list (live-tested on free 21.0.4.5 through the in-app bridge (`tests/live_resolve2104_validation.py`)); reported returning a list on Studio 21.0.4.5 in issue #136 |
-| 26 | `DeleteBurnInPreset(presetName)` | ⚠️ | Resolve 21.0.4. Returns `False` for a name that does not exist and leaves the list unchanged (live-tested on free 21.0.4.5 through the in-app bridge (`tests/live_resolve2104_validation.py`)). A real delete is not exercised: no scripting API creates a burn-in preset to delete |
+| 26 | `DeleteBurnInPreset(presetName)` | ✅ | Resolve 21.0.4. Deletes an existing preset (gone from `GetBurnInPresetList`); returns `False` for a name that does not exist and leaves the list unchanged. No scripting API creates a burn-in preset, so the real delete runs on one saved by hand (`tests/live_preset_fixture_validation.py --burnin-wait`); the missing-name case is in `tests/live_resolve2104_validation.py`. Live on free 21.0.4.5 through the in-app bridge |
 | 27 | `GetUserPreferencesPresetList()` | ✅ | Resolve 21.0.4. Returns a list of names; a saved preset appears and a deleted one disappears (live-tested on free 21.0.4.5 through the in-app bridge (`tests/live_resolve2104_validation.py`)); also issue #138 on Studio 21.0.4.5 |
 | 28 | `SaveUserPreferencesPreset(presetName)` | ✅ | Resolve 21.0.4. Returns `True` and the preset is listed (live-tested on free 21.0.4.5 through the in-app bridge (`tests/live_resolve2104_validation.py`)) |
 | 29 | `LoadUserPreferencesPreset(presetName)` | 🔬 | Resolve 21.0.4. `dir()`-present on 21.0.4.5; **not executed** even by the reporter — swaps the user's global preferences session-wide (issue #138) |
@@ -359,13 +360,13 @@ Every method in the DaVinci Resolve Scripting API and its test status. Methods a
 | 16 | `GetClipMatteList(item)` | ✅ | Returns matte paths |
 | 17 | `GetTimelineMatteList(folder)` | ✅ | Returns matte items |
 | 18 | `DeleteClipMattes(item, [paths])` | ✅ | Deletes clip mattes |
-| 19 | `RelinkClips([items], folderPath)` | ⚠️ | API accepts; needs offline clips |
+| 19 | `RelinkClips([items], folderPath)` | ✅ | After the clip's file is moved, relinking to the new folder returns True and the clip's `File Path` points into it. Live on free 21.0.4.5 through the in-app bridge (`tests/live_preset_fixture_validation.py`) |
 | 20 | `UnlinkClips([items])` | ✅ | Unlinks clips |
 | 21 | `ImportMedia([items])` | ✅ | Imports media files |
 | 22 | `ExportMetadata(fileName, [clips])` | ✅ | Exports metadata CSV |
 | 23 | `GetUniqueId()` | ✅ | Returns UUID string |
 | 24 | `CreateStereoClip(left, right)` | ✅ | Creates stereo pair |
-| 25 | `AutoSyncAudio([items], {settings})` | ⚠️ | Tested; needs matching A/V clips |
+| 25 | `AutoSyncAudio([items], {settings})` | ✅ | Waveform sync of a video and a separate audio file sharing a noise track sets the video's `Synced Audio` property. Live on free 21.0.4.5 through the in-app bridge (`tests/live_preset_fixture_validation.py`); over the bridge this needs the settings dict's number keys kept (PR #361), without which Resolve ignores the settings and returns `False` |
 | 26 | `GetSelectedClips()` | ✅ | Returns selected clips |
 | 27 | `SetSelectedClip(item)` | ✅ | Selects clip |
 
