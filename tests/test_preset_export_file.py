@@ -52,6 +52,24 @@ class PresetExportFileTest(unittest.TestCase):
                          os.path.join("/tmp/out/x.xml", "Dailies.xml"))
 
 
+class ExactPathBuildTest(_WithTmp):
+    """A build that writes the exact path it is given still gets a real file."""
+
+    def test_an_exact_file_export_is_reported_as_itself(self):
+        given = os.path.join(self.tmp, "exact.xml")
+        with open(given, "w", encoding="utf-8") as fh:
+            fh.write("<preset/>")
+        self.assertEqual(preset_export_file(given, "Dailies"), given)
+
+    def test_the_folder_layout_wins_when_both_could_apply(self):
+        folder = os.path.join(self.tmp, "out")
+        os.makedirs(folder)
+        inside = os.path.join(folder, "Dailies.xml")
+        with open(inside, "w", encoding="utf-8") as fh:
+            fh.write("<preset/>")
+        self.assertEqual(preset_export_file(folder, "Dailies"), inside)
+
+
 class GranularExportTest(_WithTmp):
     def setUp(self):
         super().setUp()
