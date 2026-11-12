@@ -2,6 +2,18 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v5.2.4 — The round-trip probe leaves the current timeline alone
+
+From #364 by @Wintch.
+
+### Fixed
+
+- **`timeline` `probe_interchange_roundtrip` changed which timeline was current.** Resolve makes an imported timeline current, and deleting it leaves Resolve to pick another one, in practice the last in the list. The probe never switched back, so a later call on "the current timeline" could edit a different timeline. The bug was invisible whenever the starting timeline was already last. The probe now makes the starting timeline current again after cleanup, after a failed import, and with `cleanup_imported: false`, and confirms the switch by reading it back, as #344 did for other timeline switches. A new `current_timeline` field reports `restored`, with an error and the readback when the switch did not take.
+
+### Not verified here
+
+- Unit-tested with a fake project that behaves as the report describes. Not run against Resolve on this machine.
+
 ## What's New in v5.2.3 — SetPosition and MoveItems take a position dict
 
 From the re-measurement in #336 by @CaptRauti. No server behaviour changes.
