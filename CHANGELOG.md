@@ -2,6 +2,22 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v5.2.7 — Preset and media rows live-tested with fixtures
+
+From #363 by @Ghoul0718. No server behaviour changes.
+
+### Added
+
+- **`tests/live_preset_fixture_validation.py`**, a live harness for the API coverage rows marked "needs fixture". It builds what each call needs from synthetic ffmpeg media, runs relink and sync in a disposable project that it deletes afterwards, restores the open project, and sweeps every `ZZ_r2104_` preset so each preset list ends as it started. Presets that existed before the run are never deleted. No scripting call creates a burn-in preset, so `--burnin-wait N` waits while a person saves one in Workspace > Data Burn-In.
+
+### Changed
+
+- **API coverage:** `SaveLayoutPreset`, `ImportRenderPreset`, `ExportRenderPreset`, `ImportBurnInPreset`, `ExportBurnInPreset` and `DeleteBurnInPreset` (Resolve), and `RelinkClips` and `AutoSyncAudio` (MediaPool) move from ⚠️ to ✅. Totals do not change, since both marks count as live-tested. The rows record that preset exports write `<name>.xml` inside a folder (v5.2.6) and that `AutoSyncAudio` over the bridge needs v5.2.5.
+
+### Not verified here
+
+- The live results are the contributor's, from free 21.0.4.5 on macOS, with the burn-in round trip on a preset saved by hand. This machine runs Studio 19.1.3.7 and did not rerun the harness.
+
 ## What's New in v5.2.6 — Preset exports report the file Resolve writes
 
 From #362 by @Ghoul0718.
