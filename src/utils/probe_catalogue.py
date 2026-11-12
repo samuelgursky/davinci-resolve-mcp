@@ -780,9 +780,11 @@ def _probe_projectlevel_render_preset(ctx):
 
 @probe("projectlevel.export_burn_in_preset", "projectlevel", timeout=120, destructive=True)
 def _probe_projectlevel_burnin(ctx):
-    path = ctx.work / "burnin.preset"
-    ok = ctx.resolve.ExportBurnInPreset("Default", str(path))
-    return combine(ok, path.exists() and path.stat().st_size > 0)
+    # Resolve treats the export path as a folder and writes <name>.xml inside it.
+    folder = ctx.work / "burnin"
+    ok = ctx.resolve.ExportBurnInPreset("Default", str(folder))
+    written = folder / "Default.xml"
+    return combine(ok, written.is_file() and written.stat().st_size > 0)
 
 
 @probe("projectlevel.archive_project", "projectlevel", timeout=600, destructive=True,

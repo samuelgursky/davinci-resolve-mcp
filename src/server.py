@@ -63,6 +63,7 @@ from src.utils.film_cues import export_cue_sheet as _export_film_cue_sheet
 # Platform-specific Resolve paths
 from src.utils.cdl import normalize_cdl_payload
 from src.utils.media_paths import media_exists as _media_exists
+from src.utils.preset_files import preset_export_file as _preset_export_file
 from src.utils import archive_guard
 from src.utils import subtitle_append_guard
 from src.utils import typed_api_search
@@ -20343,9 +20344,13 @@ def render_presets(action: str, params: Optional[Dict[str, Any]] = None) -> Dict
 
     Actions:
       import_render(path) -> {success}
-      export_render(name, path) -> {success}
+      export_render(name, path) -> {success, file}
       import_burnin(path) -> {success}
-      export_burnin(name, path) -> {success}
+      export_burnin(name, path) -> {success, file}
+        Resolve treats an export `path` as a FOLDER: it creates it and writes
+        `<name>.xml` inside (a path ending in .xml becomes a folder of that
+        name). On success `file` is that .xml, the path to give import_render /
+        import_burnin.
       list_burnin() -> {presets}  — Resolve 21.0.4+; burn-in preset names usable
         with the render tool's DataBurnIn setting and load_burnin_preset on
         project_settings / timeline_item
@@ -20359,11 +20364,15 @@ def render_presets(action: str, params: Optional[Dict[str, Any]] = None) -> Dict
     if action == "import_render":
         return {"success": bool(r.ImportRenderPreset(p["path"]))}
     elif action == "export_render":
-        return {"success": bool(r.ExportRenderPreset(p["name"], p["path"]))}
+        if not r.ExportRenderPreset(p["name"], p["path"]):
+            return {"success": False}
+        return {"success": True, "file": _preset_export_file(p["path"], p["name"])}
     elif action == "import_burnin":
         return {"success": bool(r.ImportBurnInPreset(p["path"]))}
     elif action == "export_burnin":
-        return {"success": bool(r.ExportBurnInPreset(p["name"], p["path"]))}
+        if not r.ExportBurnInPreset(p["name"], p["path"]):
+            return {"success": False}
+        return {"success": True, "file": _preset_export_file(p["path"], p["name"])}
     elif action == "list_burnin":
         missing = _requires_method(r, "GetBurnInPresetList", "21.0.4")
         if missing:
