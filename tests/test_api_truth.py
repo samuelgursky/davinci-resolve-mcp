@@ -96,6 +96,11 @@ class LookupTest(unittest.TestCase):
         self.assertIn("21.2.0.6", position["reality"])
         self.assertIn("21.1.2.10", position["reality"])
         self.assertIn("not known", position["reality"])
+        # The 21.2.0.6 re-run found the methods take a position dict; a bare
+        # int returns False for every input and reads like a broken method.
+        self.assertIn("startFrame", position["signature"])
+        self.assertIn("bare-int", position["reality"])
+        self.assertIn("dict", position["recommended"])
 
         marker = next(
             e for e in API_TRUTH

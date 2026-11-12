@@ -1870,29 +1870,39 @@ API_TRUTH: List[Dict[str, Any]] = [
     {
         "symbol": "TimelineItem.SetPosition / Timeline.MoveItems",
         "object": "TimelineItem / Timeline",
-        "signature": "SetPosition(...) -> bool; MoveItems(...) -> bool",
+        "signature": "SetPosition({startFrame[, trackType, trackIndex]}) -> bool; "
+                     "MoveItems([items], {startFrame[, trackType, trackIndex]}) -> bool",
         "reality": "WITHDRAWN. Re-measured by the reporter on Studio 21.2.0.6 "
-                   "(Windows) on a timeline at StartFrame 86400 and EndFrame "
-                   "86640, with two clips read back at 86400 and 86600: "
-                   "TimelineItem.SetPosition returned True and the clip moved "
-                   "from 86400 to 86800, and Timeline.MoveItems returned True "
-                   "and moved it to 87000. GetPosition() and GetStart() agreed "
-                   "both times. The earlier reading was on Studio 21.1.2.10: "
-                   "SetPosition returned False for 0, 100, and -50, and "
-                   "MoveItems was not callable. The first report on that build "
-                   "was measured on a timeline whose clips sat before "
-                   "StartFrame 86400, so StartFrame and EndFrame were both "
-                   "86400. No reported input on 21.1.2.10 was at or after "
-                   "frame 86400, so that build's answer to one is not known. "
-                   "This server does not call either method. Not re-measured "
-                   "here.",
-        "recommended": "Pass a target at or after GetStartFrame() and read "
-                       "GetStart() back. False for a frame below StartFrame is "
-                       "not evidence the method is broken. See the recordFrame "
-                       "entry for the placement that built the first timeline.",
+                   "(Windows) on timelines whose clips sat inside their own "
+                   "range (StartFrame 86400). Both methods take a position "
+                   "dict, not a bare frame number. With the dict, "
+                   "SetPosition({'startFrame': 86800}) returned True and moved "
+                   "the clip from 86400 to 86800, 86400 moved it back, and 100 "
+                   "and -50 (below StartFrame) returned False and left it in "
+                   "place. GetPosition() and GetStart() agreed each time. "
+                   "trackType and trackIndex are optional, and a float "
+                   "startFrame (86800.0, 86800.5) was accepted and snapped to "
+                   "the whole frame. MoveItems([clip], {'trackType': 'video', "
+                   "'trackIndex': 1, 'startFrame': 87000}) returned True and moved the clip to 87000. The bare-int "
+                   "form SetPosition(86800) returned False for every input, "
+                   "in range or not: a wrong argument shape, which reads "
+                   "exactly like a broken method. The earlier reading was on "
+                   "Studio 21.1.2.10: SetPosition returned False for 0, 100, "
+                   "and -50, and MoveItems was not callable. That run was on a "
+                   "timeline whose StartFrame and EndFrame were both 86400, no "
+                   "input was at or after 86400, and the reporter cannot say "
+                   "whether it passed a dict or a bare int, so that build's "
+                   "answer to a correct in-range call is not known. This "
+                   "server does not call either method. Not re-measured here.",
+        "recommended": "Pass a dict, at least {'startFrame': frame}, with the "
+                       "frame at or after GetStartFrame(), and read GetStart() "
+                       "back. False from a bare int, or from a frame below "
+                       "StartFrame, is not evidence the method is broken. See "
+                       "the recordFrame entry for the placement that built the "
+                       "first timeline.",
         "tags": ["timeline", "edit"],
         "issue": 336,
-        "verified_on": "Withdrawn on the reporter's re-measurement, Studio 21.2.0.6 (Windows); the 21.1.2.10 result was not repeated on a consistent timeline, and nothing was re-measured here",
+        "verified_on": "Withdrawn on the reporter's re-measurement, Studio 21.2.0.6 (Windows), dict and bare-int forms; the 21.1.2.10 result was not repeated on a consistent timeline, and nothing was re-measured here",
     },
     {
         "symbol": "TimelineItem.SetLeftOffset",
