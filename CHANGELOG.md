@@ -2,6 +2,22 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v5.2.5 — The bridge keeps number keys in settings dicts
+
+From #361 by @Ghoul0718.
+
+### Fixed
+
+- **Over the in-app bridge, settings dicts keyed by Resolve's constants reached Resolve with string keys.** The constants are numbers (`resolve.AUDIO_SYNC_MODE` is a float on 21.0.4.5), and JSON object keys are always strings, so `{AUDIO_SYNC_MODE: AUDIO_SYNC_WAVEFORM}` arrived keyed by `"1.0"`. Resolve ignores keys it does not know: `MediaPool.AutoSyncAudio` returned False and linked nothing. The client now sends a dict whose keys are not all strings as key-value pairs, and the bridge rebuilds it with the original keys. Dicts with only string keys go on the wire unchanged. `CreateSubtitlesFromAudio` and the cloud project calls take the same kind of dict.
+
+### Upgrading
+
+- The bridge inside Resolve is a copy made at install time. Reinstall it (or reinstall, then call the bridge's `reload`) for this fix to take effect. An older bridge given the new encoding passes the dict through unchanged, so those calls behave as before rather than worse.
+
+### Verified
+
+- The contributor's live run on free 21.0.4.5 (macOS): `AutoSyncAudio` returned False with an empty `Synced Audio` on the previous release and True with the audio linked on this one. Not rerun on this machine.
+
 ## What's New in v5.2.4 — The round-trip probe leaves the current timeline alone
 
 From #364 by @Wintch.
