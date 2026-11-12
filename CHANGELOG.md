@@ -2,6 +2,18 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v5.2.3 — SetPosition and MoveItems take a position dict
+
+From the re-measurement in #336 by @CaptRauti. No server behaviour changes.
+
+### Changed
+
+- **API truth ledger: `TimelineItem.SetPosition` / `Timeline.MoveItems`.** Both take a position dict, `{startFrame[, trackType, trackIndex]}`, not a bare frame number. On Studio 21.2.0.6 (Windows), `SetPosition({'startFrame': 86800})` returned True and moved the clip, while 100 and −50, below the timeline's `StartFrame`, returned False and left it in place. `trackType` and `trackIndex` are optional, and a float `startFrame` snapped to the whole frame. The bare-int form `SetPosition(86800)` returned False for every input, which reads exactly like a broken method; the entry now says so and recommends the dict.
+
+### Not verified here
+
+- The readings are the reporter's. This server calls neither method, and nothing was re-measured on this machine. Whether 21.1.2.10 accepts a correct in-range call is still not known.
+
 ## What's New in v5.2.2 — Long words in captions are no longer cut off
 
 From #360 by @goranai.
