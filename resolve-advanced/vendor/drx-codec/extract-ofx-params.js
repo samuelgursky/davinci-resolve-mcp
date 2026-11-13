@@ -14,13 +14,16 @@
  *       F4 = enabled varint (1)
  *       F5[] = repeated param entries
  *             F1 = param name UTF-8
- *             F2 = wrapped value: F2 (float64) OR F5 (UTF-8 string)
+ *             F2 = wrapped value: F2 (float64), F3 (varint int), F5 (UTF-8 string),
+ *                  F4 { F1 = zigzag varint } (CHOICE index; an empty F4 is index 0) or
+ *                  F7 { F1..F3 float32 r,g,b; F4 alpha } (RGB(A) color)
  *
  * extractOFXTools(toolListBuf | toolListField) returns
  *   Array<{ pluginId, instanceId, enabled, params: {name: value} }>
  *
- * Each `value` is either a number (when F2.F2 was a float64) or a
- * string (when F2.F5 was UTF-8).
+ * Each `value` is a number (F2.F2 float64), {int} (F2.F3), a string (F2.F5),
+ * {choice: index} (F2.F4) or {rgb: [r,g,b], alpha?} (F2.F7). A choice left at
+ * its default is not stored by Resolve at all: absent is "default", not 0.
  *
  * P2 coverage: tool IDs beyond Film Grain land in the registry as
  * AutoResearch lands them. The extractor doesn't depend on the tool ID
@@ -111,6 +114,27 @@ function decodeParamEntry(entryBuf) {
           value = { int: Number(inn.value) };
         } else if (inn.fieldNum === 5 && inn.wireType === 2) {
           value = utf8(inn.value);
+        } else if (inn.fieldNum === 4 && inn.wireType === 2) {
+          // CHOICE menu: F4 { F1 = zigzag varint(index) }. Index 0 is an EMPTY F4
+          // (proto3 drops the zero). Measured on Resolve 19.1.3 stills.
+          let index = 0;
+          for (const c of readAllFields(inn.value)) {
+            if (c.fieldNum === 1 && c.wireType === 0) {
+              const z = c.value;
+              index = Number((z >> 1n) ^ -(z & 1n));
+            }
+          }
+          value = { choice: index };
+        } else if (inn.fieldNum === 7 && inn.wireType === 2) {
+          // RGB(A) color: F7 { F1, F2, F3 = float32 r, g, b; F4 = alpha when present }.
+          const comp = [0, 0, 0];
+          let alpha = null;
+          for (const c of readAllFields(inn.value)) {
+            if (c.wireType !== 5) continue;
+            if (c.fieldNum >= 1 && c.fieldNum <= 3) comp[c.fieldNum - 1] = c.value;
+            else if (c.fieldNum === 4) alpha = c.value;
+          }
+          value = alpha === null ? { rgb: comp } : { rgb: comp, alpha };
         }
       }
     }
