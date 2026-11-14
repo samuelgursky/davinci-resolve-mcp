@@ -15727,6 +15727,74 @@ def _timeline_append_readback_snapshot(proj):
     }
 
 
+def _created_timeline_readback(proj, created, clips):
+    """Read a created timeline back through its project and source clip IDs."""
+    expected_ids = list(dict.fromkeys(_safe_media_pool_item_id(clip) for clip in clips))
+    expected_ids = [clip_id for clip_id in expected_ids if clip_id]
+    timeline_id = _safe_timeline_item_id(created)
+    readback = {
+        "timeline_id": timeline_id,
+        "project_timeline_found": False,
+        "item_count": 0,
+        "media_pool_item_ids": [],
+        "missing_clip_ids": list(expected_ids),
+        "errors": [],
+        "verified": False,
+    }
+    if not timeline_id:
+        readback["errors"].append("Created timeline has no readable unique ID")
+        return readback
+    try:
+        timeline_count = int(proj.GetTimelineCount() or 0)
+        project_timeline = None
+        for index in range(1, timeline_count + 1):
+            candidate = proj.GetTimelineByIndex(index)
+            if candidate and _safe_timeline_item_id(candidate) == timeline_id:
+                project_timeline = candidate
+                break
+    except Exception as exc:
+        readback["errors"].append(f"Project timeline enumeration failed: {exc}")
+        return readback
+    if project_timeline is None:
+        readback["errors"].append("Created timeline unique ID is absent from the current project")
+        return readback
+    readback["project_timeline_found"] = True
+
+    observed_ids = []
+    for track_type in ("video", "audio", "subtitle"):
+        try:
+            track_count = int(project_timeline.GetTrackCount(track_type) or 0)
+        except Exception as exc:
+            readback["errors"].append(f"GetTrackCount({track_type}) failed: {exc}")
+            continue
+        for track_index in range(1, track_count + 1):
+            try:
+                items = project_timeline.GetItemListInTrack(track_type, track_index) or []
+            except Exception as exc:
+                readback["errors"].append(
+                    f"GetItemListInTrack({track_type}, {track_index}) failed: {exc}"
+                )
+                continue
+            readback["item_count"] += len(items)
+            for item in items:
+                try:
+                    media_id = _safe_media_pool_item_id(item.GetMediaPoolItem())
+                except Exception as exc:
+                    readback["errors"].append(f"Timeline item Media Pool readback failed: {exc}")
+                    continue
+                if media_id and media_id not in observed_ids:
+                    observed_ids.append(media_id)
+    readback["media_pool_item_ids"] = observed_ids
+    readback["missing_clip_ids"] = [clip_id for clip_id in expected_ids if clip_id not in observed_ids]
+    readback["verified"] = bool(
+        expected_ids
+        and not readback["missing_clip_ids"]
+        and not readback["errors"]
+        and readback["item_count"] > 0
+    )
+    return readback
+
+
 def _compare_timeline_append_readback(before, observed, expected_count: int):
     before_count = before.get("item_count") if isinstance(before, dict) and before.get("available") else None
     after_count = observed.get("item_count") if isinstance(observed, dict) and observed.get("available") else None
@@ -23634,14 +23702,42 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
         clips, clips_err = _clips_from_ids(root, clip_ids, verb="created")
         if clips_err:
             return clips_err
+        # Media Pool state can change between validation and native creation.
+        # Re-resolve every ID against a fresh root immediately before the call
+        # rather than handing Resolve a stale or partial batch.
+        fresh_root = mp.GetRootFolder()
+        if not fresh_root:
+            return _err(
+                "Failed to refresh the Media Pool before creating the timeline",
+                code="MEDIA_POOL_READBACK_FAILED", category="resolve_api_failed",
+            )
+        clips, clips_err = _clips_from_ids(fresh_root, clip_ids, verb="created")
+        if clips_err:
+            return clips_err
         tl = mp.CreateTimelineFromClips(create_name, clips)
+        if not tl:
+            return _err("Failed to create timeline", code="CREATE_TIMELINE_FAILED")
+        readback = _created_timeline_readback(proj, tl, clips)
+        if not readback["verified"]:
+            out = _err(
+                "CreateTimelineFromClips returned a timeline, but its project or clip readback failed",
+                code="CREATE_TIMELINE_READBACK_FAILED", category="resolve_api_failed",
+                retryable=False,
+                remediation=("Inspect the current project for the returned timeline ID before retrying; "
+                             "the native call may already have created a timeline."),
+                state=readback,
+            )
+            out.update({"success": False, "verified": False, "readback": readback})
+            return out
         return _ok(
             name=tl.GetName(),
             id=tl.GetUniqueId(),
             requested_name=p.get("name"),
             created_new=True,
             versioned_name=bool(existing and create_name != p.get("name")),
-        ) if tl else _err("Failed to create timeline")
+            verified=True,
+            readback=readback,
+        )
     elif action == "create_multicam_clip":
         missing = _requires_method(mp, "CreateMulticamClip", "21.1")
         if missing:
@@ -28754,7 +28850,7 @@ def timeline_markers(action: str, params: Optional[Dict[str, Any]] = None) -> An
       delete_at_frame(frame|frame_id|frameId|timecode) -> {success}
       delete_by_custom_data(custom_data) -> {success}
       get_current_timecode() -> {timecode}
-      set_current_timecode(timecode) -> {success}
+      set_current_timecode(timecode) -> {success, requested, target, before, actual, api_success, verified}
       get_current_video_item() -> {name, id}
       get_thumbnail() -> {thumbnail}
       get_thumbnail_image() -> MCP image content for the current Color-page frame
@@ -28855,7 +28951,53 @@ def timeline_markers(action: str, params: Optional[Dict[str, Any]] = None) -> An
     elif action == "get_current_timecode":
         return {"timecode": tl.GetCurrentTimecode()}
     elif action == "set_current_timecode":
-        return {"success": bool(tl.SetCurrentTimecode(_playhead_absolute_timecode(tl, p["timecode"])))}
+        requested = p["timecode"]
+        target = _playhead_absolute_timecode(tl, requested)
+        try:
+            before = tl.GetCurrentTimecode()
+        except Exception:
+            before = None
+        try:
+            api_success = bool(tl.SetCurrentTimecode(target))
+        except Exception as exc:
+            api_success = False
+            api_error = str(exc)
+        else:
+            api_error = None
+        try:
+            actual = tl.GetCurrentTimecode()
+            readback_error = None
+        except Exception as exc:
+            actual = None
+            readback_error = str(exc)
+        verified = target is not None and readback_error is None and actual == target
+        result = {
+            "success": bool(api_success and verified),
+            "requested": requested,
+            "target": target,
+            "before": before,
+            "actual": actual,
+            "api_success": api_success,
+            "verified": verified,
+        }
+        if api_error:
+            result["api_error"] = api_error
+        if readback_error:
+            result["readback_error"] = readback_error
+        if not result["success"]:
+            message = (
+                f"SetCurrentTimecode returned True but the playhead reads {actual!r}, not {target!r}"
+                if api_success else f"SetCurrentTimecode failed for {target!r}"
+            )
+            error = _err(
+                message,
+                code="TIMECODE_READBACK_MISMATCH" if api_success else "SET_CURRENT_TIMECODE_FAILED",
+                category="resolve_api_failed",
+                retryable=True,
+                state={key: value for key, value in result.items() if key != "success"},
+            )
+            result.update(error)
+        return result
     elif action == "get_current_video_item":
         it = tl.GetCurrentVideoItem()
         return {"name": it.GetName(), "id": it.GetUniqueId()} if it else {"name": None, "id": None}

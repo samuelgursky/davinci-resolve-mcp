@@ -17,11 +17,15 @@ class SubtitleLiveTest(unittest.TestCase):
         self.t.GetUniqueId.return_value = 'original'
         self.t.GetCurrentTimecode.return_value = '01:00:01:00'
         self.p.GetTimelineCount.return_value = 0
+        self.p.GetUniqueId.return_value = 'project'
         self.p.GetCurrentTimeline.return_value = self.t
         self.p.GetMediaPool.return_value.ImportTimelineFromFile.return_value = self.imported
+        self.r.GetProjectManager.return_value.GetCurrentProject.return_value = self.p
+        self.r.GetProjectManager.return_value.GetCurrentDatabase.return_value = {'DbName': 'fake'}
         self.imported.GetName.return_value = 'Revision'
         self.imported.GetUniqueId.return_value = 'revision'
         self.imported.GetCurrentTimecode.return_value = '01:00:01:00'
+        self.imported.GetItemListInTrack.return_value = []
         self.p.SetCurrentTimeline.side_effect = lambda timeline: setattr(self.p.GetCurrentTimeline, 'return_value', timeline) or True
         # The codec-dep check reads this checkout. Tests that mock Node must
         # not fail when resolve-advanced/node_modules is absent.
@@ -51,6 +55,66 @@ class SubtitleLiveTest(unittest.TestCase):
         self.assertEqual(list(Path(self.tmp.name).iterdir()), [])
         self.assertNotIn('original_export', result)
         self.assertIn('audio_content', result['unverified_components'])
+        self.assertTrue(result['api_success'])
+        self.assertTrue(result['verified'])
+        self.assertTrue(result['database_health']['healthy'])
+        self.assertTrue(result['database_health']['database_attached'])
+        self.assertTrue(result['database_health']['project_unchanged'])
+        self.assertTrue(result['database_health']['current_timeline_verified'])
+        self.assertTrue(result['database_health']['target_items_healthy'])
+
+    def test_missing_project_after_preset_is_restartable_structured_failure(self):
+        self.r.GetProjectManager.return_value.GetCurrentProject.return_value = None
+
+        result = self.call()
+
+        self.assertFalse(result['success'])
+        self.assertTrue(result['api_success'])
+        self.assertFalse(result['verified'])
+        self.assertEqual(result['error_code'], 'RESOLVE_DATABASE_UNHEALTHY')
+        self.assertTrue(result['restart_required'])
+        self.assertIn('restart Resolve manually', result['remediation'])
+        self.assertIn('does not repair', result['remediation'])
+        self.assertIsNone(result['database_health']['project_id_after'])
+        self.assertFalse(result['database_health']['project_unchanged'])
+
+    def test_changed_project_id_after_preset_is_not_reported_verified(self):
+        other = Mock()
+        other.GetUniqueId.return_value = 'other-project'
+        other.GetCurrentTimeline.return_value = self.imported
+        self.r.GetProjectManager.return_value.GetCurrentProject.return_value = other
+
+        result = self.call()
+
+        self.assertFalse(result['success'])
+        self.assertFalse(result['verified'])
+        self.assertEqual(result['database_health']['project_id_before'], 'project')
+        self.assertEqual(result['database_health']['project_id_after'], 'other-project')
+        self.assertFalse(result['database_health']['project_unchanged'])
+
+    def test_detached_database_after_preset_is_not_reported_verified(self):
+        self.r.GetProjectManager.return_value.GetCurrentDatabase.return_value = None
+
+        result = self.call()
+
+        self.assertFalse(result['success'])
+        self.assertFalse(result['database_health']['database_attached'])
+        self.assertFalse(result['verified'])
+        self.assertTrue(result['restart_required'])
+
+    def test_unhealthy_target_item_after_preset_is_not_reported_verified(self):
+        item = Mock()
+        item.GetUniqueId.return_value = 'caption'
+        item.GetStart.return_value = 20
+        item.GetEnd.return_value = 10
+        self.imported.GetItemListInTrack.return_value = [item]
+
+        result = self.call()
+
+        self.assertFalse(result['success'])
+        self.assertFalse(result['database_health']['target_items_healthy'])
+        self.assertEqual(result['database_health']['target_item_count'], 1)
+        self.assertFalse(result['verified'])
 
     def test_lossy_import_restores_original_and_reports_failure(self):
         result = self.call(inventories=[{'subtitles': 7}, {'subtitles': 0}])
@@ -191,6 +255,8 @@ class SubtitleLiveTest(unittest.TestCase):
         result, run, inventory = self.captions()
         self.assertTrue(result['success'], result)
         self.assertIn('word_timing', result['verified_components'])
+        self.assertTrue(result['verified'])
+        self.assertTrue(result['database_health']['healthy'])
         request = json.loads(run.call_args_list[0].kwargs['input'])
         self.assertEqual(request['operation'], 'write_captions')
         self.assertEqual(request['replace'][0]['id'], 'x')

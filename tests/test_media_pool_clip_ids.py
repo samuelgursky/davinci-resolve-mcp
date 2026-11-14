@@ -52,6 +52,18 @@ class FakeClip:
         return self._uid
 
 
+class FakeTimelineItem:
+    def __init__(self, source, uid):
+        self._source = source
+        self._uid = uid
+
+    def GetUniqueId(self):
+        return self._uid
+
+    def GetMediaPoolItem(self):
+        return self._source
+
+
 class FakeFolder:
     def __init__(self, name, uid, clips=None, subs=None):
         self._name = name
@@ -105,6 +117,7 @@ class FakeMP:
         self._root = root
         self.calls = []
         self.timeline = FakeTimeline()
+        self.created_timelines = []
 
     def GetRootFolder(self):
         return self._root
@@ -130,7 +143,11 @@ class FakeMP:
 
     def CreateTimelineFromClips(self, name, clips):
         self.calls.append(("CreateTimelineFromClips", list(clips), name))
-        return FakeTimeline(name, "tl-new")
+        timeline = FakeTimeline(name, "tl-new")
+        timeline.items = [FakeTimelineItem(clip, f"ti-new-{index}")
+                          for index, clip in enumerate(clips)]
+        self.created_timelines.append(timeline)
+        return timeline
 
     def AppendToTimeline(self, clips):
         self.calls.append(("AppendToTimeline", list(clips)))
@@ -146,6 +163,20 @@ class FakeMP:
     def AutoSyncAudio(self, clips, settings):
         self.calls.append(("AutoSyncAudio", list(clips), settings))
         return True
+
+
+class InvisibleCreateMP(FakeMP):
+    def CreateTimelineFromClips(self, name, clips):
+        timeline = super().CreateTimelineFromClips(name, clips)
+        self.created_timelines.clear()
+        return timeline
+
+
+class EmptyCreateMP(FakeMP):
+    def CreateTimelineFromClips(self, name, clips):
+        timeline = super().CreateTimelineFromClips(name, clips)
+        timeline.items = []
+        return timeline
 
 
 class FalsyAppendMP(FakeMP):
@@ -178,7 +209,8 @@ def _tree(make_mp=FakeMP):
 
 def _call(mp, action, params, *, require_confirm=False):
     proj = mock.Mock()
-    proj.GetTimelineCount.return_value = 0          # no name clash for create_*
+    proj.GetTimelineCount.side_effect = lambda: len(mp.created_timelines)
+    proj.GetTimelineByIndex.side_effect = lambda index: mp.created_timelines[index - 1]
     proj.GetCurrentTimeline.return_value = mp.timeline
     # get_resolve is stubbed so auto_sync_audio cannot reach a running Resolve.
     with mock.patch.object(s, "_confirm_token_required", return_value=require_confirm), \
@@ -333,7 +365,53 @@ class BatchActionTest(unittest.TestCase):
         out = _call(mp, "create_timeline_from_clips",
                     {"name": "Selects", "clip_ids": ["clip-top", "clip-nested"]})
         self.assertEqual(out["name"], "Selects")
+        self.assertTrue(out["verified"])
+        self.assertTrue(out["readback"]["project_timeline_found"])
+        self.assertEqual(out["readback"]["item_count"], 2)
+        self.assertEqual(out["readback"]["missing_clip_ids"], [])
         self.assertEqual(mp.calls, [("CreateTimelineFromClips", [top, nested], "Selects")])
+
+    def test_create_re_resolves_stale_handles_immediately_before_native_call(self):
+        mp, top, nested, _ = _tree()
+        stale_root = mp._root
+        fresh_top = FakeClip("A001.mov", "clip-top")
+        fresh_nested = FakeClip("B002.mov", "clip-nested")
+        fresh_root = FakeFolder("Master", "id-root", clips=[fresh_top, fresh_nested])
+        mp.GetRootFolder = mock.Mock(side_effect=[stale_root, fresh_root])
+
+        out = _call(mp, "create_timeline_from_clips",
+                    {"name": "Selects", "clip_ids": ["clip-top", "clip-nested"]})
+
+        self.assertTrue(out["success"])
+        self.assertIsNot(fresh_top, top)
+        self.assertIsNot(fresh_nested, nested)
+        self.assertEqual(mp.calls, [("CreateTimelineFromClips", [fresh_top, fresh_nested], "Selects")])
+
+    def test_create_handle_absent_from_project_is_structured_failure(self):
+        mp, top, nested, _ = _tree(InvisibleCreateMP)
+
+        out = _call(mp, "create_timeline_from_clips",
+                    {"name": "Selects", "clip_ids": ["clip-top", "clip-nested"]})
+
+        self.assertFalse(out["success"])
+        self.assertFalse(out["verified"])
+        self.assertEqual(out["error"]["code"], "CREATE_TIMELINE_READBACK_FAILED")
+        self.assertFalse(out["error"]["retryable"])
+        self.assertEqual(out["readback"]["timeline_id"], "tl-new")
+        self.assertFalse(out["readback"]["project_timeline_found"])
+        self.assertEqual(len(mp.calls), 1)
+
+    def test_create_with_no_readable_entries_is_structured_failure(self):
+        mp, _, _, _ = _tree(EmptyCreateMP)
+
+        out = _call(mp, "create_timeline_from_clips",
+                    {"name": "Selects", "clip_ids": ["clip-top", "clip-nested"]})
+
+        self.assertFalse(out["success"])
+        self.assertTrue(out["readback"]["project_timeline_found"])
+        self.assertEqual(out["readback"]["item_count"], 0)
+        self.assertEqual(out["readback"]["missing_clip_ids"], ["clip-top", "clip-nested"])
+        self.assertEqual(out["error"]["code"], "CREATE_TIMELINE_READBACK_FAILED")
 
     def test_export_without_clip_ids_still_exports_every_clip(self):
         for params in ({"path": "/scratch/all.csv"},

@@ -32,11 +32,13 @@ class TimelineStub:
         current_timecode="01:00:00:12",
         start_frame=86400,
         start_timecode="01:00:00:00",
+        apply_timecode_writes=True,
     ):
         self.fps = fps
         self.current_timecode = current_timecode
         self.start_frame = start_frame
         self.start_timecode = start_timecode
+        self.apply_timecode_writes = apply_timecode_writes
         self.add_calls = []
         self.deleted_frames = []
         self.update_custom_data_calls = []
@@ -62,6 +64,8 @@ class TimelineStub:
 
     def SetCurrentTimecode(self, timecode):
         self.set_timecode_calls.append(timecode)
+        if self.apply_timecode_writes:
+            self.current_timecode = timecode
         return True
 
     def AddMarker(self, *args):
@@ -253,8 +257,33 @@ class TimelineMarkerParamTest(unittest.TestCase):
             "set_current_timecode", {"timecode": "00:00:21:03"}
         )
 
-        self.assertEqual(_strip_versioning(out), {"success": True})
+        self.assertEqual(_strip_versioning(out), {
+            "success": True,
+            "requested": "00:00:21:03",
+            "target": "01:00:11:03",
+            "before": "01:00:00:12",
+            "actual": "01:00:11:03",
+            "api_success": True,
+            "verified": True,
+        })
         self.assertEqual(self.timeline.set_timecode_calls, ["01:00:11:03"])
+
+    def test_set_current_timecode_true_with_wrong_readback_is_structured_failure(self):
+        self.timeline.apply_timecode_writes = False
+
+        out = compound.timeline_markers(
+            "set_current_timecode", {"timecode": "01:00:11:03"}
+        )
+
+        self.assertFalse(out["success"])
+        self.assertTrue(out["api_success"])
+        self.assertFalse(out["verified"])
+        self.assertEqual(out["requested"], "01:00:11:03")
+        self.assertEqual(out["target"], "01:00:11:03")
+        self.assertEqual(out["before"], "01:00:00:12")
+        self.assertEqual(out["actual"], "01:00:00:12")
+        self.assertEqual(out["error"]["code"], "TIMECODE_READBACK_MISMATCH")
+        self.assertEqual(out["error"]["state"]["actual"], "01:00:00:12")
 
     def test_set_current_timecode_absolute_passes_through(self):
         self.timeline.start_frame = 86160
@@ -287,9 +316,12 @@ class TimelineMarkerParamTest(unittest.TestCase):
         self.timeline.start_frame = 107892
         self.timeline.start_timecode = "01:00:00;00"
 
-        compound.timeline_markers("set_current_timecode", {"timecode": "00:01:00;02"})
+        out = compound.timeline_markers("set_current_timecode", {"timecode": "00:01:00;02"})
 
         self.assertEqual(self.timeline.set_timecode_calls, ["01:01:00;02"])
+        self.assertTrue(out["success"])
+        self.assertTrue(out["verified"])
+        self.assertEqual(out["actual"], "01:01:00;02")
 
     def test_frame_id_to_timecode_drop_frame_round_trips(self):
         for frame in (0, 2, 1799, 1800, 3597, 3598, 17981, 17982, 107892, 109692):
