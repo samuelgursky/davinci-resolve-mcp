@@ -47,6 +47,21 @@ class ReleaseSurfaces(unittest.TestCase):
                          "zh-CN 对应 line drifted — it makes a factual claim about which README it "
                          "translates, so a stale value is worse than no translation")
 
+    def test_zh_tw_readme_badge_and_line_match(self):
+        version = package_version()
+        zh = REPO / "README.zh-TW.md"
+        if not zh.exists():
+            self.skipTest("translation removed — allowed by the release process")
+        text = zh.read_text(encoding="utf-8")
+        m = re.search(r"badge/version-([0-9.]+)-blue", text)
+        self.assertIsNotNone(m, "README.zh-TW.md has no version badge")
+        self.assertEqual(m.group(1), version, "zh-TW version badge drifted from package.json")
+        line = re.search(r"本翻譯對應 v([0-9.]+) 版 README", text)
+        self.assertIsNotNone(line, "zh-TW correspondence line missing")
+        self.assertEqual(line.group(1), version,
+                         "zh-TW 對應 line drifted — it makes a factual claim about which README it "
+                         "translates, so a stale value is worse than no translation")
+
     def test_changelog_has_an_entry_for_the_current_version(self):
         version = package_version()
         text = (REPO / "CHANGELOG.md").read_text(encoding="utf-8")
