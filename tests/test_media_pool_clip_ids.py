@@ -56,7 +56,11 @@ class FakeClip:
         return self._uid
 
     def GetClipProperty(self, name):
-        return self._clip_type if name == "Type" else None
+        if name == "Type":
+            return self._clip_type
+        if name == "File Path":
+            return self._file_path
+        return None
 
 
 class FakeTimelineItem:
@@ -141,8 +145,9 @@ ALL_CLIPS = "<ExportMetadata without a clip list>"
 class FakeMP:
     """Records what was actually handed to Resolve, so a partial batch shows up."""
 
-    def __init__(self, root):
+    def __init__(self, root, subtitle_texts=None):
         self._root = root
+        self._subtitle_texts = subtitle_texts
         self.calls = []
         self.timeline = FakeTimeline()
         self.created_timelines = []
@@ -175,8 +180,12 @@ class FakeMP:
         for index, clip in enumerate(clips):
             clip_type = clip.GetClipProperty("Type")
             if clip_type == "Subtitle":
-                timeline.subtitle_items.append(FakeTimelineItem(
-                    None, f"ti-new-{index}", name=f"Caption {index + 1}"))
+                texts = (self._subtitle_texts if self._subtitle_texts is not None
+                         else [f"Caption {index + 1}"])
+                for cue_index, text in enumerate(texts):
+                    timeline.subtitle_items.append(FakeTimelineItem(
+                        None, f"ti-new-{index}-{cue_index}", name=text,
+                        start=cue_index * 24, end=(cue_index + 1) * 24))
             elif clip_type in {"Generator", "Title", "Fusion Generator"}:
                 timeline.items.append(FakeTimelineItem(
                     None, f"ti-new-{index}", name=clip.GetName()))
@@ -220,6 +229,14 @@ class EmptySubtitleCreateMP(FakeMP):
     def CreateTimelineFromClips(self, name, clips):
         timeline = super().CreateTimelineFromClips(name, clips)
         timeline.subtitle_items = []
+        return timeline
+
+
+class SourceLessMediaCreateMP(FakeMP):
+    def CreateTimelineFromClips(self, name, clips):
+        timeline = super().CreateTimelineFromClips(name, clips)
+        timeline.items = [FakeTimelineItem(None, f"ti-new-{index}", name=clip.GetName())
+                          for index, clip in enumerate(clips)]
         return timeline
 
 
@@ -270,6 +287,17 @@ def _call(mp, action, params, *, require_confirm=False):
          mock.patch.object(s, "_get_mp", return_value=(mock.Mock(), proj, mp, None)), \
          mock.patch.object(s, "get_resolve", return_value=None):
         return s.media_pool(action, params)
+
+
+def _write_srt(directory, texts):
+    path = os.path.join(directory, "captions.srt")
+    cues = [
+        f"{index}\n00:00:{index * 2:02d},000 --> 00:00:{index * 2 + 1:02d},000\n{text}"
+        for index, text in enumerate(texts)
+    ]
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write("\n\n".join(cues) + "\n")
+    return path
 
 
 # action -> (the other params it needs, the MediaPool method it reaches)
@@ -498,6 +526,63 @@ class BatchActionTest(unittest.TestCase):
                 self.assertEqual(out["readback"]["subtitle_readback"]["cue_count"], cue_count)
                 self.assertEqual(out["readback"]["subtitle_readback"]["invalid_cue_count"], invalid_count)
                 self.assertFalse(out["readback"]["subtitle_readback"]["verified"])
+
+    def test_subtitle_create_compares_source_srt_cues_and_normalized_text(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write_srt(tmp, ["你好\n  世界", "第二条"])
+            subtitle = FakeClip("captions.srt", "clip-subtitle",
+                                clip_type="Subtitle", file_path=path)
+            root = FakeFolder("Master", "id-root", clips=[subtitle])
+            mp = FakeMP(root, subtitle_texts=["你好 世界", "第二条"])
+
+            out = _call(mp, "create_timeline_from_clips",
+                        {"name": "Captions", "clip_ids": ["clip-subtitle"]})
+
+            self.assertTrue(out["success"], out)
+            self.assertTrue(out["verified"])
+            self.assertIsNone(mp.created_timelines[0].subtitle_items[0].GetMediaPoolItem())
+            subtitle_readback = out["readback"]["subtitle_readback"]
+            self.assertEqual(subtitle_readback["mode"], "source_srt")
+            self.assertEqual(subtitle_readback["expected_cue_count"], 2)
+            self.assertEqual(subtitle_readback["cue_count"], 2)
+            self.assertEqual(subtitle_readback["text_mismatches"], [])
+
+    def test_subtitle_create_rejects_source_cue_count_or_text_mismatch(self):
+        for observed_texts in (["第一条"], ["第一条", "错误文本"]):
+            with self.subTest(observed_texts=observed_texts), tempfile.TemporaryDirectory() as tmp:
+                path = _write_srt(tmp, ["第一条", "第二条"])
+                subtitle = FakeClip("captions.srt", "clip-subtitle",
+                                    clip_type="Subtitle", file_path=path)
+                root = FakeFolder("Master", "id-root", clips=[subtitle])
+                mp = FakeMP(root, subtitle_texts=observed_texts)
+
+                out = _call(mp, "create_timeline_from_clips",
+                            {"name": "Captions", "clip_ids": ["clip-subtitle"]})
+
+                self.assertFalse(out["success"])
+                self.assertFalse(out["verified"])
+                self.assertEqual(out["error"]["code"], "CREATE_TIMELINE_READBACK_FAILED")
+                self.assertFalse(out["readback"]["subtitle_readback"]["verified"])
+
+    def test_regular_media_cannot_use_source_less_name_readback(self):
+        mp, _, _, _ = _tree(SourceLessMediaCreateMP)
+
+        out = _call(mp, "create_timeline_from_clips",
+                    {"name": "Selects", "clip_ids": ["clip-top"]})
+
+        self.assertFalse(out["success"])
+        self.assertEqual(out["readback"]["missing_clip_ids"], ["clip-top"])
+        self.assertFalse(out["verified"])
+
+        source = FakeClip("broken.mov", None)
+        timeline = FakeTimeline("Broken", "tl-broken")
+        timeline.items = [FakeTimelineItem(source, "ti-broken")]
+        proj = mock.Mock()
+        proj.GetTimelineCount.return_value = 1
+        proj.GetTimelineByIndex.return_value = timeline
+        readback = s._created_timeline_readback(proj, timeline, [source])
+        self.assertFalse(readback["verified"])
+        self.assertTrue(any("no readable unique ID" in error for error in readback["errors"]))
 
     def test_generator_create_verifies_source_less_item_by_name_and_bounds(self):
         generator = FakeClip("Solid Color", "clip-generator", clip_type="Generator")
