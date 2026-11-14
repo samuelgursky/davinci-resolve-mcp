@@ -26,9 +26,9 @@ class ReleaseSurfaces(unittest.TestCase):
     def test_readme_badge_matches_package_version(self):
         version = package_version()
         text = (REPO / "README.md").read_text(encoding="utf-8")
-        m = re.search(r"badge/version-([0-9.]+)-blue", text)
+        m = re.search(r"badge/version-([0-9.]+(?:--[0-9A-Za-z.-]+)?)-blue", text)
         self.assertIsNotNone(m, "README.md has no version badge")
-        self.assertEqual(m.group(1), version,
+        self.assertEqual(m.group(1).replace("--", "-"), version,
                          f"README version badge says {m.group(1)} but package.json says {version} — "
                          "update the badge with the release bump (docs/process/release-process.md)")
 
@@ -38,10 +38,10 @@ class ReleaseSurfaces(unittest.TestCase):
         if not zh.exists():
             self.skipTest("translation removed — allowed by the release process")
         text = zh.read_text(encoding="utf-8")
-        m = re.search(r"badge/version-([0-9.]+)-blue", text)
+        m = re.search(r"badge/version-([0-9.]+(?:--[0-9A-Za-z.-]+)?)-blue", text)
         self.assertIsNotNone(m, "README.zh-CN.md has no version badge")
-        self.assertEqual(m.group(1), version, "zh-CN version badge drifted from package.json")
-        line = re.search(r"本翻译对应 v([0-9.]+) 版 README", text)
+        self.assertEqual(m.group(1).replace("--", "-"), version, "zh-CN version badge drifted from package.json")
+        line = re.search(r"本翻译对应 v([0-9A-Za-z.+-]+) 版 README", text)
         self.assertIsNotNone(line, "zh-CN correspondence line missing")
         self.assertEqual(line.group(1), version,
                          "zh-CN 对应 line drifted — it makes a factual claim about which README it "

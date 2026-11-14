@@ -217,6 +217,37 @@ def _revise(resolve, project, timeline, params, safe_dir, *, dry_run, build, che
                 result["staging_directory"] = str(staging)
 
 
+def list_subtitle_preset_inputs(resolve, timeline, params, safe_dir):
+    """Inspect the current native holder without capturing/importing a timeline."""
+    checked = _preflight(timeline, params)
+    if isinstance(checked, dict):
+        return checked
+    node, _dry_run, track = checked
+    staging = Path(safe_dir(str(ROOT / "logs" / "subtitle-live"))) / uuid.uuid4().hex
+    staging.mkdir(parents=True, exist_ok=False)
+    result = None
+    try:
+        source = staging / "inspect.drt"
+        if not timeline.Export(str(source), resolve.EXPORT_DRT):
+            raise RuntimeError("Native timeline export failed")
+        result = {"success": True,
+                  **_codec(node, {"operation": "inspect", "source": str(source), "track": track},
+                           "Subtitle preset inspection failed"),
+                  "scope": "persisted Template TextPlus inputs; omitted defaults are not enumerated",
+                  "verification": "native_export_inspection", "render_verified": False}
+        return result
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+        result = {"success": False, "error": str(exc)}
+        return result
+    finally:
+        try:
+            shutil.rmtree(staging)
+        except OSError as exc:
+            if result is not None:
+                result.update(staging_retained=True, staging_directory=str(staging))
+                result.setdefault("warnings", []).append(f"Inspection export cleanup failed: {exc}")
+
+
 def set_subtitle_preset(resolve, project, timeline, params, safe_dir):
     """Create and select a verified revision; restore original on any failure."""
     checked = _preflight(timeline, params)
@@ -226,6 +257,9 @@ def set_subtitle_preset(resolve, project, timeline, params, safe_dir):
     inputs = params.get("inputs", {})
     if not isinstance(inputs, dict):
         return {"success": False, "error": "inputs must be an object"}
+    literal_inputs = params.get("literal_inputs", {})
+    if not isinstance(literal_inputs, dict):
+        return {"success": False, "error": "literal_inputs must be an object"}
     reference = params.get("preset_reference")
     if reference and not Path(reference).is_file():
         return {"success": False, "error": "preset_reference must be an existing native DRT export"}
@@ -239,7 +273,8 @@ def set_subtitle_preset(resolve, project, timeline, params, safe_dir):
             return {"success": False, "error": "Uncached installed preset capture needs a live temporary timeline; use preset_reference for a mutation-free dry run"}
 
     def build(source, output, staging):
-        request = {"source": str(source), "output": str(output), "track": track, "inputs": inputs}
+        request = {"source": str(source), "output": str(output), "track": track, "inputs": inputs,
+                   "literal_inputs": literal_inputs}
         if installed:
             captured = staging / "installed-title.drt"
             _capture_installed_preset(resolve, project, installed, captured)
@@ -255,6 +290,9 @@ def set_subtitle_preset(resolve, project, timeline, params, safe_dir):
                         "Imported preset readback failed")
         if actual.get("templateId") != patch.get("templateId") or actual.get("inputs") != patch.get("after"):
             raise RuntimeError("Resolve did not retain the requested subtitle controls")
+        actual_literals = {entry["name"]: entry.get("value") for entry in actual.get("literalInputs", [])}
+        if any(actual_literals.get(name) != value for name, value in patch.get("literalAfter", {}).items()):
+            raise RuntimeError("Resolve did not retain the requested literal subtitle inputs")
 
     return _revise(resolve, project, timeline, params, safe_dir, dry_run=dry_run, build=build, check=check, report={
         "verification": "resolve_reexport_preset_readback_and_live_edit_inventory",

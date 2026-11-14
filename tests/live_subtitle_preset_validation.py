@@ -26,10 +26,24 @@ def main():
     resolve = dvr.scriptapp("Resolve")
     if not resolve:
         raise RuntimeError("Existing Resolve session unavailable; no launch attempted")
+    version = resolve.GetVersion()
+    if "Studio" not in resolve.GetProductName() or tuple(version[:2]) < (21, 1):
+        raise RuntimeError("Animated subtitle acceptance requires Resolve Studio 21.1+; no project changes made")
     project = resolve.GetProjectManager().GetCurrentProject()
     if not project or not project.GetName().startswith("MCP_QA_"):
         raise RuntimeError("This acceptance requires a disposable MCP_QA_* project")
     original = project.GetCurrentTimeline()
+    captions = original.GetItemListInTrack("subtitle", 1) or []
+    if not captions:
+        raise RuntimeError("The QA timeline needs synthetic captions with word timings")
+    first = captions[0]
+    start, end = int(first.GetStart()), int(first.GetEnd())
+    frames = sorted({start + (end - start) * fraction // 4 for fraction in (1, 2, 3)})
+    gap = start - 1 if start > original.GetStartFrame() else next(
+        (int(a.GetEnd()) for a, b in zip(captions, captions[1:]) if b.GetStart() > a.GetEnd()), None)
+    if gap is None:
+        raise RuntimeError("The QA timeline needs a caption-free gap for render acceptance")
+    frames.append(gap)
     page, tc = resolve.GetCurrentPage(), original.GetCurrentTimecode()
     folder = ROOT / "logs" / f"subtitle-acceptance-{uuid.uuid4().hex[:8]}"
     folder.mkdir(parents=True)
@@ -38,6 +52,16 @@ def main():
     # Pin the existing native handle; even a failed transport never launches.
     server.resolve = resolve
     server._launch_resolve = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("Launch forbidden"))
+
+    def capture_frames(label):
+        for frame in frames:
+            image = server.timeline_frame("capture", {"frame": frame, "format": "png", "quality": "frame"})
+            if isinstance(image, (dict, list)):
+                raise RuntimeError(f"Capture/restore failed: {image}")
+            path = folder / f"{label}-{frame}.png"
+            path.write_bytes(image.data)
+            report["frames"].append({"label": label, "frame": frame, "path": str(path)})
+
     try:
         exported = folder / "native.drt"
         assert original.Export(str(exported), resolve.EXPORT_DRT)
@@ -65,17 +89,33 @@ def main():
         if not result.get("success"):
             raise RuntimeError(json.dumps(result, default=str))
         revised = project.GetCurrentTimeline()
+        capture_frames("baseline")
+        discovery = server.timeline_ai("list_subtitle_preset_inputs", {})
+        assert discovery.get("success"), discovery
+        assert project.GetCurrentTimeline().GetUniqueId() == revised.GetUniqueId()
+        assert any(e["name"] == "HOutlineThickness" and e["writable"]
+                   for e in discovery["literalInputs"]), discovery
+        result = server.timeline_ai("set_subtitle_preset", {
+            "inputs": {"baseOutlineEnabled": 1, "baseOutlineRed": 1,
+                       "baseOutlineGreen": 0, "baseOutlineBlue": 0,
+                       "baseOutlineThickness": 0.08},
+            "literal_inputs": {"HOutlineThickness": 0.075},
+            "revision_name": f"MCP Subtitle Inputs {uuid.uuid4().hex[:8]}",
+        })
+        report["input_action"] = result
+        assert result.get("success"), result
+        assert result["patch"]["after"]["baseOutlineShape"] == 1
+        assert result["patch"]["literalAfter"]["HOutlineThickness"] == 0.075
+        revised = project.GetCurrentTimeline()
+        assert project.GetTimelineCount() >= 3
         # Representative word phases plus one caption-free gap. The image path
         # is native Resolve output, never a thumbnail or source derivative.
-        for frame in (108200, 108220, 108180):
-            image = server.timeline_frame("capture", {"frame": frame, "format": "png", "quality": "frame"})
-            if isinstance(image, dict) or isinstance(image, list):
-                raise RuntimeError(f"Capture/restore failed: {image}")
-            path = folder / f"frame-{frame}.png"
-            path.write_bytes(image.data)
-            report["frames"].append(str(path))
+        capture_frames("base-outline")
         assert project.GetCurrentTimeline().GetUniqueId() == revised.GetUniqueId()
-        report["success"] = True
+        # Render files still require visual review for all-word stroke and
+        # retained highlight/word phases; a successful file write is not a pass.
+        report["structural_success"] = True
+        report["render_review_required"] = True
         print(json.dumps(anonymize_host_paths(report), indent=2, default=str))
     finally:
         assert project.SetCurrentTimeline(original)
