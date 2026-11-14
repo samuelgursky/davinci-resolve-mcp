@@ -15759,6 +15759,214 @@ def _timeline_append_readback_snapshot(proj):
     }
 
 
+def _created_clip_property(clip, key):
+    try:
+        getter = getattr(clip, "GetClipProperty", None)
+        value = getter(key) if callable(getter) else None
+        return value if isinstance(value, str) else None
+    except Exception:
+        return None
+
+
+def _normalized_subtitle_text(value):
+    return " ".join(str(value or "").split())
+
+
+def _read_srt_cue_texts(path):
+    with open(path, "r", encoding="utf-8-sig") as handle:
+        content = handle.read()
+    cues = []
+    for block in re.split(r"(?:\r?\n){2,}", content.strip()):
+        lines = block.splitlines()
+        timing_index = next(
+            (index for index, line in enumerate(lines)
+             if re.match(r"^\s*\d{1,2}:\d{2}:\d{2}[,.]\d{1,3}\s*-->\s*"
+                         r"\d{1,2}:\d{2}:\d{2}[,.]\d{1,3}(?:\s+.*)?$", line)),
+            None,
+        )
+        if timing_index is None:
+            raise ValueError("SRT cue has no valid timing line")
+        text = _normalized_subtitle_text("\n".join(lines[timing_index + 1:]))
+        if not text:
+            raise ValueError("SRT cue has empty text")
+        cues.append(text)
+    if not cues:
+        raise ValueError("SRT contains no cues")
+    return cues
+
+
+def _created_timeline_readback(proj, created, clips):
+    """Read back media IDs, subtitle cues, and source-less generator entries."""
+    expected_ids, subtitle_ids, expected_generators = [], [], []
+    subtitle_sources = []
+    source_errors = []
+    for clip in clips:
+        clip_id = _safe_media_pool_item_id(clip)
+        file_path = _created_clip_property(clip, "File Path")
+        if (subtitle_append_guard.is_subtitle_item(clip)
+                or (file_path and file_path.lower().endswith(".srt"))):
+            if clip_id:
+                subtitle_ids.append(clip_id)
+            subtitle_sources.append(clip)
+            continue
+        clip_type = (_created_clip_property(clip, "Type") or "").strip().casefold()
+        if clip_type in {"generator", "title", "fusion generator", "fusion composition"}:
+            name = _safe_media_pool_item_name(clip)
+            if name:
+                expected_generators.append((clip_id, name))
+            else:
+                source_errors.append("Generator/title source has no readable name")
+        elif clip_id:
+            expected_ids.append(clip_id)
+        else:
+            name = _safe_media_pool_item_name(clip) or "<unnamed>"
+            source_errors.append(f"Media source {name} has no readable unique ID")
+    expected_ids = list(dict.fromkeys(expected_ids))
+    subtitle_ids = list(dict.fromkeys(subtitle_ids))
+    timeline_id = _safe_timeline_item_id(created)
+    readback = {
+        "timeline_id": timeline_id,
+        "project_timeline_found": False,
+        "item_count": 0,
+        "media_pool_item_ids": [],
+        "missing_clip_ids": list(expected_ids),
+        "missing_generator_clip_ids": [clip_id for clip_id, _ in expected_generators if clip_id],
+        "generator_item_names": [],
+        "subtitle_readback": {
+            "source_clip_ids": subtitle_ids,
+            "sources": [],
+            "mode": "source_srt" if subtitle_sources else None,
+            "expected_cue_count": None,
+            "cue_count": 0,
+            "invalid_cue_count": 0,
+            "text_mismatches": [],
+            "verified": not subtitle_sources,
+        },
+        "errors": list(source_errors),
+        "verified": False,
+    }
+    if not timeline_id:
+        readback["errors"].append("Created timeline has no readable unique ID")
+        return readback
+    try:
+        timeline_count = int(proj.GetTimelineCount() or 0)
+        project_timeline = None
+        for index in range(1, timeline_count + 1):
+            candidate = proj.GetTimelineByIndex(index)
+            if candidate and _safe_timeline_item_id(candidate) == timeline_id:
+                project_timeline = candidate
+                break
+    except Exception as exc:
+        readback["errors"].append(f"Project timeline enumeration failed: {exc}")
+        return readback
+    if project_timeline is None:
+        readback["errors"].append("Created timeline unique ID is absent from the current project")
+        return readback
+    readback["project_timeline_found"] = True
+
+    observed_ids, generator_names, subtitle_texts = [], [], []
+    for track_type in ("video", "audio", "subtitle"):
+        try:
+            track_count = int(project_timeline.GetTrackCount(track_type) or 0)
+        except Exception as exc:
+            readback["errors"].append(f"GetTrackCount({track_type}) failed: {exc}")
+            continue
+        for track_index in range(1, track_count + 1):
+            try:
+                items = project_timeline.GetItemListInTrack(track_type, track_index) or []
+            except Exception as exc:
+                readback["errors"].append(
+                    f"GetItemListInTrack({track_type}, {track_index}) failed: {exc}"
+                )
+                continue
+            readback["item_count"] += len(items)
+            for item in items:
+                if track_type == "subtitle" and subtitle_sources:
+                    readback["subtitle_readback"]["cue_count"] += 1
+                    text = _normalized_subtitle_text(_safe_timeline_item_name(item))
+                    subtitle_texts.append(text)
+                    try:
+                        start, end = item.GetStart(), item.GetEnd()
+                        if not text or start is None or end is None or end <= start:
+                            readback["subtitle_readback"]["invalid_cue_count"] += 1
+                    except Exception:
+                        readback["subtitle_readback"]["invalid_cue_count"] += 1
+                try:
+                    media_item = item.GetMediaPoolItem()
+                    media_id = _safe_media_pool_item_id(media_item)
+                except Exception as exc:
+                    readback["errors"].append(f"Timeline item Media Pool readback failed: {exc}")
+                    continue
+                if media_id and media_id not in observed_ids:
+                    observed_ids.append(media_id)
+                if media_item is None and track_type != "subtitle" and expected_generators:
+                    try:
+                        name = item.GetName()
+                        start, end = item.GetStart(), item.GetEnd()
+                        if name and start is not None and end is not None and end > start:
+                            generator_names.append(name)
+                    except Exception:
+                        continue
+    readback["media_pool_item_ids"] = observed_ids
+    readback["missing_clip_ids"] = [clip_id for clip_id in expected_ids if clip_id not in observed_ids]
+    readback["generator_item_names"] = list(dict.fromkeys(generator_names))
+    readback["missing_generator_clip_ids"] = [
+        clip_id for clip_id, name in expected_generators
+        if clip_id and name not in generator_names
+    ]
+    subtitle_readback = readback["subtitle_readback"]
+    expected_texts = []
+    source_comparison = bool(subtitle_sources)
+    source_read_errors = []
+    for clip in subtitle_sources:
+        path = _created_clip_property(clip, "File Path")
+        source = {
+            "name": _safe_media_pool_item_name(clip),
+            "file_path": path,
+            "cue_count": None,
+        }
+        subtitle_readback["sources"].append(source)
+        if not path:
+            source_comparison = False
+            continue
+        try:
+            cue_texts = _read_srt_cue_texts(path)
+        except (OSError, ValueError) as exc:
+            source_read_errors.append(f"Could not parse source SRT {path}: {exc}")
+            continue
+        source["cue_count"] = len(cue_texts)
+        expected_texts.extend(cue_texts)
+    readback["errors"].extend(source_read_errors)
+    if source_comparison and not source_read_errors:
+        subtitle_readback["expected_cue_count"] = len(expected_texts)
+        subtitle_readback["text_mismatches"] = [
+            {"index": index, "expected": expected, "observed": observed}
+            for index, (expected, observed) in enumerate(zip(expected_texts, subtitle_texts))
+            if expected != observed
+        ]
+        cue_count_matches = len(expected_texts) == len(subtitle_texts)
+    else:
+        subtitle_readback["mode"] = "timeline_cues" if subtitle_sources else None
+        cue_count_matches = bool(subtitle_texts)
+    subtitle_readback["verified"] = bool(
+        not subtitle_sources
+        or (subtitle_texts
+            and cue_count_matches
+            and not subtitle_readback["text_mismatches"]
+            and subtitle_readback["invalid_cue_count"] == 0
+            and not source_read_errors)
+    )
+    readback["verified"] = bool(
+        (expected_ids or subtitle_sources or expected_generators)
+        and not readback["missing_clip_ids"]
+        and not readback["missing_generator_clip_ids"]
+        and subtitle_readback["verified"]
+        and not readback["errors"]
+        and readback["item_count"] > 0
+    )
+    return readback
+
+
 def _compare_timeline_append_readback(before, observed, expected_count: int):
     before_count = before.get("item_count") if isinstance(before, dict) and before.get("available") else None
     after_count = observed.get("item_count") if isinstance(observed, dict) and observed.get("available") else None
@@ -23681,14 +23889,42 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
         clips, clips_err = _clips_from_ids(root, clip_ids, verb="created")
         if clips_err:
             return clips_err
+        # Media Pool state can change between validation and native creation.
+        # Re-resolve every ID against a fresh root immediately before the call
+        # rather than handing Resolve a stale or partial batch.
+        fresh_root = mp.GetRootFolder()
+        if not fresh_root:
+            return _err(
+                "Failed to refresh the Media Pool before creating the timeline",
+                code="MEDIA_POOL_READBACK_FAILED", category="resolve_api_failed",
+            )
+        clips, clips_err = _clips_from_ids(fresh_root, clip_ids, verb="created")
+        if clips_err:
+            return clips_err
         tl = mp.CreateTimelineFromClips(create_name, clips)
+        if not tl:
+            return _err("Failed to create timeline", code="CREATE_TIMELINE_FAILED")
+        readback = _created_timeline_readback(proj, tl, clips)
+        if not readback["verified"]:
+            out = _err(
+                "CreateTimelineFromClips returned a timeline, but its project or clip readback failed",
+                code="CREATE_TIMELINE_READBACK_FAILED", category="resolve_api_failed",
+                retryable=False,
+                remediation=("Inspect the current project for the returned timeline ID before retrying; "
+                             "the native call may already have created a timeline."),
+                state=readback,
+            )
+            out.update({"success": False, "verified": False, "readback": readback})
+            return out
         return _ok(
             name=tl.GetName(),
             id=tl.GetUniqueId(),
             requested_name=p.get("name"),
             created_new=True,
             versioned_name=bool(existing and create_name != p.get("name")),
-        ) if tl else _err("Failed to create timeline")
+            verified=True,
+            readback=readback,
+        )
     elif action == "create_multicam_clip":
         missing = _requires_method(mp, "CreateMulticamClip", "21.1")
         if missing:
@@ -28804,7 +29040,7 @@ def timeline_markers(action: str, params: Optional[Dict[str, Any]] = None) -> An
       delete_at_frame(frame|frame_id|frameId|timecode) -> {success}
       delete_by_custom_data(custom_data) -> {success}
       get_current_timecode() -> {timecode}
-      set_current_timecode(timecode) -> {success}
+      set_current_timecode(timecode) -> {success, requested, target, before, actual, api_success, verified}
       get_current_video_item() -> {name, id}
       get_thumbnail() -> {thumbnail}
       get_thumbnail_image() -> MCP image content for the current Color-page frame
@@ -28905,7 +29141,53 @@ def timeline_markers(action: str, params: Optional[Dict[str, Any]] = None) -> An
     elif action == "get_current_timecode":
         return {"timecode": tl.GetCurrentTimecode()}
     elif action == "set_current_timecode":
-        return {"success": bool(tl.SetCurrentTimecode(_playhead_absolute_timecode(tl, p["timecode"])))}
+        requested = p["timecode"]
+        target = _playhead_absolute_timecode(tl, requested)
+        try:
+            before = tl.GetCurrentTimecode()
+        except Exception:
+            before = None
+        try:
+            api_success = bool(tl.SetCurrentTimecode(target))
+        except Exception as exc:
+            api_success = False
+            api_error = str(exc)
+        else:
+            api_error = None
+        try:
+            actual = tl.GetCurrentTimecode()
+            readback_error = None
+        except Exception as exc:
+            actual = None
+            readback_error = str(exc)
+        verified = target is not None and readback_error is None and actual == target
+        result = {
+            "success": bool(api_success and verified),
+            "requested": requested,
+            "target": target,
+            "before": before,
+            "actual": actual,
+            "api_success": api_success,
+            "verified": verified,
+        }
+        if api_error:
+            result["api_error"] = api_error
+        if readback_error:
+            result["readback_error"] = readback_error
+        if not result["success"]:
+            message = (
+                f"SetCurrentTimecode returned True but the playhead reads {actual!r}, not {target!r}"
+                if api_success else f"SetCurrentTimecode failed for {target!r}"
+            )
+            error = _err(
+                message,
+                code="TIMECODE_READBACK_MISMATCH" if api_success else "SET_CURRENT_TIMECODE_FAILED",
+                category="resolve_api_failed",
+                retryable=True,
+                state={key: value for key, value in result.items() if key != "success"},
+            )
+            result.update(error)
+        return result
     elif action == "get_current_video_item":
         it = tl.GetCurrentVideoItem()
         return {"name": it.GetName(), "id": it.GetUniqueId()} if it else {"name": None, "id": None}

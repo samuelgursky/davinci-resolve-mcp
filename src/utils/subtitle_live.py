@@ -11,7 +11,7 @@ import shutil
 import subprocess
 import uuid
 from pathlib import Path
-from src.utils.resolve_writes import set_current_timeline, describe_switch_failure
+from src.utils.resolve_writes import set_current_timeline, describe_switch_failure, unique_id
 from src.utils.title_library import find_subtitle_preset
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -130,10 +130,95 @@ def _preflight(timeline, params):
     return node, dry_run, track
 
 
+def _post_write_database_health(resolve, project_id, timeline, target_track):
+    """Prove that a live subtitle write left the same project readable.
+
+    Native imports and timeline selection can answer successfully while Resolve
+    has no database attached. Never attempt a repair here: the safe remediation
+    for that application state is a manual Resolve restart.
+    """
+    health = {
+        "healthy": False,
+        "project_id_before": project_id,
+        "project_id_after": None,
+        "project_unchanged": False,
+        "database_attached": False,
+        "current_timeline_id": None,
+        "expected_timeline_id": unique_id(timeline),
+        "current_timeline_verified": False,
+        "target_track": target_track,
+        "target_item_count": None,
+        "target_items_healthy": False,
+        "errors": [],
+    }
+    try:
+        pm = resolve.GetProjectManager()
+        database = pm.GetCurrentDatabase() if pm else None
+        health["database_attached"] = bool(database)
+        if not database:
+            health["errors"].append("Resolve has no database attached")
+        current_project = pm.GetCurrentProject() if pm else None
+    except Exception as exc:
+        health["errors"].append(f"Project/database readback failed: {exc}")
+        return health
+
+    health["project_id_after"] = unique_id(current_project)
+    health["project_unchanged"] = bool(
+        project_id and health["project_id_after"] == project_id
+    )
+    if current_project is None:
+        health["errors"].append("Resolve returned no current project after the write")
+    elif not health["project_unchanged"]:
+        health["errors"].append("The current project unique ID changed during the write")
+
+    try:
+        current_timeline = current_project.GetCurrentTimeline() if current_project else None
+        health["current_timeline_id"] = unique_id(current_timeline)
+        health["current_timeline_verified"] = bool(
+            health["expected_timeline_id"]
+            and health["current_timeline_id"] == health["expected_timeline_id"]
+        )
+        if not health["current_timeline_verified"]:
+            health["errors"].append("The verified subtitle revision is not the current timeline")
+    except Exception as exc:
+        health["errors"].append(f"Current timeline readback failed: {exc}")
+        return health
+
+    if not health["current_timeline_verified"]:
+        return health
+    item_errors = []
+    try:
+        items = current_timeline.GetItemListInTrack("subtitle", target_track)
+        if items is None:
+            raise RuntimeError("GetItemListInTrack returned None")
+        health["target_item_count"] = len(items)
+        for item in items:
+            if not unique_id(item):
+                item_errors.append("A target subtitle item has no readable unique ID")
+                continue
+            start, end = item.GetStart(), item.GetEnd()
+            if start is None or end is None or end < start:
+                item_errors.append(f"Subtitle item {unique_id(item)} has invalid bounds")
+    except Exception as exc:
+        item_errors.append(f"Target subtitle item readback failed: {exc}")
+    health["target_items_healthy"] = not item_errors and health["target_item_count"] is not None
+    health["errors"].extend(item_errors)
+    health["healthy"] = bool(
+        health["database_attached"]
+        and health["project_unchanged"]
+        and health["current_timeline_verified"]
+        and health["target_items_healthy"]
+        and not health["errors"]
+    )
+    return health
+
+
 def _revise(resolve, project, timeline, params, safe_dir, *, dry_run, build, check, report, edited_track=None):
     """Export, build(source, output, staging) a patched DRT, import it as a selected
     revision and check(readback, patch) Resolve's re-export of it. The original is
     never modified and stays active on any failure or preview."""
+    project_id = unique_id(project)
+    database_health = None
     name = params.get("revision_name") or f"{timeline.GetName()} - subtitles {uuid.uuid4().hex[:8]}"
     if any(project.GetTimelineByIndex(i).GetName() == name for i in range(1, project.GetTimelineCount() + 1)):
         return {"success": False, "error": "revision_name already exists"}
@@ -179,17 +264,39 @@ def _revise(resolve, project, timeline, params, safe_dir, *, dry_run, build, che
         if original_timecode:
             if not imported.SetCurrentTimecode(original_timecode) or imported.GetCurrentTimecode() != original_timecode:
                 warnings.append("Subtitle revision was selected, but its playhead could not be restored")
+        database_health = _post_write_database_health(
+            resolve, project_id, imported, params.get("track", 1)
+        )
+        if not database_health["healthy"]:
+            result = {
+                "success": False,
+                "error": "Resolve project/database health verification failed after the subtitle write",
+                "error_code": "RESOLVE_DATABASE_UNHEALTHY",
+                "restart_required": True,
+                "remediation": ("Quit and restart Resolve manually, then reopen and inspect the project before "
+                                "retrying. This tool does not repair a detached Resolve database."),
+                "api_success": True,
+                "verified": False,
+                "database_health": database_health,
+                "original_export": str(source),
+                "failed_revision": imported.GetName(),
+            }
+            return result
         succeeded = True
         result = {"success": True, "restart_required": False, "original_timeline": timeline.GetName(),
                   "timeline": imported.GetName(), "timeline_id": imported.GetUniqueId(),
-                  "patch": patch, **report, "render_verified": False}
+                  "patch": patch, **report, "render_verified": False,
+                  "api_success": True, "database_health": database_health, "verified": True}
         if warnings:
             result["warnings"] = warnings
         return result
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
         result = {"success": False, "error": str(exc), "restart_required": False,
+                  "api_success": False, "verified": False,
                   "original_export": str(source),
                   "failed_revision": imported.GetName() if imported else None}
+        if database_health is not None:
+            result["database_health"] = database_health
         return result
     finally:
         # A failed or preview operation must leave the user's working timeline active.
