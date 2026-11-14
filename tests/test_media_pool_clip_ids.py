@@ -34,6 +34,8 @@ verified_operation.verification_status said "api_failed" (FalsyAppendTest).
 The fake MediaPool records every call that reaches Resolve, so "mutates nothing"
 is asserted as "Resolve was never asked", not inferred from the return value.
 """
+import os
+import tempfile
 import unittest
 from unittest import mock
 
@@ -41,9 +43,11 @@ from src import server as s
 
 
 class FakeClip:
-    def __init__(self, name, uid):
+    def __init__(self, name, uid, clip_type=None, file_path=None):
         self._name = name
         self._uid = uid
+        self._clip_type = clip_type
+        self._file_path = file_path
 
     def GetName(self):
         return self._name
@@ -51,17 +55,32 @@ class FakeClip:
     def GetUniqueId(self):
         return self._uid
 
+    def GetClipProperty(self, name):
+        return self._clip_type if name == "Type" else None
+
 
 class FakeTimelineItem:
-    def __init__(self, source, uid):
+    def __init__(self, source, uid, name=None, start=0, end=24):
         self._source = source
         self._uid = uid
+        self._name = name if name is not None else (source.GetName() if source else "")
+        self._start = start
+        self._end = end
 
     def GetUniqueId(self):
         return self._uid
 
     def GetMediaPoolItem(self):
         return self._source
+
+    def GetName(self):
+        return self._name
+
+    def GetStart(self):
+        return self._start
+
+    def GetEnd(self):
+        return self._end
 
 
 class FakeFolder:
@@ -91,6 +110,7 @@ class FakeTimeline:
         self._name = name
         self._uid = uid
         self.items = []
+        self.subtitle_items = []
 
     def GetName(self):
         return self._name
@@ -99,10 +119,18 @@ class FakeTimeline:
         return self._uid
 
     def GetTrackCount(self, track_type):
-        return 1 if track_type == "video" else 0
+        if track_type == "video":
+            return 1
+        if track_type == "subtitle" and self.subtitle_items:
+            return 1
+        return 0
 
     def GetItemListInTrack(self, track_type, track_index):
-        return list(self.items) if (track_type, track_index) == ("video", 1) else []
+        if (track_type, track_index) == ("video", 1):
+            return list(self.items)
+        if (track_type, track_index) == ("subtitle", 1):
+            return list(self.subtitle_items)
+        return []
 
 
 # ExportMetadata(path) and ExportMetadata(path, []) are different requests; the
@@ -144,8 +172,16 @@ class FakeMP:
     def CreateTimelineFromClips(self, name, clips):
         self.calls.append(("CreateTimelineFromClips", list(clips), name))
         timeline = FakeTimeline(name, "tl-new")
-        timeline.items = [FakeTimelineItem(clip, f"ti-new-{index}")
-                          for index, clip in enumerate(clips)]
+        for index, clip in enumerate(clips):
+            clip_type = clip.GetClipProperty("Type")
+            if clip_type == "Subtitle":
+                timeline.subtitle_items.append(FakeTimelineItem(
+                    None, f"ti-new-{index}", name=f"Caption {index + 1}"))
+            elif clip_type in {"Generator", "Title", "Fusion Generator"}:
+                timeline.items.append(FakeTimelineItem(
+                    None, f"ti-new-{index}", name=clip.GetName()))
+            else:
+                timeline.items.append(FakeTimelineItem(clip, f"ti-new-{index}"))
         self.created_timelines.append(timeline)
         return timeline
 
@@ -176,6 +212,22 @@ class EmptyCreateMP(FakeMP):
     def CreateTimelineFromClips(self, name, clips):
         timeline = super().CreateTimelineFromClips(name, clips)
         timeline.items = []
+        timeline.subtitle_items = []
+        return timeline
+
+
+class EmptySubtitleCreateMP(FakeMP):
+    def CreateTimelineFromClips(self, name, clips):
+        timeline = super().CreateTimelineFromClips(name, clips)
+        timeline.subtitle_items = []
+        return timeline
+
+
+class InvalidSubtitleCreateMP(FakeMP):
+    def CreateTimelineFromClips(self, name, clips):
+        timeline = super().CreateTimelineFromClips(name, clips)
+        for item in timeline.subtitle_items:
+            item._end = item._start
         return timeline
 
 
@@ -412,6 +464,67 @@ class BatchActionTest(unittest.TestCase):
         self.assertEqual(out["readback"]["item_count"], 0)
         self.assertEqual(out["readback"]["missing_clip_ids"], ["clip-top", "clip-nested"])
         self.assertEqual(out["error"]["code"], "CREATE_TIMELINE_READBACK_FAILED")
+
+    def test_subtitle_create_verifies_cues_without_media_pool_items(self):
+        subtitle = FakeClip("captions.srt", "clip-subtitle", clip_type="Subtitle")
+        root = FakeFolder("Master", "id-root", clips=[subtitle])
+        mp = FakeMP(root)
+
+        out = _call(mp, "create_timeline_from_clips",
+                    {"name": "Captions", "clip_ids": ["clip-subtitle"]})
+
+        self.assertTrue(out["success"], out)
+        self.assertTrue(out["verified"])
+        self.assertIsNone(mp.created_timelines[0].subtitle_items[0].GetMediaPoolItem())
+        self.assertEqual(out["readback"]["missing_clip_ids"], [])
+        self.assertEqual(out["readback"]["subtitle_readback"]["cue_count"], 1)
+        self.assertTrue(out["readback"]["subtitle_readback"]["verified"])
+
+    def test_subtitle_create_without_valid_cues_is_structured_failure(self):
+        for make_mp, cue_count, invalid_count in (
+            (EmptySubtitleCreateMP, 0, 0),
+            (InvalidSubtitleCreateMP, 1, 1),
+        ):
+            with self.subTest(make_mp=make_mp.__name__):
+                subtitle = FakeClip("captions.srt", "clip-subtitle", clip_type="Subtitle")
+                root = FakeFolder("Master", "id-root", clips=[subtitle])
+                mp = make_mp(root)
+
+                out = _call(mp, "create_timeline_from_clips",
+                            {"name": "Captions", "clip_ids": ["clip-subtitle"]})
+
+                self.assertFalse(out["success"])
+                self.assertEqual(out["error"]["code"], "CREATE_TIMELINE_READBACK_FAILED")
+                self.assertEqual(out["readback"]["subtitle_readback"]["cue_count"], cue_count)
+                self.assertEqual(out["readback"]["subtitle_readback"]["invalid_cue_count"], invalid_count)
+                self.assertFalse(out["readback"]["subtitle_readback"]["verified"])
+
+    def test_generator_create_verifies_source_less_item_by_name_and_bounds(self):
+        generator = FakeClip("Solid Color", "clip-generator", clip_type="Generator")
+        root = FakeFolder("Master", "id-root", clips=[generator])
+        mp = FakeMP(root)
+
+        out = _call(mp, "create_timeline_from_clips",
+                    {"name": "Generator", "clip_ids": ["clip-generator"]})
+
+        self.assertTrue(out["success"], out)
+        self.assertIsNone(mp.created_timelines[0].items[0].GetMediaPoolItem())
+        self.assertEqual(out["readback"]["generator_item_names"], ["Solid Color"])
+        self.assertEqual(out["readback"]["missing_generator_clip_ids"], [])
+
+    def test_mixed_media_and_subtitle_create_checks_both_readbacks(self):
+        media = FakeClip("A001.mov", "clip-media")
+        subtitle = FakeClip("captions.srt", "clip-subtitle", clip_type="Subtitle")
+        root = FakeFolder("Master", "id-root", clips=[media, subtitle])
+        mp = FakeMP(root)
+
+        out = _call(mp, "create_timeline_from_clips",
+                    {"name": "Mixed", "clip_ids": ["clip-media", "clip-subtitle"]})
+
+        self.assertTrue(out["success"], out)
+        self.assertEqual(out["readback"]["media_pool_item_ids"], ["clip-media"])
+        self.assertEqual(out["readback"]["subtitle_readback"]["cue_count"], 1)
+        self.assertEqual(out["readback"]["item_count"], 2)
 
     def test_export_without_clip_ids_still_exports_every_clip(self):
         for params in ({"path": "/scratch/all.csv"},
