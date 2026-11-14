@@ -109,12 +109,11 @@ retained original revision preserves prior element-4 styling.
 }}}
 ```
 
-**Feedback release — Studio 21.1 rendering unverified:** the new controls have
-automated structural tests; native Text+ input names were probed on Studio
-19.1.3.7. The maintainer authorized publication with this limitation disclosed
-while requesting end-user feedback. A free 21.1.0.15 import/re-export
-succeeded, but rendering raised a Studio limitation and produced a black frame;
-this is not visible-effect validation. Per-word scale and cue transitions
+**Studio 21.1 rendering unverified:** the new controls have automated
+structural tests; native Text+ input names were probed on Studio 19.1.3.7. A
+free 21.1.0.15 import/re-export succeeded, but rendering raised a Studio
+limitation and produced a black frame; this is not visible-effect validation.
+A Studio 21.1+ render check is still pending; report results on #295. Per-word scale and cue transitions
 remain unsupported, including through `literal_inputs` when absent or connected.
 Input discovery does not synthesize animation or combine presets.
 
