@@ -321,6 +321,17 @@ NON_TIMELINE_WRITE_TOOLS: frozenset = frozenset({
 })
 
 
+#: Registered timeline actions that leave the working timeline unchanged. They
+#: keep every gate (safe mode, dry-run refusal, the audit log) but skip
+#: version-on-mutate archiving. `timeline.duplicate` copies the current timeline
+#: into a new one; archiving the untouched source before it wrote an
+#: `_archived_vNN` sibling that read as evidence of an edit that never happened
+#: (issue #366).
+NON_MUTATING_TIMELINE_ACTIONS: FrozenSet[Tuple[str, str]] = frozenset({
+    ("timeline", "duplicate"),
+})
+
+
 # ── Strict-mode allowlist ───────────────────────────────────────────────────
 #
 # Actions in this set REFUSE to run if the version-on-mutate archive fails. For
@@ -1282,7 +1293,10 @@ def destructive_op(tool_name: str) -> Callable[[Callable[..., Any]], Callable[..
                     recognised=risk_recognised,
                 )
 
-            if tool_name in NON_TIMELINE_WRITE_TOOLS:
+            if (tool_name in NON_TIMELINE_WRITE_TOOLS
+                    or (tool_name, action) in NON_MUTATING_TIMELINE_ACTIONS):
+                skipped_reason = ("not_a_timeline_mutation" if tool_name in NON_TIMELINE_WRITE_TOOLS
+                                  else "source_timeline_unchanged")
                 result = fn(action, params, *args, **kwargs)
                 _audit_security_event(
                     operation_id=operation_id,
@@ -1291,14 +1305,14 @@ def destructive_op(tool_name: str) -> Callable[[Callable[..., Any]], Callable[..
                     risk_level=risk_level,
                     status="allowed",
                     params=params,
-                    reason="not_a_timeline_mutation",
+                    reason=skipped_reason,
                     recognised=risk_recognised,
                 )
                 if isinstance(result, dict):
                     result.setdefault("_versioning", {
                         "analysis_run_id": None,
                         "archived": False,
-                        "skipped_reason": "not_a_timeline_mutation",
+                        "skipped_reason": skipped_reason,
                     })
                 return _annotate_security(
                     result,

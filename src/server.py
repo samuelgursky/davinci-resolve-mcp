@@ -64,6 +64,7 @@ from src.utils.film_cues import export_cue_sheet as _export_film_cue_sheet
 from src.utils.cdl import normalize_cdl_payload
 from src.utils.media_paths import media_exists as _media_exists
 from src.utils.preset_files import preset_export_file as _preset_export_file
+from src.utils.render_target import missing_target_dir_error as _missing_target_dir_error
 from src.utils import archive_guard
 from src.utils import subtitle_append_guard
 from src.utils import typed_api_search
@@ -3915,6 +3916,24 @@ def _normalize_record_frame(
     if mode == "auto":
         return (start + rf) if rf < start else rf, None
     return start + rf, None
+
+
+def _rows_with_default_record_frame_mode(rows, p):
+    """Apply a top-level record_frame_mode to clip_infos rows that set none.
+
+    The mode used to be read only per row, so `record_frame_mode` passed beside
+    `clip_infos` was dropped and an absolute frame landed start-relative with
+    success (issue #365). A row's own mode still wins.
+    """
+    mode = p.get("record_frame_mode", p.get("recordFrameMode"))
+    if mode is None or not isinstance(rows, list):
+        return rows
+    out = []
+    for ci in rows:
+        if isinstance(ci, dict) and "record_frame_mode" not in ci and "recordFrameMode" not in ci:
+            ci = {**ci, "record_frame_mode": mode}
+        out.append(ci)
+    return out
 
 
 def _timeline_start_frame(tl) -> Optional[int]:
@@ -23248,6 +23267,10 @@ def render(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, An
                 category="invalid_input",
                 reason="Nothing was sent to SetRenderSettings.",
             )
+        target_refusal = _missing_target_dir_error(settings)
+        if target_refusal:
+            message = target_refusal.pop("message")
+            return _err(message, **target_refusal)
         result = {"success": bool(proj.SetRenderSettings(settings))}
         if ignored_settings:
             result["ignored_settings"] = ignored_settings
@@ -23570,7 +23593,7 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
         if policy_result:
             return policy_result
         if p.get("clip_infos") is not None:
-            raw = p["clip_infos"]
+            raw = _rows_with_default_record_frame_mode(p["clip_infos"], p)
             if not isinstance(raw, list):
                 return _err("clip_infos must be a list")
             if not raw:
@@ -23677,7 +23700,7 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
                 "timelines_before": before_n, "timelines_after": after_n}
     elif action == "append_to_timeline":
         if p.get("clip_infos") is not None:
-            raw = p["clip_infos"]
+            raw = _rows_with_default_record_frame_mode(p["clip_infos"], p)
             if not isinstance(raw, list):
                 return _err("clip_infos must be a list")
             if not raw:

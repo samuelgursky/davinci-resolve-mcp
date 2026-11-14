@@ -3,6 +3,7 @@
 from src.granular.common import *  # noqa: F401,F403
 from src.utils.bool_params import recognised_bool
 from src.utils.page_lock import restoring_page
+from src.utils.render_target import missing_target_dir, missing_target_dir_message
 
 resolve = ResolveProxy()
 
@@ -1222,7 +1223,8 @@ def set_render_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
     Args:
         settings: Dict of render settings. All documented keys are forwarded:
             SelectAllFrames (bool), MarkIn (int), MarkOut (int),
-            TargetDir (str), CustomName (str), UniqueFilenameStyle (0=Prefix/1=Suffix),
+            TargetDir (str; must be an existing directory, refused before the
+            call otherwise), CustomName (str), UniqueFilenameStyle (0=Prefix/1=Suffix),
             ExportVideo (bool), ExportAudio (bool), FormatWidth (int),
             FormatHeight (int), FrameRate (float), PixelAspectRatio (float),
             VideoQuality (int/str), AudioCodec (str), AudioBitDepth (int),
@@ -1243,6 +1245,9 @@ def set_render_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
         if coerced is None:
             return {"error": "UseUniqueFilenames must be a boolean (true/false)"}
         settings = dict(settings, UseUniqueFilenames=coerced)
+    missing_target = missing_target_dir(settings)
+    if missing_target is not None:
+        return {"error": missing_target_dir_message(missing_target)}
     resolve = get_resolve()
     if resolve is None:
         return {"error": "Not connected to DaVinci Resolve"}
