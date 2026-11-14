@@ -2,6 +2,27 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v5.2.9 — Bad track indexes and misplaced arguments are refused, not dropped
+
+From #370 and #372 by @willturner-maker, plus a Traditional Chinese README from #369 by @monarchsofchaos004-gif.
+
+### Fixed
+
+- **A `clip_infos` `track_index` that names no track landed on track 1 (#370).** Resolve places a clipInfo whose `trackIndex` is 0, past the track count, or not an int (`"2"`) on track 1 and returns the new items, so the read-back reported the wrong-track placement as verified. Rows are now checked before anything reaches `AppendToTimeline`, in both servers. `track_index` must be a 1-based integer; a digit string is coerced. It must name an existing track of the row's `media_type`, or either type when none is set. `media_type` must be 1 or 2. Refusals carry `INVALID_TRACK_INDEX`, `TRACK_INDEX_OUT_OF_RANGE` (with the timeline's track counts) or `INVALID_MEDIA_TYPE`, and one bad row refuses the batch. `create_timeline_from_clips` validates every row before the timeline exists and adds the tracks the rows name.
+- **Arguments passed beside `action` were dropped (#372).** FastMCP ignores arguments the tool's signature does not name, so `timeline(action="get_name", timeline_name="vB")` ran on the current timeline with success and no `ignored_params`. Such calls are now refused before the tool runs, with `isError: true`, code `UNKNOWN_ARGUMENTS` and, for the compound tools, the corrected `params`. Applies to every tool in both servers.
+
+### Added
+
+- **`README.zh-TW.md`**, a Traditional Chinese (Taiwan) translation (#369). Its version badge and `本翻譯對應` line are part of every release bump, enforced by `test_release_surface_drift`.
+
+### Not changed
+
+- **#371** (probe cost per item up in 5.1.0): the probe makes the same 14 Resolve calls per item in v4.19.3, v5.1.0 and this release, and the server's own time is about 0.013 ms per item, so the measured change is Resolve's response time, not the server.
+
+### Not verified here
+
+- Offline tests only. The reports were measured on Studio 21.2.0.6; this machine runs Studio 19.1.3.7, and no live Resolve run was made for this release.
+
 ## What's New in v5.2.8 — Three calls stop answering success while dropping the request
 
 From #365, #366 and #368 by @willturner-maker.
