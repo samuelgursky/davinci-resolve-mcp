@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md) | 繁體中文
 
-[![Version](https://img.shields.io/badge/version-5.2.9-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
+[![Version](https://img.shields.io/badge/version-5.2.10-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![npm](https://img.shields.io/npm/v/davinci-resolve-mcp.svg?label=npm&color=CB3837)](https://www.npmjs.com/package/davinci-resolve-mcp)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](docs/reference/api-coverage.md)
 [![Tools](https://img.shields.io/badge/MCP%20Tools-37%20(390%20full)-blue.svg)](#伺服器模式)
@@ -12,7 +12,7 @@
 [![Python](https://img.shields.io/badge/python-3.10+-green.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
-> 本翻譯對應 v5.2.9 版 README。如與英文原版有出入，以[英文原版](README.md)為準。
+> 本翻譯對應 v5.2.10 版 README。如與英文原版有出入，以[英文原版](README.md)為準。
 
 一個 Model Context Protocol（MCP）伺服器，讓 AI 助理透過官方腳本 API 控制 DaVinci Resolve Studio。它提供完整的 API 覆蓋，並附上有防護機制的工作流程輔助工具，涵蓋剪輯、媒體池整理、算圖輸出設定、審閱標記、調色、Fusion、Fairlight、專案生命週期作業、擴充功能開發，以及不更動原始素材的媒體分析。
 

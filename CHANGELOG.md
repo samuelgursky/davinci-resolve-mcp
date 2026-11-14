@@ -2,6 +2,24 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v5.2.10 — Three writes are read back before they report success
+
+From #373 by @youchengyangdu-pixel, adapted on landing.
+
+### Fixed
+
+- **`timeline_markers.set_current_timecode` trusted the native `True`.** It now reads the playhead back, compared by frame and retried, and returns `requested`, `target`, `before`, `actual`, `api_success` and `verified`. A `True` that left the playhead elsewhere is `TIMECODE_READBACK_MISMATCH`. The shared seek check also accepts a read-back naming the same timecode label, so a drop-frame `;` or an unpadded hour no longer fails a seek that landed.
+- **`media_pool.create_timeline_from_clips` (`clip_ids`) trusted the returned timeline.** It now confirms the timeline is in the project, holds items, and carries every ordinary clip's media-pool ID; a miss is `CREATE_TIMELINE_READBACK_FAILED`, with a note that the timeline may already exist. Subtitle and generator sources have no media-pool item on the timeline, so they are checked by SRT cue text and by name and bounds. Those two checks rest on behaviour not yet measured live, so a miss there is reported as `verified: false` with a warning on a successful result. A source SRT that is not UTF-8 falls back to the timeline's own cues.
+- **Live subtitle preset and caption revisions** now check, after the write, that Resolve still has the same project, a database attached, the revision selected and readable target subtitle items. A failure reports `RESOLVE_DATABASE_UNHEALTHY` and asks for a manual restart; nothing is repaired automatically.
+
+### Changed on landing
+
+- String comparison of timecodes replaced by the frame and label check above; the unmeasured subtitle and generator checks no longer fail the call; an unreadable SRT no longer fails the call; the clip IDs are resolved once instead of twice.
+
+### Not verified here
+
+- Offline tests only; no live Resolve run was made for this release. The subtitle cue-text and generator `Type` assumptions and the database-health gate over the free-edition bridge are unmeasured.
+
 ## What's New in v5.2.9 — Bad track indexes and misplaced arguments are refused, not dropped
 
 From #370 and #372 by @willturner-maker, plus a Traditional Chinese README from #369 by @monarchsofchaos004-gif.
