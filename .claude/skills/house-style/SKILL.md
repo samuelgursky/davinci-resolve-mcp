@@ -95,6 +95,25 @@ Hold each word at least 3 frames (120 ms) or it cannot be read; take the extra
 frames from the longest words in the same gapless run, so the run's start and
 end stay put.
 
+### Motion graphics: native Fusion, and full-frame
+
+When a spoken statement is illustrated with motion graphics, build it as a
+**native Fusion comp**, not as a pre-rendered PNG sequence, and let it take the
+**whole 9:16 frame** as a cutaway rather than sitting as an overlay over the
+speaker.
+
+**Why:** a Fusion comp stays editable in Resolve after handover — a baked
+sequence has to be re-rendered and re-imported for every change. And in vertical
+format a graphic that shares the frame with a talking head gets too small to
+read in the seconds it is on screen; the audio carries the speaker while the
+picture does the explaining.
+
+**The trap:** `Insert*IntoTimeline` cannot choose a track, so a comp built this
+way lands on V1 and cannot be moved. Build the comp on its own timeline (set
+that timeline to 1080x1920 — it inherits the project's 1920x1080 otherwise),
+then place THAT timeline's media pool item with `AppendToTimeline` clipInfo
+`trackIndex`/`recordFrame`. Everything stays editable through the nesting.
+
 ---
 
 ## Where personal grading taste lives
