@@ -2,6 +2,18 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v5.2.11 — A typo'd track index no longer grows a new timeline
+
+From a follow-up on #370 by @willturner-maker.
+
+### Fixed
+
+- **`create_timeline_from_clips` built as many tracks as a row named.** Since v5.2.9 it adds the tracks its `clip_infos` rows name, so a typo such as `track_index: 99` created a timeline with 98 empty tracks and answered success. A new timeline now gets at most 32 tracks of each type for its rows. A higher index is refused with `INVALID_TRACK_INDEX` before anything is created, and the message names the route for a build that needs more: create the timeline, add tracks with `timeline` `add_track`, then `append_to_timeline`, which checks rows against the tracks that exist. Same in the granular server. Both servers' docstrings now list `track_index` and `media_type` for this form.
+
+### Not verified here
+
+- Offline tests only; no live Resolve run was made for this release.
+
 ## What's New in v5.2.10 — Three writes are read back before they report success
 
 From #373 by @youchengyangdu-pixel, adapted on landing.
