@@ -18,19 +18,6 @@ A Model Context Protocol (MCP) server that lets AI assistants control DaVinci Re
 
 A local browser control panel ships with the server for inspecting Resolve state, running source-safe analysis, drilling into analyzed clips and shots, and editing analysis output inline. See the [Control Panel Guide](docs/guides/control-panel.md) for the full tour.
 
-## Subtitle styling feedback prerelease
-
-`4.16.0-beta.1` adds subtitle input discovery, opt-in literal input editing and
-independent Word Highlight base-outline controls. **Studio 21.1 rendered results
-have not been validated.** Automated tests pass; the local free 21.1 build raised
-a Studio limitation and produced a black frame. Per-word pop/scale and cue
-transitions remain unsupported.
-
-Opt in with `npx davinci-resolve-mcp@next setup`. Test in a disposable project or
-backed-up duplicate timeline and report your Resolve edition/build, OS, MCP
-version and before/after rendered results on [#295](https://github.com/samuelgursky/davinci-resolve-mcp/issues/295).
-See the [subtitle guide](docs/guides/subtitle-track-editing.md#input-discovery-and-explicit-literal-edits-issue-295).
-
 ## Quick Start
 
 ```bash

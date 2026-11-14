@@ -455,7 +455,7 @@ Operating rules an agent must know:
   text, absent fields and animation remain protected. Word Highlight also has
   `baseOutlineEnabled/Red/Green/Blue/Thickness` (independent shading element 4;
   enabling sets `baseOutlineShape:1`). Studio 21.1 render acceptance for these
-  new controls is pending in the feedback prerelease; report results on #295.
+  new controls is still pending; report results on #295.
   See the subtitle-track editing guide.
   Native DRT export/edit/import creates and selects a recoverable revision,
   preserving the original. Do not ask the user to quit or relaunch for effects.
