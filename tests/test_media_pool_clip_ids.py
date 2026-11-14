@@ -451,21 +451,19 @@ class BatchActionTest(unittest.TestCase):
         self.assertEqual(out["readback"]["missing_clip_ids"], [])
         self.assertEqual(mp.calls, [("CreateTimelineFromClips", [top, nested], "Selects")])
 
-    def test_create_re_resolves_stale_handles_immediately_before_native_call(self):
+    def test_create_resolves_the_clip_ids_once(self):
+        # #373 landed with the Media Pool walked once: a second walk
+        # microseconds later caught nothing and doubled the cost.
         mp, top, nested, _ = _tree()
-        stale_root = mp._root
-        fresh_top = FakeClip("A001.mov", "clip-top")
-        fresh_nested = FakeClip("B002.mov", "clip-nested")
-        fresh_root = FakeFolder("Master", "id-root", clips=[fresh_top, fresh_nested])
-        mp.GetRootFolder = mock.Mock(side_effect=[stale_root, fresh_root])
+        root = mp._root
+        mp.GetRootFolder = mock.Mock(return_value=root)
 
         out = _call(mp, "create_timeline_from_clips",
                     {"name": "Selects", "clip_ids": ["clip-top", "clip-nested"]})
 
-        self.assertTrue(out["success"])
-        self.assertIsNot(fresh_top, top)
-        self.assertIsNot(fresh_nested, nested)
-        self.assertEqual(mp.calls, [("CreateTimelineFromClips", [fresh_top, fresh_nested], "Selects")])
+        self.assertTrue(out["success"], out)
+        self.assertEqual(mp.GetRootFolder.call_count, 1)
+        self.assertEqual(mp.calls, [("CreateTimelineFromClips", [top, nested], "Selects")])
 
     def test_create_handle_absent_from_project_is_structured_failure(self):
         mp, top, nested, _ = _tree(InvisibleCreateMP)
@@ -508,7 +506,7 @@ class BatchActionTest(unittest.TestCase):
         self.assertEqual(out["readback"]["subtitle_readback"]["cue_count"], 1)
         self.assertTrue(out["readback"]["subtitle_readback"]["verified"])
 
-    def test_subtitle_create_without_valid_cues_is_structured_failure(self):
+    def test_subtitle_create_without_valid_cues_is_reported(self):
         for make_mp, cue_count, invalid_count in (
             (EmptySubtitleCreateMP, 0, 0),
             (InvalidSubtitleCreateMP, 1, 1),
@@ -521,8 +519,13 @@ class BatchActionTest(unittest.TestCase):
                 out = _call(mp, "create_timeline_from_clips",
                             {"name": "Captions", "clip_ids": ["clip-subtitle"]})
 
-                self.assertFalse(out["success"])
-                self.assertEqual(out["error"]["code"], "CREATE_TIMELINE_READBACK_FAILED")
+                if cue_count == 0:
+                    # Nothing on the timeline is certain: the create failed.
+                    self.assertFalse(out["success"])
+                    self.assertEqual(out["error"]["code"], "CREATE_TIMELINE_READBACK_FAILED")
+                else:
+                    self.assertTrue(out["success"], out)
+                    self.assertFalse(out["verified"])
                 self.assertEqual(out["readback"]["subtitle_readback"]["cue_count"], cue_count)
                 self.assertEqual(out["readback"]["subtitle_readback"]["invalid_cue_count"], invalid_count)
                 self.assertFalse(out["readback"]["subtitle_readback"]["verified"])
@@ -547,7 +550,7 @@ class BatchActionTest(unittest.TestCase):
             self.assertEqual(subtitle_readback["cue_count"], 2)
             self.assertEqual(subtitle_readback["text_mismatches"], [])
 
-    def test_subtitle_create_rejects_source_cue_count_or_text_mismatch(self):
+    def test_subtitle_create_reports_source_cue_count_or_text_mismatch(self):
         for observed_texts in (["第一条"], ["第一条", "错误文本"]):
             with self.subTest(observed_texts=observed_texts), tempfile.TemporaryDirectory() as tmp:
                 path = _write_srt(tmp, ["第一条", "第二条"])
@@ -559,9 +562,12 @@ class BatchActionTest(unittest.TestCase):
                 out = _call(mp, "create_timeline_from_clips",
                             {"name": "Captions", "clip_ids": ["clip-subtitle"]})
 
-                self.assertFalse(out["success"])
+                # The timeline exists and holds items; cue text is a heuristic
+                # (GetName() == cue text is not measured live), so a mismatch
+                # is reported on a successful result, not as a failed call.
+                self.assertTrue(out["success"], out)
                 self.assertFalse(out["verified"])
-                self.assertEqual(out["error"]["code"], "CREATE_TIMELINE_READBACK_FAILED")
+                self.assertTrue(out["warnings"])
                 self.assertFalse(out["readback"]["subtitle_readback"]["verified"])
 
     def test_regular_media_cannot_use_source_less_name_readback(self):
@@ -596,6 +602,56 @@ class BatchActionTest(unittest.TestCase):
         self.assertIsNone(mp.created_timelines[0].items[0].GetMediaPoolItem())
         self.assertEqual(out["readback"]["generator_item_names"], ["Solid Color"])
         self.assertEqual(out["readback"]["missing_generator_clip_ids"], [])
+
+    def test_an_unreadable_source_srt_falls_back_to_the_timeline_cues(self):
+        # #373 landed: a cp1252 SRT raised UnicodeDecodeError and turned a
+        # create that worked into CREATE_TIMELINE_READBACK_FAILED.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "legacy.srt")
+            with open(path, "wb") as handle:
+                handle.write(b"1\r\n00:00:01,000 --> 00:00:02,000\r\nCaf\xe9\r\n\r\n")
+            subtitle = FakeClip("legacy.srt", "clip-subtitle", clip_type="Subtitle", file_path=path)
+            mp = FakeMP(FakeFolder("Master", "id-root", clips=[subtitle]), subtitle_texts=["Café"])
+
+            out = _call(mp, "create_timeline_from_clips",
+                        {"name": "Captions", "clip_ids": ["clip-subtitle"]})
+
+        self.assertTrue(out["success"], out)
+        self.assertTrue(out["verified"], out)
+        sub = out["readback"]["subtitle_readback"]
+        self.assertEqual(sub["mode"], "timeline_cues")
+        self.assertIn("UnicodeDecodeError", sub["sources"][0]["read_error"])
+        self.assertEqual(out["readback"]["errors"], [])
+
+    def test_a_generator_name_miss_is_reported_not_failed(self):
+        generator = FakeClip("Solid Color", "clip-generator", clip_type="Generator")
+
+        class _Item:
+            def GetMediaPoolItem(self):
+                return None
+
+            def GetName(self):
+                return "Renamed By Resolve"
+
+            def GetStart(self):
+                return 0
+
+            def GetEnd(self):
+                return 24
+
+        timeline = mock.Mock()
+        timeline.GetUniqueId.return_value = "tl-gen"
+        timeline.GetTrackCount.side_effect = lambda t: 1 if t == "video" else 0
+        timeline.GetItemListInTrack.return_value = [_Item()]
+        proj = mock.Mock()
+        proj.GetTimelineCount.return_value = 1
+        proj.GetTimelineByIndex.return_value = timeline
+
+        readback = s._created_timeline_readback(proj, timeline, [generator])
+
+        self.assertTrue(readback["certain"], readback)
+        self.assertFalse(readback["verified"])
+        self.assertEqual(readback["missing_generator_clip_ids"], ["clip-generator"])
 
     def test_mixed_media_and_subtitle_create_checks_both_readbacks(self):
         media = FakeClip("A001.mov", "clip-media")

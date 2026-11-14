@@ -15800,6 +15800,7 @@ def _created_timeline_readback(proj, created, clips):
     expected_ids, subtitle_ids, expected_generators = [], [], []
     subtitle_sources = []
     source_errors = []
+    generator_warnings = []
     for clip in clips:
         clip_id = _safe_media_pool_item_id(clip)
         file_path = _created_clip_property(clip, "File Path")
@@ -15815,7 +15816,7 @@ def _created_timeline_readback(proj, created, clips):
             if name:
                 expected_generators.append((clip_id, name))
             else:
-                source_errors.append("Generator/title source has no readable name")
+                generator_warnings.append("Generator/title source has no readable name")
         elif clip_id:
             expected_ids.append(clip_id)
         else:
@@ -15843,6 +15844,8 @@ def _created_timeline_readback(proj, created, clips):
             "verified": not subtitle_sources,
         },
         "errors": list(source_errors),
+        "warnings": list(generator_warnings),
+        "certain": False,
         "verified": False,
     }
     if not timeline_id:
@@ -15917,7 +15920,6 @@ def _created_timeline_readback(proj, created, clips):
     subtitle_readback = readback["subtitle_readback"]
     expected_texts = []
     source_comparison = bool(subtitle_sources)
-    source_read_errors = []
     for clip in subtitle_sources:
         path = _created_clip_property(clip, "File Path")
         source = {
@@ -15932,12 +15934,15 @@ def _created_timeline_readback(proj, created, clips):
         try:
             cue_texts = _read_srt_cue_texts(path)
         except (OSError, ValueError) as exc:
-            source_read_errors.append(f"Could not parse source SRT {path}: {exc}")
+            # An SRT this parser cannot read (not UTF-8, unusual layout) says
+            # nothing about the timeline: compare the timeline's own cues
+            # instead of failing a create that worked (#373).
+            source["read_error"] = f"{type(exc).__name__}: {exc}"
+            source_comparison = False
             continue
         source["cue_count"] = len(cue_texts)
         expected_texts.extend(cue_texts)
-    readback["errors"].extend(source_read_errors)
-    if source_comparison and not source_read_errors:
+    if source_comparison:
         subtitle_readback["expected_cue_count"] = len(expected_texts)
         subtitle_readback["text_mismatches"] = [
             {"index": index, "expected": expected, "observed": observed}
@@ -15953,16 +15958,22 @@ def _created_timeline_readback(proj, created, clips):
         or (subtitle_texts
             and cue_count_matches
             and not subtitle_readback["text_mismatches"]
-            and subtitle_readback["invalid_cue_count"] == 0
-            and not source_read_errors)
+            and subtitle_readback["invalid_cue_count"] == 0)
     )
-    readback["verified"] = bool(
+    # Certain: the timeline is in the project, holds items, and every ordinary
+    # media ID is on it. Heuristic: subtitle cue text (that GetName() equals
+    # the cue text) and generator Type strings are not measured live, so a
+    # miss there is reported, not turned into a failed call (#373).
+    readback["certain"] = bool(
         (expected_ids or subtitle_sources or expected_generators)
         and not readback["missing_clip_ids"]
-        and not readback["missing_generator_clip_ids"]
-        and subtitle_readback["verified"]
         and not readback["errors"]
         and readback["item_count"] > 0
+    )
+    readback["verified"] = bool(
+        readback["certain"]
+        and not readback["missing_generator_clip_ids"]
+        and subtitle_readback["verified"]
     )
     return readback
 
@@ -17392,14 +17403,32 @@ def _timeline_frame_of(tl, timecode) -> Optional[int]:
     return None if err else frame
 
 
+def _same_timecode_label(a, b) -> bool:
+    """True when two timecodes name the same HH:MM:SS:FF label.
+
+    Separators and padding are ignored: Resolve reports a drop-frame
+    timeline's playhead with ';' even when the seek was asked with ':', and
+    the frame parser reads the two separators as different frame counts.
+    """
+    def parts(tc):
+        if not isinstance(tc, str):
+            return None
+        fields = re.split(r"[:;.,]", tc.strip())
+        if len(fields) != 4 or not all(f.isdigit() for f in fields):
+            return None
+        return tuple(int(f) for f in fields)
+    pa = parts(a)
+    return pa is not None and pa == parts(b)
+
+
 def _seek_and_confirm(tl, target: str, *, attempts: int = 8, delay: float = 0.1):
     """SetCurrentTimecode(target) and read the playhead back until it lands.
 
     Returns (landed_timecode, error). The return value of SetCurrentTimecode is
     not the evidence: a True that left the playhead where it was has been
     measured on Studio 19.1.3.7 straight after a page switch. The readback is
-    compared by FRAME, not by string, so a drop-frame ';' or a different
-    separator cannot fail a seek that landed.
+    compared by FRAME, and by label with separators and padding ignored, so a
+    drop-frame ';' or an unpadded hour cannot fail a seek that landed.
     """
     want = _timeline_frame_of(tl, target)
     try:
@@ -17419,7 +17448,7 @@ def _seek_and_confirm(tl, target: str, *, attempts: int = 8, delay: float = 0.1)
             landed = tl.GetCurrentTimecode()
         except Exception:
             landed = None
-        if want is None or _timeline_frame_of(tl, landed) == want:
+        if want is None or _timeline_frame_of(tl, landed) == want or _same_timecode_label(target, landed):
             return landed, None
         if attempt < attempts - 1:
             time.sleep(delay)
@@ -23889,23 +23918,11 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
         clips, clips_err = _clips_from_ids(root, clip_ids, verb="created")
         if clips_err:
             return clips_err
-        # Media Pool state can change between validation and native creation.
-        # Re-resolve every ID against a fresh root immediately before the call
-        # rather than handing Resolve a stale or partial batch.
-        fresh_root = mp.GetRootFolder()
-        if not fresh_root:
-            return _err(
-                "Failed to refresh the Media Pool before creating the timeline",
-                code="MEDIA_POOL_READBACK_FAILED", category="resolve_api_failed",
-            )
-        clips, clips_err = _clips_from_ids(fresh_root, clip_ids, verb="created")
-        if clips_err:
-            return clips_err
         tl = mp.CreateTimelineFromClips(create_name, clips)
         if not tl:
             return _err("Failed to create timeline", code="CREATE_TIMELINE_FAILED")
         readback = _created_timeline_readback(proj, tl, clips)
-        if not readback["verified"]:
+        if not readback["certain"]:
             out = _err(
                 "CreateTimelineFromClips returned a timeline, but its project or clip readback failed",
                 code="CREATE_TIMELINE_READBACK_FAILED", category="resolve_api_failed",
@@ -23922,8 +23939,13 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
             requested_name=p.get("name"),
             created_new=True,
             versioned_name=bool(existing and create_name != p.get("name")),
-            verified=True,
+            verified=readback["verified"],
             readback=readback,
+            **({"warnings": readback["warnings"] + [
+                "The timeline and its media were confirmed, but the subtitle-cue or "
+                "generator read-back did not match. Those checks rest on behaviour "
+                "not yet measured live; inspect the timeline."
+            ]} if not readback["verified"] else {}),
         )
     elif action == "create_multicam_clip":
         missing = _requires_method(mp, "CreateMulticamClip", "21.1")
@@ -29141,49 +29163,45 @@ def timeline_markers(action: str, params: Optional[Dict[str, Any]] = None) -> An
     elif action == "get_current_timecode":
         return {"timecode": tl.GetCurrentTimecode()}
     elif action == "set_current_timecode":
+        # The read-back goes through _seek_and_confirm: it compares by FRAME
+        # (a drop-frame ';' or an unpadded hour is the same playhead) and
+        # retries, since a True that had not moved the playhead yet has been
+        # measured straight after a page switch (#373).
         requested = p["timecode"]
         target = _playhead_absolute_timecode(tl, requested)
         try:
             before = tl.GetCurrentTimecode()
         except Exception:
             before = None
-        try:
-            api_success = bool(tl.SetCurrentTimecode(target))
-        except Exception as exc:
-            api_success = False
-            api_error = str(exc)
+        landed, seek_err = _seek_and_confirm(tl, target)
+        api_success = seek_err is None or seek_err["error"].get("code") == "SEEK_UNCONFIRMED"
+        if seek_err is None:
+            actual = landed
         else:
-            api_error = None
-        try:
-            actual = tl.GetCurrentTimecode()
-            readback_error = None
-        except Exception as exc:
-            actual = None
-            readback_error = str(exc)
-        verified = target is not None and readback_error is None and actual == target
+            try:
+                actual = tl.GetCurrentTimecode()
+            except Exception:
+                actual = None
         result = {
-            "success": bool(api_success and verified),
+            "success": seek_err is None,
             "requested": requested,
             "target": target,
             "before": before,
             "actual": actual,
             "api_success": api_success,
-            "verified": verified,
+            "verified": seek_err is None,
         }
-        if api_error:
-            result["api_error"] = api_error
-        if readback_error:
-            result["readback_error"] = readback_error
-        if not result["success"]:
+        if seek_err is not None:
             message = (
                 f"SetCurrentTimecode returned True but the playhead reads {actual!r}, not {target!r}"
-                if api_success else f"SetCurrentTimecode failed for {target!r}"
+                if api_success else seek_err["error"]["message"]
             )
             error = _err(
                 message,
                 code="TIMECODE_READBACK_MISMATCH" if api_success else "SET_CURRENT_TIMECODE_FAILED",
-                category="resolve_api_failed",
+                category="resolve_api_failed" if api_success else seek_err["error"].get("category", "api_error"),
                 retryable=True,
+                remediation=seek_err["error"].get("remediation"),
                 state={key: value for key, value in result.items() if key != "success"},
             )
             result.update(error)

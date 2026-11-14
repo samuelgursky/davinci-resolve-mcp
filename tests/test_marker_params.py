@@ -285,6 +285,20 @@ class TimelineMarkerParamTest(unittest.TestCase):
         self.assertEqual(out["error"]["code"], "TIMECODE_READBACK_MISMATCH")
         self.assertEqual(out["error"]["state"]["actual"], "01:00:00:12")
 
+    def test_set_current_timecode_compares_by_frame_not_string(self):
+        # #373 landed comparing by frame: Resolve reporting the same playhead
+        # with a different separator or padding is a seek that landed.
+        for requested, reported in (("01:00:11:03", "01:00:11;03"), ("1:00:11:03", "01:00:11:03"),
+                                    ("01:00:11:03", "01:00:11:03")):
+            with self.subTest(requested=requested):
+                self.timeline.current_timecode = "01:00:00:12"
+                self.timeline.SetCurrentTimecode = lambda tc, r=reported: (
+                    setattr(self.timeline, "current_timecode", r) or True)
+                out = compound.timeline_markers("set_current_timecode", {"timecode": requested})
+                self.assertTrue(out["success"], out)
+                self.assertTrue(out["verified"])
+                self.assertEqual(out["actual"], reported)
+
     def test_set_current_timecode_absolute_passes_through(self):
         self.timeline.start_frame = 86160
         self.timeline.start_timecode = "00:59:50:00"

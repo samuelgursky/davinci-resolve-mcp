@@ -131,11 +131,13 @@ def _preflight(timeline, params):
 
 
 def _post_write_database_health(resolve, project_id, timeline, target_track):
-    """Prove that a live subtitle write left the same project readable.
+    """Check that a live subtitle write left the same project readable.
 
-    Native imports and timeline selection can answer successfully while Resolve
-    has no database attached. Never attempt a repair here: the safe remediation
-    for that application state is a manual Resolve restart.
+    Guards against a native import or timeline switch that answers success
+    while Resolve has moved to another project or lost its database. That
+    state has not been measured on a build; the check is defensive (#373).
+    Never attempt a repair here: the safe remediation is a manual Resolve
+    restart.
     """
     health = {
         "healthy": False,
