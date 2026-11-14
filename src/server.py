@@ -23703,6 +23703,9 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
           start_frame & end_frame (or startFrame/endFrame), record_frame/recordFrame}.
           record_frame is relative to the created timeline start frame by default;
           pass record_frame_mode="absolute" for raw Resolve recordFrame values.
+          Optional per row: track_index (1-based, default 1) and media_type (1 video,
+          2 audio). The new timeline gets the tracks the rows name, up to 32 of
+          each type; a higher index is refused before anything is created.
       setup_multicam_timeline(name, clip_ids|angles, sync_mode?, include_audio?, dry_run?) -> {success}
         — creates a stacked multicam prep timeline: one angle per video track, optional
           matching audio tracks. Native multicam clip conversion remains a Resolve UI step.

@@ -148,6 +148,56 @@ class CreateTimelineAddsNamedTracksTest(unittest.TestCase):
         self.assertEqual(pool.created, [], "no empty timeline may be left behind")
 
 
+class NewTimelineTrackCapTest(unittest.TestCase):
+    """#370 follow-up: a typo'd index must not grow a new timeline to it."""
+
+    def _create(self, rows):
+        tl = _Tracks(video=1, audio=1)
+        pool = _RecordingPool(FolderStub([ClipStub()]), tl)
+        with mock.patch.object(s, "_get_mp", return_value=(None, ProjectStub(tl), pool, None)), \
+             mock.patch.object(s, "_set_current_timeline_checked", return_value=None), \
+             mock.patch.object(s, "_find_timeline_by_name", return_value=(None, None)):
+            return s.media_pool("create_timeline_from_clips", {"name": "N", "clip_infos": rows}), tl, pool
+
+    def test_an_index_past_the_cap_creates_nothing(self):
+        result, tl, pool = self._create([_row(1, media_type=1), _row(99, media_type=1)])
+        self.assertEqual(result["error"]["code"], "INVALID_TRACK_INDEX", result)
+        self.assertIn("clip_infos[1] track_index 99", result["error"]["message"])
+        self.assertIn("add_track", result["error"]["message"])
+        self.assertEqual(pool.created, [])
+        self.assertEqual(tl.added, [])
+
+    def test_the_cap_itself_is_allowed(self):
+        cap = cit.MAX_NEW_TIMELINE_TRACKS
+        result, tl, pool = self._create([_row(cap, media_type=2)])
+        self.assertTrue(result.get("success"), result)
+        self.assertEqual(tl.counts["audio"], cap)
+        result, tl, pool = self._create([_row(cap + 1, media_type=2)])
+        self.assertIn("error", result)
+
+    def test_the_granular_create_refuses_too(self):
+        from src.granular import timeline as gt
+
+        tl = _Tracks(video=1, audio=1)
+        pool = _RecordingPool(FolderStub([ClipStub()]), tl)
+        with mock.patch.object(gt, "_get_mp", return_value=(ProjectStub(tl), pool, None)), \
+             mock.patch.object(gt, "_find_clip_by_id", return_value=ClipStub()):
+            fn = getattr(gt.create_timeline_from_clips, "fn", gt.create_timeline_from_clips)
+            result = fn("N", clip_infos=[_row(99)])
+        self.assertEqual(result.get("code"), "INVALID_TRACK_INDEX", result)
+        self.assertEqual(pool.created, [])
+
+    def test_both_docstrings_quote_the_cap(self):
+        import inspect
+
+        from src.granular import timeline as gt
+
+        cap = f"up to {cit.MAX_NEW_TIMELINE_TRACKS} of"
+        self.assertIn(cap, " ".join(inspect.getdoc(s.media_pool).split()))
+        fn = getattr(gt.create_timeline_from_clips, "fn", gt.create_timeline_from_clips)
+        self.assertIn(cap, " ".join(inspect.getdoc(fn).split()))
+
+
 class GranularTrackIndexTest(unittest.TestCase):
     def test_the_granular_builder_refuses_out_of_range(self):
         from src.granular import common

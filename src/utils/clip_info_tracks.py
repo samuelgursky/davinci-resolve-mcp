@@ -13,6 +13,14 @@ from typing import Any, Optional, Tuple
 
 MEDIA_TYPES = {1: "video", 2: "audio"}
 
+#: Most tracks of one type a new timeline is given to satisfy its rows. A row
+#: naming a higher index is far more often a typo (99 for 9) than a build
+#: that needs it, and honouring it adds that many empty tracks with success
+#: (reported on #370). A build that does need more creates the timeline, adds
+#: tracks with timeline add_track, then appends; append_to_timeline checks
+#: rows against the tracks that exist.
+MAX_NEW_TIMELINE_TRACKS = 32
+
 
 def _as_int(value: Any) -> Optional[int]:
     """An int from an int, an integral float, or a digit string; else None."""
@@ -99,7 +107,8 @@ def needed_tracks(rows: Any) -> Tuple[Optional[dict], Optional[str]]:
 
     For building a new timeline from rows: each row's track_index (default 1)
     must be valid, and the timeline then needs that many tracks of the row's
-    media type, or of both types when the row sets none.
+    media type, or of both types when the row sets none. An index above
+    MAX_NEW_TIMELINE_TRACKS is refused rather than growing the timeline to it.
     """
     needed = {"video": 1, "audio": 0}
     for i, ci in enumerate(rows if isinstance(rows, list) else []):
@@ -111,6 +120,13 @@ def needed_tracks(rows: Any) -> Tuple[Optional[dict], Optional[str]]:
         mt, err = coerce_media_type(ci.get("mediaType", ci.get("media_type")), i)
         if err:
             return None, err
+        if ti > MAX_NEW_TIMELINE_TRACKS:
+            return None, (
+                f"clip_infos[{i}] track_index {ti} would give the new timeline {ti} "
+                f"tracks, past the {MAX_NEW_TIMELINE_TRACKS} it adds for its rows; "
+                "nothing was created. If the index is intended, create the timeline, "
+                "add the tracks with timeline add_track, then use append_to_timeline."
+            )
         for track_type in ([MEDIA_TYPES[mt]] if mt else ["video", "audio"]):
             needed[track_type] = max(needed[track_type], ti)
     return needed, None

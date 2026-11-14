@@ -1043,6 +1043,10 @@ def create_timeline_from_clips(
             media_pool_item_id), start_frame, end_frame, record_frame.
             record_frame is relative to the created timeline start frame by
             default; pass record_frame_mode="absolute" for raw Resolve values.
+            Optional per row: track_index (1-based, default 1) and media_type
+            (1 video, 2 audio). The new timeline gets the tracks the rows name,
+            up to 32 of each type; a higher index is refused before anything
+            is created.
         If both are None, uses the currently selected media pool clips.
     """
     project, mp, err = _get_mp()
