@@ -42,6 +42,10 @@ Every release bump must update all version surfaces:
   and the language switcher at the top of `README.md`** — a translation that
   silently lags is worse than no translation, because its version line then
   makes a claim that is false. No drift guard covers this; it is a human check.
+- `README.zh-TW.md` — the Traditional Chinese (Taiwan) translation. Same rules
+  as `README.zh-CN.md`: update its version badge and the
+  `本翻譯對應 vX.Y.Z 版 README` line, carry over substantive English changes, or
+  delete the file and its entry in the language switchers if it cannot be kept current.
 - `CHANGELOG.md` latest release entry
 - `docs/reference/api-limitations.md` when any `submit`-tagged entry in
   `src/utils/api_truth.py` was added or changed (a newly documented Resolve API
@@ -90,7 +94,8 @@ the check is a regeneration followed by a test, not a `git diff --exit-code`,
 which would fire on the release bump's own legitimate change.
 
 `test_release_surface_drift` is the gate on the version bump itself: it asserts
-the README badge, the `README.zh-CN.md` badge and its `本翻译对应 vX.Y.Z` line, and
+the README badge, the `README.zh-CN.md` badge and its `本翻译对应 vX.Y.Z` line, the
+`README.zh-TW.md` badge and its `本翻譯對應 vX.Y.Z` line, and
 a `CHANGELOG.md` entry all match `package.json`. It was not in this list until
 v3.2.2, and v3.2.1 shipped with a zh-CN badge still reading v3.2.0 as a direct
 result — every other gate passed, because none of them looks at a version

@@ -1,6 +1,6 @@
 # DaVinci Resolve MCP 服务器
 
-[English](README.md) | 简体中文
+[English](README.md) | 简体中文 | [繁體中文](README.zh-TW.md)
 
 [![Version](https://img.shields.io/badge/version-5.2.8-blue.svg)](https://github.com/samuelgursky/davinci-resolve-mcp/releases)
 [![npm](https://img.shields.io/npm/v/davinci-resolve-mcp.svg?label=npm&color=CB3837)](https://www.npmjs.com/package/davinci-resolve-mcp)
