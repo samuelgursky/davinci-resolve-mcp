@@ -2,6 +2,24 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v5.2.8 — Three calls stop answering success while dropping the request
+
+From #365, #366 and #368 by @willturner-maker.
+
+### Fixed
+
+- **`record_frame_mode` beside `clip_infos` was dropped (#365).** `media_pool` `append_to_timeline` and `create_timeline_from_clips` read the mode only from each row, so `record_frame_mode: "absolute"` passed at the top level was ignored and an absolute frame landed start-relative with `success: true`. The top-level mode now applies to every row that sets none of its own. A row's own mode still wins, and an absolute frame before the timeline start is refused, as it already was per row.
+- **`timeline.duplicate` archived the source timeline (#366).** Version-on-mutate archived the untouched source before every duplicate, leaving `_archived_vNN` siblings that read as evidence of an edit. Duplicate stays registered, so safe mode and the audit log still apply, but it no longer archives. `_versioning.skipped_reason` is `source_timeline_unchanged`.
+- **`render.set_settings` took a `TargetDir` that does not exist (#368).** Resolve accepts it there and refuses only at `add_job` or render start. `set_settings` and the granular `set_render_settings` now refuse it before anything is sent, with code `TARGET_DIR_NOT_FOUND`.
+
+### Not changed
+
+- **#367** (`get_clips_linked` ignoring `timeline_id`) does not reproduce against the compound tool: the pin switches, the item is found on the pinned timeline and the current timeline is restored. A regression test now covers it.
+
+### Not verified here
+
+- Offline tests only. The reports were measured on Studio 21.2.0.6; this machine runs Studio 19.1.3.7, and no live Resolve run was made for this release.
+
 ## What's New in v5.2.7 — Preset and media rows live-tested with fixtures
 
 From #363 by @Ghoul0718. No server behaviour changes.
