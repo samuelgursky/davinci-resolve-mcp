@@ -66,7 +66,9 @@ class Timeline:
         return 0
 
     def GetTrackCount(self, track_type):
-        return 1 if track_type == "video" else 0
+        # The rows below target track 2; an index past the track count is
+        # refused before AppendToTimeline (issue #370).
+        return 2 if track_type == "video" else 0
 
     def GetItemListInTrack(self, track_type, track_index):
         if track_type == "video" and track_index == 1:

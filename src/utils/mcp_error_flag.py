@@ -78,4 +78,28 @@ class ErrorFlaggingFastMCP(FastMCP):
     """
 
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> Any:
+        refused = refuse_unknown_arguments(self, name, arguments)
+        if refused is not None:
+            return refused
         return flag_tool_error(await super().call_tool(name, arguments))
+
+
+def refuse_unknown_arguments(server: Any, name: str, arguments: Any) -> Any:
+    """An `isError` result when `arguments` holds keys the tool does not take (#372), else None."""
+    from mcp.types import CallToolResult, TextContent
+
+    from src.utils import mcp_arg_guard
+
+    try:
+        tool = server._tool_manager.get_tool(name)
+    except Exception:
+        return None
+    unknown = mcp_arg_guard.unknown_arguments(tool, arguments)
+    if not unknown:
+        return None
+    body = mcp_arg_guard.refusal(name, unknown, arguments, mcp_arg_guard.accepted_arguments(tool))
+    return CallToolResult(
+        content=[TextContent(type="text", text=json.dumps(body, indent=2))],
+        structuredContent=body,
+        isError=True,
+    )

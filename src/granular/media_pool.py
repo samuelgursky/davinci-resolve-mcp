@@ -210,7 +210,8 @@ def append_to_timeline(
         timeline_start = _timeline_start_frame(current_timeline)
         built = []
         for i, ci in enumerate(clip_infos):
-            row, row_err = _build_append_clip_info_dict(root, ci, i, timeline_start)
+            row, row_err = _build_append_clip_info_dict(
+                root, ci, i, timeline_start, timeline=current_timeline)
             if row_err:
                 return row_err
             built.append(row)
@@ -343,7 +344,8 @@ def setup_multicam_timeline(
     append_rows = plan.get("append_rows") or []
     append_infos = []
     for index, row in enumerate(append_rows):
-        clip_info, clip_err = _build_append_clip_info_dict(root, row, index, timeline_start)
+        clip_info, clip_err = _build_append_clip_info_dict(
+            root, row, index, timeline_start, timeline=timeline)
         if clip_err:
             return clip_err
         append_infos.append(clip_info)

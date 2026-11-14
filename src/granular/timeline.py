@@ -1056,6 +1056,11 @@ def create_timeline_from_clips(
             _, row_err = _build_create_clip_info_dict(root, ci, i)
             if row_err:
                 return row_err
+        # Rows that name a track past the new timeline's would land on track 1
+        # with success (issue #370): validate first, then add those tracks.
+        needed_tracks, track_err = clip_info_tracks.needed_tracks(clip_infos)
+        if track_err:
+            return {"error": track_err, "code": "INVALID_TRACK_INDEX"}
         tl = mp.CreateEmptyTimeline(name)
         if not tl:
             return {"success": False, "error": "Failed to create timeline"}
@@ -1068,12 +1073,19 @@ def create_timeline_from_clips(
                         "error": describe_switch_failure(switch_detail,
                                                          "appending the clip_infos"),
                         "switch": switch_detail}
+        ensure_err = clip_info_tracks.ensure_tracks(tl, needed_tracks)
+        if ensure_err:
+            return {"success": False,
+                    "error": f"Timeline {name!r} was created but the tracks the clip_infos "
+                             f"name could not be added: {ensure_err}",
+                    "code": "ADD_TRACK_FAILED"}
         timeline_start = _timeline_start_frame(tl)
         built = []
         for i, ci in enumerate(clip_infos):
             append_ci = dict(ci)
             append_ci.setdefault("track_index", append_ci.get("trackIndex", 1))
-            row, row_err = _build_append_clip_info_dict(root, append_ci, i, timeline_start)
+            row, row_err = _build_append_clip_info_dict(
+                root, append_ci, i, timeline_start, timeline=tl)
             if row_err:
                 return row_err
             built.append(row)

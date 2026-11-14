@@ -65,6 +65,7 @@ from src.utils.cdl import normalize_cdl_payload
 from src.utils.media_paths import media_exists as _media_exists
 from src.utils.preset_files import preset_export_file as _preset_export_file
 from src.utils.render_target import missing_target_dir_error as _missing_target_dir_error
+from src.utils import clip_info_tracks as _clip_info_tracks
 from src.utils import archive_guard
 from src.utils import subtitle_append_guard
 from src.utils import typed_api_search
@@ -4013,12 +4014,18 @@ def _build_append_clip_info_dict(
     index: int,
     timeline_start_frame: Optional[int] = None,
     pack: bool = False,
+    timeline=None,
 ):
     """Build one MediaPool.AppendToTimeline clipInfo map (Python API uses camelCase keys).
 
     See docs/reference/resolve_scripting_api.txt: mediaPoolItem, startFrame, endFrame,
     optional mediaType, trackIndex, recordFrame. With pack=True, recordFrame is omitted
     so Resolve appends each clip contiguously at the end of its track.
+
+    trackIndex must be a 1-based int and mediaType 1 or 2. With `timeline`, the
+    index must also name an existing track: Resolve puts an unknown index on
+    track 1 and reports success (issue #370). Callers that add tracks after
+    building the rows leave `timeline` unset.
     """
     if not isinstance(ci, dict):
         return None, _err(f"clip_infos[{index}] must be an object")
@@ -4049,6 +4056,12 @@ def _build_append_clip_info_dict(
         return None, _err(
             f"clip_infos[{index}] requires track_index/trackIndex (1-based track index)"
         )
+    ti, ti_err = _clip_info_tracks.coerce_track_index(ti, index)
+    if ti_err:
+        return None, _err(ti_err, code="INVALID_TRACK_INDEX", category="invalid_input")
+    mt, mt_err = _clip_info_tracks.coerce_media_type(ci.get("mediaType", ci.get("media_type")), index)
+    if mt_err:
+        return None, _err(mt_err, code="INVALID_MEDIA_TYPE", category="invalid_input")
     out: Dict[str, Any] = {
         "mediaPoolItem": mp_item,
         "startFrame": sf,
@@ -4057,12 +4070,18 @@ def _build_append_clip_info_dict(
     }
     if not pack:
         out["recordFrame"] = rf
-    mt = ci.get("mediaType", ci.get("media_type"))
     if mt is not None:
         out["mediaType"] = mt
     blocked = _subtitle_append_block(out, index=index)
     if blocked:
         return None, blocked
+    # A subtitle item's trackIndex names a subtitle track, which the
+    # video/audio range check does not measure.
+    if not subtitle_append_guard.is_subtitle_item(mp_item):
+        range_refusal = _clip_info_tracks.track_range_error(timeline, ti, mt, index)
+        if range_refusal:
+            message = range_refusal.pop("message")
+            return None, _err(message, **range_refusal)
     return out, None
 
 
@@ -6407,15 +6426,23 @@ def _timeline_ripple_insert_impl(proj, tl, p: Dict[str, Any], *, resolve=None) -
         ci = dict(raw_ci)
         ci.pop("record_frame", None)
         ci.pop("recordFrame", None)
-        track_index = ci.get("trackIndex", ci.get("track_index", 1))
-        media_type = ci.get("mediaType", ci.get("media_type", 1))
+        track_index, ti_err = _clip_info_tracks.coerce_track_index(
+            ci.get("trackIndex", ci.get("track_index", 1)), idx)
+        if ti_err:
+            return _err(ti_err, code="INVALID_TRACK_INDEX", category="invalid_input")
+        media_type, mt_err = _clip_info_tracks.coerce_media_type(
+            ci.get("mediaType", ci.get("media_type", 1)), idx)
+        if mt_err:
+            return _err(mt_err, code="INVALID_MEDIA_TYPE", category="invalid_input")
+        ci.pop("trackIndex", None)
+        ci.pop("mediaType", None)
         ci["track_index"] = track_index
         ci["media_type"] = media_type
-        key = (int(media_type), int(track_index))
+        key = (media_type, track_index)
         record = cursor_by_track.get(key, insert_frame)
         ci["record_frame"] = record
         ci["record_frame_mode"] = "absolute"
-        info, ierr = _build_append_clip_info_dict(root, ci, idx, tl_start)
+        info, ierr = _build_append_clip_info_dict(root, ci, idx, tl_start, timeline=tl)
         if ierr:
             return ierr
         duration = int(info["endFrame"]) - int(info["startFrame"])
@@ -8042,7 +8069,11 @@ def _timeline_create_variant_from_ranges(proj, source_tl, p: Dict[str, Any]) -> 
             media_type = _timeline_media_type(track_type)
         if media_type not in (1, 2):
             return _err(f"ranges[{index}] track_type/media_type must resolve to video or audio")
-        track_index = int(row.get("track_index", row.get("trackIndex", 1)))
+        track_index, ti_err = _clip_info_tracks.coerce_track_index(
+            row.get("track_index", row.get("trackIndex", 1)), index)
+        if ti_err:
+            return _err(ti_err.replace("clip_infos[", "ranges[", 1),
+                        code="INVALID_TRACK_INDEX", category="invalid_input")
         if media_type == 1:
             max_tracks["video"] = max(max_tracks["video"], track_index)
         else:
@@ -11069,7 +11100,8 @@ def _setup_multicam_timeline(proj, mp, p: Dict[str, Any]):
     append_infos = []
     append_rows = plan.get("append_rows") or []
     for index, row in enumerate(append_rows):
-        clip_info, clip_err = _build_append_clip_info_dict(root, row, index, timeline_start)
+        clip_info, clip_err = _build_append_clip_info_dict(
+            root, row, index, timeline_start, timeline=new_tl)
         if clip_err:
             return clip_err
         append_infos.append(clip_info)
@@ -23602,6 +23634,12 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
                 _, row_err = _build_create_clip_info_dict(root, ci, i)
                 if row_err:
                     return row_err
+            # Validate track_index/media_type before the timeline exists, then
+            # add the tracks the rows name: an index past the new timeline's
+            # tracks would land on track 1 with success (issue #370).
+            needed_tracks, track_err = _clip_info_tracks.needed_tracks(raw)
+            if track_err:
+                return _err(track_err, code="INVALID_TRACK_INDEX", category="invalid_input")
             tl = mp.CreateEmptyTimeline(create_name)
             if not tl:
                 return _err("Failed to create timeline from clip_infos")
@@ -23609,12 +23647,21 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
                 proj, tl, what="appending the clip_infos")
             if switch_err:
                 return switch_err
+            ensure_err = _clip_info_tracks.ensure_tracks(tl, needed_tracks)
+            if ensure_err:
+                return _err(
+                    f"Timeline {tl.GetName()!r} was created but the tracks the clip_infos "
+                    f"name could not be added: {ensure_err}",
+                    code="ADD_TRACK_FAILED", category="api_error",
+                    state={"timeline": tl.GetName(), "needed": needed_tracks},
+                )
             timeline_start = _timeline_start_frame(tl)
             built = []
             for i, ci in enumerate(raw):
                 append_ci = dict(ci)
                 append_ci.setdefault("track_index", append_ci.get("trackIndex", 1))
-                row, row_err = _build_append_clip_info_dict(root, append_ci, i, timeline_start)
+                row, row_err = _build_append_clip_info_dict(
+                    root, append_ci, i, timeline_start, timeline=tl)
                 if row_err:
                     return row_err
                 built.append(row)
@@ -23705,10 +23752,12 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
                 return _err("clip_infos must be a list")
             if not raw:
                 return _err("clip_infos must be a non-empty list")
-            timeline_start = _timeline_start_frame(proj.GetCurrentTimeline())
+            current_tl = proj.GetCurrentTimeline()
+            timeline_start = _timeline_start_frame(current_tl)
             built = []
             for i, ci in enumerate(raw):
-                row, row_err = _build_append_clip_info_dict(root, ci, i, timeline_start)
+                row, row_err = _build_append_clip_info_dict(
+                    root, ci, i, timeline_start, timeline=current_tl)
                 if row_err:
                     return row_err
                 built.append(row)
@@ -27187,7 +27236,8 @@ def edit_engine(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
             # Sequential assembly: each select lands after the previous one.
             append_ci.setdefault("record_frame", record_cursor)
             append_ci.setdefault("track_index", 1)
-            row, row_err = _build_append_clip_info_dict(root_folder, append_ci, i, timeline_start)
+            row, row_err = _build_append_clip_info_dict(
+                root_folder, append_ci, i, timeline_start, timeline=tl)
             if row_err:
                 build_errors.append({"index": i, "error": row_err.get("error")})
                 continue
@@ -27594,7 +27644,7 @@ def edit_engine(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
             "record_frame_mode": "absolute",
             "track_index": int(item_block.get("track_index") or 1),
         }
-        row, row_err = _build_append_clip_info_dict(root_folder, ci, 0, timeline_start)
+        row, row_err = _build_append_clip_info_dict(root_folder, ci, 0, timeline_start, timeline=tl)
         if row_err:
             return {"success": False, "error": f"swap append failed: {row_err.get('error')}", "lifted": lift}
         # No mediaType on the clip info: the replacement appends video+audio

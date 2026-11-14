@@ -21,6 +21,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 from src.utils.mcp_error_flag import ErrorFlaggingFastMCP
 from src.utils import subtitle_append_guard
+from src.utils import clip_info_tracks
 
 from src.utils.app_control import (
     get_app_state,
@@ -697,11 +698,13 @@ def _resolve_version_string():
         return None
 
 
-def _build_append_clip_info_dict(root, ci, index, timeline_start_frame=None):
+def _build_append_clip_info_dict(root, ci, index, timeline_start_frame=None, timeline=None):
     """Build one MediaPool.AppendToTimeline clipInfo map (6 keys per docs line 221).
 
     Required: clip_id (or media_pool_item_id), start_frame, end_frame,
     record_frame, track_index. Optional: media_type (1=video only, 2=audio only).
+    With `timeline`, track_index must name an existing track: Resolve puts an
+    unknown index on track 1 and reports success (issue #370).
     """
     if not isinstance(ci, dict):
         return None, {"error": f"clip_infos[{index}] must be an object"}
@@ -724,6 +727,17 @@ def _build_append_clip_info_dict(root, ci, index, timeline_start_frame=None):
     ti = ci.get("trackIndex", ci.get("track_index"))
     if ti is None:
         return None, {"error": f"clip_infos[{index}] requires track_index/trackIndex"}
+    ti, ti_err = clip_info_tracks.coerce_track_index(ti, index)
+    if ti_err:
+        return None, {"error": ti_err, "code": "INVALID_TRACK_INDEX"}
+    mt, mt_err = clip_info_tracks.coerce_media_type(ci.get("mediaType", ci.get("media_type")), index)
+    if mt_err:
+        return None, {"error": mt_err, "code": "INVALID_MEDIA_TYPE"}
+    range_refusal = (None if subtitle_append_guard.is_subtitle_item(mp_item)
+                     else clip_info_tracks.track_range_error(timeline, ti, mt, index))
+    if range_refusal:
+        return None, {"error": range_refusal["message"], "code": range_refusal["code"],
+                      "track_counts": range_refusal["state"]["track_counts"]}
     out: Dict[str, Any] = {
         "mediaPoolItem": mp_item,
         "startFrame": sf,
@@ -731,7 +745,6 @@ def _build_append_clip_info_dict(root, ci, index, timeline_start_frame=None):
         "recordFrame": rf,
         "trackIndex": ti,
     }
-    mt = ci.get("mediaType", ci.get("media_type"))
     if mt is not None:
         out["mediaType"] = mt
     if subtitle_append_guard.is_subtitle_item(mp_item):
