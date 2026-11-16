@@ -2,6 +2,20 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v5.2.14 — `ripple_insert` blockers say what they are and what to do
+
+From #381 by @boomesh11, fixing #376 reported by @willturner-maker. Adapted on landing.
+
+### Fixed
+
+- **A `ripple_insert` blocker contradicted its own error.** A later item with no Media Pool clip came back with code `UNSPECIFIED` and `retryable: true`, while the top-level `RIPPLE_PLAN_BLOCKED` error said `retryable: false`. The blocker now carries `NO_MEDIA_POOL_ITEM`, `retryable: false`, and the `unsupported` category. That's the category `replace_source_range` already used for the same code; the one change made on landing was aligning it.
+- **Transitions were described as titles or generators.** The blocker message and `infeasible_reasons` now name transitions alongside titles, generators and Fusion comps.
+- **The remediation sent callers in a circle.** It told them to re-run with `dry_run=true`, even after they had just done that. It now says to resolve or remove the listed blockers, then re-run.
+
+### Not verified here
+
+- Offline tests only; no live Resolve run was made for this release.
+
 ## What's New in v5.2.13 — Numeric project settings write as strings
 
 From #380 by @boomesh11, fixing #377 reported by @willturner-maker.
