@@ -239,6 +239,24 @@ cannot redirect your write. An unknown id, an ambiguous name or an id/name
 pair that disagree is refused before anything runs. Exceptions, where these
 keys keep their own meaning: `timeline.set_current` (selects by
 `timeline_id`) and the imports (`timeline_name` names the new timeline).
+`media_pool(action="append_to_timeline")` takes a pin too; the rest of
+`media_pool` does not (`create_timeline*` reads `timeline_name` as the new
+timeline's name).
+
+**A pin is checked again before every write to the current timeline** (#382).
+Some writes go to whatever timeline is current when they run, not to the
+timeline the call resolved: above all `AppendToTimeline`, which `ripple_insert`,
+`move_clips`, `replace_source_range` and `edit_engine` swaps use to rebuild
+items. If another client (a second MCP server, a script, the user) makes a
+different timeline current mid-call, the write is refused with
+`TIMELINE_PIN_LOST` (pinned call) or `TIMELINE_CHANGED` (unpinned), and
+`state` names `expected_timeline` and `current_timeline`. Nothing reaches the
+other timeline. If the refusal comes after part of the edit ran (a
+`ripple_insert` whose tail was already deleted), `state` says how much, and
+the fix is the archive taken before the edit. These refusals are
+`retryable: false` because a blind retry could repeat the steps that already
+ran. This guard catches the switch; it does not lock clients out of each other.
+For concurrent agents, pin every call and give each agent its own timeline.
 
 The envelope is namespaced under `_operation` rather than merged into the top
 level because `status`, `operation`, `warnings`, `result` and `changes` are all
@@ -2532,6 +2550,7 @@ reports, deletes the project, and removes generated media. See
 | `"No item at index N"` | `item_index` out of range for the track | Call `timeline(action="get_items", ...)` first to find valid indices |
 | `ITEM_NOT_FOUND` | No item with that `timeline_item_id` on the target timeline | Re-read ids; pass `timeline_id` if the item is on another timeline |
 | `TIMELINE_NOT_FOUND` / `TIMELINE_NAME_AMBIGUOUS` | The pin names no timeline, or several share the name | `timeline(action="list")` and pin by `timeline_id` |
+| `TIMELINE_PIN_LOST` / `TIMELINE_CHANGED` | Another client made a different timeline current mid-call; the write was refused | Check `state` for what already ran, restore from the archive if needed, re-run pinned with `timeline_id` |
 | `"Clip not found"` | Stale or wrong `clip_id` | Re-fetch IDs via `media_pool(action="get_selected")` or `folder(action="get_clips")` |
 | `"Gallery not available"` | Not on Color page | `resolve_control(action="open_page", params={"page": "color"})` |
 | `"GrabStill failed"` | Not on Color page or no clip under playhead | Switch to Color page, move playhead over a clip |

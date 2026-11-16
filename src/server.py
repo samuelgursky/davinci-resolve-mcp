@@ -1797,6 +1797,21 @@ _TIMELINE_PIN_EXEMPT = frozenset({
     ("timeline", "list"), ("timeline", "set_current"),
     ("timeline", "import_timeline_checked"), ("timeline", "import_from_drp"),
 })
+#: Actions of other tools that write to the current timeline and so take a pin
+#: too (#382). Only named actions: media_pool's create_timeline* and imports
+#: read `timeline_name` as the name of the timeline they make.
+_TIMELINE_PIN_EXTRA = frozenset({
+    ("media_pool", "append_to_timeline"),
+})
+
+
+def _pin_aware(tool_name: str, action: str) -> bool:
+    """Whether timeline_id / timeline_name pin this call to a timeline."""
+    if (tool_name, action) in _TIMELINE_PIN_EXTRA:
+        return True
+    return tool_name in _TIMELINE_SCOPED_TOOLS and (tool_name, action) not in _TIMELINE_PIN_EXEMPT
+
+
 _PIN_ID_KEYS = ("timeline_id", "timelineId")
 _PIN_NAME_KEYS = ("timeline_name", "timelineName")
 #: Keys the wrapper and the envelope read, never the action.
@@ -1804,12 +1819,129 @@ _ENVELOPE_PARAM_KEYS = frozenset({"envelope", "_envelope", "execution_id", "_exe
 
 _call_depth = contextvars.ContextVar("resolve_mcp_call_depth", default=0)
 _acted_timeline = contextvars.ContextVar("resolve_mcp_acted_timeline", default=None)
+#: The timeline a pinned call targets, for the length of that call (#382).
+_pinned_timeline = contextvars.ContextVar("resolve_mcp_pinned_timeline", default=None)
 
 
 def _note_timeline(tl):
     """Record the timeline this call acted on (the first one resolved wins)."""
     if tl is not None and _acted_timeline.get() is None:
         _acted_timeline.set(tl)
+
+
+# ── The current timeline can move under a call (#382) ────────────────────────
+#
+# A pin makes its timeline current once, at the start of the call. Several
+# Resolve calls act on whatever is current *when they run*, not on a Timeline
+# object: above all MediaPool.AppendToTimeline, which ripple_insert, move and
+# slip use to rebuild items. Another client (a second MCP server, a script,
+# the user clicking a timeline tab) can make a different timeline current
+# between the pin and that call, and the rebuilt items then land on the other
+# timeline while the deletes landed on ours. Unpinned calls have the same
+# window: `tl` is read once, the appends follow later.
+#
+# So every current-only write checks first that the current timeline is still
+# the one this call resolved, and refuses with both timelines named if not.
+# Nothing here serialises clients against each other: the check and the call
+# are two bridge round trips, so a narrow window remains. What it removes is
+# the silent case, where the write lands elsewhere and the call says success.
+
+
+def _current_timeline_of(proj=None):
+    """The current timeline, or None when it cannot be read.
+
+    None means "not measured", never "different": the guards below refuse only
+    on an observed mismatch. With nothing current Resolve refuses the append on
+    its own, and a reading that fails must not turn into a refusal it cannot
+    justify.
+    """
+    try:
+        if proj is None:
+            resolve = get_resolve()
+            pm = resolve.GetProjectManager() if resolve else None
+            proj = pm.GetCurrentProject() if pm else None
+        return proj.GetCurrentTimeline() if proj else None
+    except Exception as exc:
+        logger.debug("Could not read the current timeline: %s", exc)
+        return None
+
+
+def _moved_away(current, expected) -> bool:
+    """True only when a different timeline is measurably current."""
+    if current is None or expected is None:
+        return False
+    try:
+        return str(current.GetUniqueId()) != str(expected.GetUniqueId())
+    except Exception:
+        return False
+
+
+def _same_timeline(a, b) -> bool:
+    try:
+        return a is not None and b is not None and str(a.GetUniqueId()) == str(b.GetUniqueId())
+    except Exception:
+        return False
+
+
+def _timeline_changed_error(expected, current, *, stage: str, pinned: bool,
+                            partial: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    exp, cur = _timeline_ref(expected), (_timeline_ref(current) if current is not None else None)
+    exp_name = exp["name"] if exp else "?"
+    cur_name = cur["name"] if cur else "no timeline"
+    if pinned:
+        code = "TIMELINE_PIN_LOST"
+        message = (f"This call is pinned to timeline {exp_name!r}, but {cur_name!r} became "
+                   f"current before {stage}; refusing rather than writing to {cur_name!r}")
+    else:
+        code = "TIMELINE_CHANGED"
+        message = (f"This call started on timeline {exp_name!r}, but {cur_name!r} became "
+                   f"current before {stage}; refusing rather than writing to {cur_name!r}")
+    state: Dict[str, Any] = {"expected_timeline": exp, "current_timeline": cur, "stage": stage}
+    if partial:
+        state.update(partial)
+        remediation = ("Part of this edit already ran on the expected timeline (see state). "
+                       "Restore it from the archive timeline_versioning made before the edit, "
+                       "then re-run with timeline_id so the call is pinned.")
+    else:
+        remediation = ("Another client or the user made a different timeline current during this "
+                       "call. The refused write reached neither timeline. If this action had already "
+                       "changed the expected timeline (a delete before its re-append), restore it from "
+                       "the archive timeline_versioning made before the edit. Then re-run with "
+                       "timeline_id so the call is pinned to the timeline you mean.")
+    # Not retryable by default: a blind retry can repeat steps that already ran.
+    return _err(message, code=code, category="busy", retryable=False,
+                remediation=remediation, state=state)
+
+
+def _pin_lost_error(proj, tl):
+    """A pinned call whose timeline is no longer current gets this, not the other one."""
+    target = _pinned_timeline.get()
+    if not _moved_away(tl, target):
+        return None
+    return _timeline_changed_error(target, tl, stage="the action read its timeline", pinned=True)
+
+
+class _TimelineChanged(Exception):
+    """Raised by `_guarded_append` so a write never reaches the wrong timeline.
+
+    Sites that catch `Exception` around an append record it as that row's
+    failure, which is the outcome wanted: nothing further is appended anywhere.
+    The tool wrapper turns an uncaught one into the structured error.
+    """
+
+    def __init__(self, error: Dict[str, Any]):
+        super().__init__(error.get("error") if isinstance(error, dict) else str(error))
+        self.error = error
+
+
+def _guarded_append(mp, tl, infos, *, proj=None, stage: str = "AppendToTimeline"):
+    """`mp.AppendToTimeline(infos)`, refused if `tl` is no longer the current timeline."""
+    current = _current_timeline_of(proj)
+    if _moved_away(current, tl):
+        pinned = _pinned_timeline.get()
+        raise _TimelineChanged(_timeline_changed_error(
+            tl, current, stage=stage, pinned=pinned is not None and _same_timeline(pinned, tl)))
+    return mp.AppendToTimeline(infos)
 
 
 def _timeline_ref(tl) -> Optional[Dict[str, Any]]:
@@ -1846,9 +1978,11 @@ class _CallScope:
                 self.kwargs = {**kwargs, "params": self.params}
             else:
                 self.args = (args[0], self.params, *args[2:])
-        if (self.params and tool_name in _TIMELINE_SCOPED_TOOLS
-                and (tool_name, action) not in _TIMELINE_PIN_EXEMPT):
+        self._pinned_token = None
+        if (self.params and _pin_aware(tool_name, action)):
             self.error = self._pin()
+            if self.pin:
+                self._pinned_token = _pinned_timeline.set(self.pin[2])
 
     def _pin(self):
         p = self.params
@@ -1970,7 +2104,9 @@ class _CallScope:
 
     def annotate(self, enveloped):
         """Name the timeline acted on in the envelope (#320)."""
-        if not self.outer or self.tool_name not in _TIMELINE_SCOPED_TOOLS or not isinstance(enveloped, dict):
+        if (not self.outer or not isinstance(enveloped, dict)
+                or (self.tool_name not in _TIMELINE_SCOPED_TOOLS
+                    and (self.tool_name, self.action) not in _TIMELINE_PIN_EXTRA)):
             return enveloped
         acted = self.pin[2] if self.pin else _acted_timeline.get()
         ref = _timeline_ref(acted) if acted is not None else None
@@ -1991,6 +2127,8 @@ class _CallScope:
         return enveloped
 
     def close(self):
+        if getattr(self, "_pinned_token", None) is not None:
+            _pinned_timeline.reset(self._pinned_token)
         if self._timeline_token is not None:
             _acted_timeline.reset(self._timeline_token)
         _call_depth.reset(self._depth_token)
@@ -2047,6 +2185,8 @@ def _guard_missing_params(fn):
                     result = await fn(*args, **kwargs)
                 except _MissingParam as exc:
                     result = _missing_param_error(exc, action)
+                except _TimelineChanged as exc:
+                    result = exc.error
                 except Exception as exc:
                     duration_ms = max(0, int((time.perf_counter() - t0) * 1000))
                     lifecycle.run_on_error(ctx, exc, duration_ms)
@@ -2088,6 +2228,8 @@ def _guard_missing_params(fn):
                     result = fn(*args, **kwargs)
                 except _MissingParam as exc:
                     result = _missing_param_error(exc, action)
+                except _TimelineChanged as exc:
+                    result = exc.error
                 except Exception as exc:
                     duration_ms = max(0, int((time.perf_counter() - t0) * 1000))
                     lifecycle.run_on_error(ctx, exc, duration_ms)
@@ -3395,6 +3537,9 @@ def _get_tl():
             code="NO_CURRENT_TIMELINE", category="precondition",
             remediation="Open a timeline via timeline(action='set_current', params={'index': N}) or in the Resolve UI.",
         )
+    lost = _pin_lost_error(proj, tl)
+    if lost:
+        return proj, None, lost
     _note_timeline(tl)
     return proj, tl, None
 
@@ -5626,7 +5771,9 @@ def _append_and_recover_timeline_item(
     if ierr:
         return None, None, ierr
     try:
-        out = mp.AppendToTimeline([info])
+        out = _guarded_append(mp, tl, [info])
+    except _TimelineChanged as exc:
+        return None, None, exc.error
     except Exception as exc:
         return None, None, _err(str(exc))
     if not out or len(out) < 1:
@@ -6064,7 +6211,9 @@ def _slip_append(mp, tl, info: Dict[str, Any], *, duration: int, ratio: float,
         # (null-id timeline items)'), so the track is read back for the item;
         # the return is kept only as evidence in the attempt log.
         try:
-            returned = mp.AppendToTimeline([dict(info)])
+            returned = _guarded_append(mp, tl, [dict(info)])
+        except _TimelineChanged:
+            raise
         except Exception as exc:
             attempts.append({"endFrame": info["endFrame"], "error": f"AppendToTimeline raised: {exc}"})
             return None, info, attempts
@@ -6626,6 +6775,14 @@ def _timeline_ripple_insert_impl(proj, tl, p: Dict[str, Any], *, resolve=None) -
     # nests harmlessly inside, and the appends/restores run without a page
     # flip per call.
     tail_items = [row["item"] for row in tail_rows]
+    # The delete acts on `tl`; the re-appends act on whatever is current. If
+    # another client has moved the current timeline, the tail would vanish
+    # here and reappear on theirs (#382), so check before touching anything.
+    current = _current_timeline_of(proj)
+    if _moved_away(current, tl):
+        return _timeline_changed_error(
+            tl, current, stage="the ripple delete",
+            pinned=_same_timeline(_pinned_timeline.get(), tl))
     with _edit_page_for_timeline_edits(resolve):
         if tail_items and not _timeline_delete_clips_verified(tl, tail_items, False, resolve=resolve):
             return _err(
@@ -6636,25 +6793,47 @@ def _timeline_ripple_insert_impl(proj, tl, p: Dict[str, Any], *, resolve=None) -
                 remediation="Check track locks and retry; the timeline is unchanged.",
             )
         failures: List[Dict[str, Any]] = []
-        for row in tail_rows:
-            try:
-                out_items = mp.AppendToTimeline([row["info"]])
-            except Exception as exc:
-                out_items = None
-                row["append_error"] = str(exc)
-            if not out_items:
-                failures.append({**_ripple_public_row(row),
-                                 "stage": "tail_reappend",
-                                 "expected_start": row["start"] + shift,
-                                 "error": row.get("append_error", "AppendToTimeline returned no item")})
-        for idx, info in enumerate(built_inserts):
-            try:
-                out_items = mp.AppendToTimeline([info])
-            except Exception as exc:
-                out_items = None
-                insert_summaries[idx]["append_error"] = str(exc)
-            if not out_items:
-                failures.append({**insert_summaries[idx], "stage": "insert"})
+        reappended = 0
+        inserted = 0
+        try:
+            for row in tail_rows:
+                try:
+                    out_items = _guarded_append(mp, tl, [row["info"]], proj=proj, stage="a tail re-append")
+                except _TimelineChanged:
+                    raise
+                except Exception as exc:
+                    out_items = None
+                    row["append_error"] = str(exc)
+                if out_items:
+                    reappended += 1
+                else:
+                    failures.append({**_ripple_public_row(row),
+                                     "stage": "tail_reappend",
+                                     "expected_start": row["start"] + shift,
+                                     "error": row.get("append_error", "AppendToTimeline returned no item")})
+            for idx, info in enumerate(built_inserts):
+                try:
+                    out_items = _guarded_append(mp, tl, [info], proj=proj, stage="an insert append")
+                except _TimelineChanged:
+                    raise
+                except Exception as exc:
+                    out_items = None
+                    insert_summaries[idx]["append_error"] = str(exc)
+                if out_items:
+                    inserted += 1
+                else:
+                    failures.append({**insert_summaries[idx], "stage": "insert"})
+        except _TimelineChanged as exc:
+            # The tail is already off `tl`. Stop: every further append would
+            # land on the other client's timeline. Say exactly what ran.
+            state = exc.error.get("state") or {}
+            return _timeline_changed_error(
+                tl, _current_timeline_of(proj), stage=state.get("stage", "an append"),
+                pinned=_same_timeline(_pinned_timeline.get(), tl),
+                partial={"tail_items_deleted": len(tail_items),
+                         "tail_items_reappended": reappended,
+                         "inserts_placed": inserted,
+                         "inserts_requested": len(built_inserts)})
 
         # Restore captured transform/crop/composite/retime properties on shifted items.
         restored = 0
@@ -8153,7 +8332,7 @@ def _timeline_create_variant_from_ranges(proj, source_tl, p: Dict[str, Any]) -> 
         while int(new_tl.GetTrackCount(track_type) or 0) < needed:
             if not new_tl.AddTrack(track_type):
                 break
-    appended = mp.AppendToTimeline(append_infos)
+    appended = _guarded_append(mp, new_tl, append_infos, proj=proj)
     if not appended:
         return _err("AppendToTimeline returned no items for variant")
     items_out = []
@@ -11108,7 +11287,7 @@ def _setup_multicam_timeline(proj, mp, p: Dict[str, Any]):
         if clip_err:
             return clip_err
         append_infos.append(clip_info)
-    appended = mp.AppendToTimeline(append_infos)
+    appended = _guarded_append(mp, new_tl, append_infos, proj=proj)
     if not appended:
         return _err("AppendToTimeline returned no items for multicam setup")
 
@@ -15999,10 +16178,14 @@ def _append_to_timeline_with_verification(proj, mp, append_payload, requested: D
     if blocked:
         return None, None, None, blocked
     raw_result = {"value": None}
+    expected_tl = _pinned_timeline.get() or proj.GetCurrentTimeline()
     before = _timeline_append_readback_snapshot(proj)
 
     def mutate():
-        raw_result["value"] = mp.AppendToTimeline(append_payload)
+        if expected_tl is None:  # nothing current: Resolve refuses on its own
+            raw_result["value"] = mp.AppendToTimeline(append_payload)
+        else:
+            raw_result["value"] = _guarded_append(mp, expected_tl, append_payload, proj=proj)
         return bool(raw_result["value"])
 
     verification = verify_by_readback(
@@ -23721,6 +23904,8 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
         CATASTROPHIC. Deletes timelines outright.
       append_to_timeline(clip_ids) -> {success, count}
         — legacy: params.clip_ids only (appends at end / default placement)
+        — both forms take timeline_id / timeline_name to pin the target timeline;
+          a different timeline made current mid-call is refused (TIMELINE_PIN_LOST).
       append_to_timeline(clip_infos) -> {success, count, items}
         — positioned: params.clip_infos is a list of {clip_id or media_pool_item_id,
           start_frame & end_frame (or startFrame/endFrame), record_frame/recordFrame,
@@ -23911,7 +24096,7 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
                 if row_err:
                     return row_err
                 built.append(row)
-            appended = mp.AppendToTimeline(built)
+            appended = _guarded_append(mp, tl, built, proj=proj)
             if not appended:
                 return _err("Failed to append clip_infos to created timeline")
             return _ok(
@@ -24013,13 +24198,19 @@ def media_pool(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str
         return {"success": raw, "verified": after_n < before_n,
                 "timelines_before": before_n, "timelines_after": after_n}
     elif action == "append_to_timeline":
+        # AppendToTimeline writes to the current timeline; a pin (#382) has
+        # made its timeline current, and the append re-checks right before.
+        current_tl = proj.GetCurrentTimeline()
+        lost = _pin_lost_error(proj, current_tl)
+        if lost:
+            return lost
+        _note_timeline(current_tl)
         if p.get("clip_infos") is not None:
             raw = _rows_with_default_record_frame_mode(p["clip_infos"], p)
             if not isinstance(raw, list):
                 return _err("clip_infos must be a list")
             if not raw:
                 return _err("clip_infos must be a non-empty list")
-            current_tl = proj.GetCurrentTimeline()
             timeline_start = _timeline_start_frame(current_tl)
             built = []
             for i, ci in enumerate(raw):
@@ -27513,7 +27704,7 @@ def edit_engine(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
             # (end - start) frames. Advancing by +1 more leaves a 1-frame gap
             # (black flash) between consecutive selects. See api_truth endFrame entry.
             record_cursor += int(append_ci.get("end_frame", 0)) - int(append_ci.get("start_frame", 0))
-        appended = mp.AppendToTimeline(built) if built else None
+        appended = _guarded_append(mp, tl, built) if built else None
         readback = _edit_engine_capture(tl)
         # A diff against a source timeline is meaningless for a fresh assembly;
         # a usage-snapshot summary is the structural readback that fits.
@@ -27916,7 +28107,7 @@ def edit_engine(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
             return {"success": False, "error": f"swap append failed: {row_err.get('error')}", "lifted": lift}
         # No mediaType on the clip info: the replacement appends video+audio
         # linked, mirroring the video + linked-audio lift above.
-        appended = mp.AppendToTimeline([row])
+        appended = _guarded_append(mp, tl, [row])
         after = _edit_engine_capture(tl)
         after["track_counts"] = _edit_engine_track_counts(tl)
         run_id = _analysis_runs.current_run_id()
@@ -28422,6 +28613,9 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
     tl = proj.GetCurrentTimeline()
     if not tl:
         return _err("No current timeline")
+    lost = _pin_lost_error(proj, tl)
+    if lost:
+        return lost
     _note_timeline(tl)
 
     if action == "auto_align_clips":
