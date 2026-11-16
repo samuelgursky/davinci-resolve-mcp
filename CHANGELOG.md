@@ -2,6 +2,30 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v5.3.0 — Writes no longer follow the current timeline to another client's
+
+Fixes #382, reported by @willturner-maker.
+
+### Fixed
+
+- **A write could land on a different client's timeline.** A pin makes its timeline current once, at the start of a call. `MediaPool.AppendToTimeline` writes to whatever timeline is current *when it runs*, and `ripple_insert`, `move_clips`, `replace_source_range` and `edit_engine` swaps rebuild items with it. If a second client (another MCP server, a script, the user) switched timelines in between, the deletes went to the right timeline, the re-appends went to the other one, and the call reported success. Unpinned calls had the same window. Every append now checks first that the current timeline is still the one the call resolved. If it isn't, the append is refused with `TIMELINE_PIN_LOST` (pinned call) or `TIMELINE_CHANGED` (unpinned), and `state` names `expected_timeline` and `current_timeline`. Nothing reaches the other timeline.
+- **`ripple_insert` stops cleanly if the timeline moves mid-rebuild.** It checks before its delete, so a switch caught there changes nothing. A switch caught during the re-appends stops every further append, and `state` reports how many tail items were deleted and re-appended and how many inserts were placed. The archive taken before the edit is the way back. These refusals are `retryable: false`, because a blind retry could repeat steps that already ran.
+- **A pinned call refuses if its timeline is no longer current when the action reads it**, rather than acting on the new current timeline.
+
+### Added
+
+- **`media_pool(action="append_to_timeline")` takes a pin** (`timeline_id` / `timeline_name`). The rest of `media_pool` does not: `create_timeline*` reads `timeline_name` as the new timeline's name.
+- `docs/SKILL.md` lists which actions take a pin, describes the re-check, and adds the two error codes to the recovery table.
+
+### Limits
+
+- This catches a switch; it does not lock clients out of each other. The check and the append are two separate bridge calls, so a narrow window remains. For concurrent agents, pin every call and give each agent its own timeline.
+- An unreadable current timeline counts as "not measured", never as "different", so offline stubs and edge cases are not refused.
+
+### Not verified here
+
+- Offline tests only. The switch was simulated in tests (`tests/test_timeline_pin_concurrency.py`), not raced between two live clients.
+
 ## What's New in v5.2.14 — `ripple_insert` blockers say what they are and what to do
 
 From #381 by @boomesh11, fixing #376 reported by @willturner-maker. Adapted on landing.
