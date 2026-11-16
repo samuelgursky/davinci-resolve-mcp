@@ -196,6 +196,33 @@ class ProjectLifecycleProbeTest(unittest.TestCase):
         self.assertEqual(project.settings["timelineFrameRate"], "24")
         self.assertGreaterEqual(len(project.set_calls), 2)
 
+    def test_safe_set_project_settings_stringifies_numeric_values(self):
+        class StrictStrProjectStub(ProjectStub):
+            def SetSetting(self, key, value):
+                if not isinstance(value, str):
+                    return False
+                return super().SetSetting(key, value)
+
+        project = StrictStrProjectStub()
+        result = _safe_set_project_settings(
+            project,
+            {
+                "settings": {
+                    "timelineResolutionWidth": 3840,
+                    "timelineResolutionHeight": 1520,
+                    "timelineFrameRate": "29.97",
+                },
+                "restore": False,
+            },
+        )
+
+        self.assertTrue(result["success"])
+        self.assertTrue(result["results"]["timelineResolutionWidth"]["write"])
+        self.assertEqual(result["results"]["timelineResolutionWidth"]["readback"], "3840")
+        self.assertTrue(result["results"]["timelineResolutionHeight"]["write"])
+        self.assertEqual(result["results"]["timelineResolutionHeight"]["readback"], "1520")
+        self.assertTrue(result["results"]["timelineFrameRate"]["write"])
+
     def test_archive_rejects_media_flags_without_opt_in(self):
         pm = ProjectManagerStub()
         with tempfile.TemporaryDirectory() as temp_dir:

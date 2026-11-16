@@ -20990,8 +20990,9 @@ def _safe_set_project_settings(project, p: Dict[str, Any]) -> Dict[str, Any]:
     results: Dict[str, Any] = {}
     for key, value in settings.items():
         row: Dict[str, Any] = {"requested": value, "original": original.get(key)}
+        write_value = value if isinstance(value, str) else str(value)
         try:
-            row["write"] = bool(project.SetSetting(key, value))
+            row["write"] = bool(project.SetSetting(key, write_value))
         except Exception as exc:
             row["write"] = False
             row["error"] = str(exc)
@@ -21001,7 +21002,9 @@ def _safe_set_project_settings(project, p: Dict[str, Any]) -> Dict[str, Any]:
             row["readback_error"] = str(exc)
         if _coerce_bool(p.get("restore"), True) and not isinstance(original.get(key), dict):
             try:
-                row["restore"] = bool(project.SetSetting(key, original[key]))
+                orig_val = original[key]
+                restore_val = orig_val if isinstance(orig_val, str) else str(orig_val)
+                row["restore"] = bool(project.SetSetting(key, restore_val))
                 row["restored_value"] = _ser(project.GetSetting(key))
             except Exception as exc:
                 row["restore"] = False
