@@ -4605,7 +4605,7 @@ def _append_clip_info_from_timeline_item(
         return None, _err(
             "Timeline item has no MediaPoolItem (transitions / generators / titles / Fusion comps without pool media cannot be rebuilt)",
             code="NO_MEDIA_POOL_ITEM",
-            category="invalid_input",
+            category="unsupported",
             retryable=False,
         )
     try:

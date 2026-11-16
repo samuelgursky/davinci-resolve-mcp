@@ -261,6 +261,7 @@ class RippleInsertPlanTest(unittest.TestCase):
         self.assertEqual(len(out["plan"]["blockers"]), 1)
         reason = out["plan"]["blockers"][0]["reason"]
         self.assertEqual(reason["code"], "NO_MEDIA_POOL_ITEM")
+        self.assertEqual(reason["category"], "unsupported")
         self.assertFalse(reason["retryable"])
         self.assertIn("transitions", reason["message"])
         self.assertTrue(any("transitions" in r for r in out["plan"]["infeasible_reasons"]))
