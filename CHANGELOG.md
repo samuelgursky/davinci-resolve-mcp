@@ -2,6 +2,18 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v5.2.13 — Numeric project settings write as strings
+
+From #380 by @boomesh11, fixing #377 reported by @willturner-maker.
+
+### Fixed
+
+- **`safe_set_project_settings` reported `write: false` for numeric values, with no reason.** Resolve's `Project.SetSetting` only accepts strings, so an int such as `timelineResolutionWidth: 3840` was refused while `"3840"` wrote fine. Values that aren't strings are now converted to strings before the write and before the restore, the same way the other `SetSetting` wrappers already did.
+
+### Not verified here
+
+- Offline tests only; no live Resolve run was made for this release.
+
 ## What's New in v5.2.12 — Lowercase CDL keys now reach Resolve
 
 From #379 by @boomesh11, fixing #378 reported by @willturner-maker.
