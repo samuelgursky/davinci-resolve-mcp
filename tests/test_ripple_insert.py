@@ -259,6 +259,16 @@ class RippleInsertPlanTest(unittest.TestCase):
         out = s._timeline_ripple_insert_impl(proj, tl, _insert_params())
         self.assertFalse(out["success"])
         self.assertEqual(len(out["plan"]["blockers"]), 1)
+        reason = out["plan"]["blockers"][0]["reason"]
+        self.assertEqual(reason["code"], "NO_MEDIA_POOL_ITEM")
+        self.assertFalse(reason["retryable"])
+        self.assertIn("transitions", reason["message"])
+        self.assertTrue(any("transitions" in r for r in out["plan"]["infeasible_reasons"]))
+
+        executed = s._timeline_ripple_insert_impl(proj, tl, dict(_insert_params(), dry_run=False))
+        self.assertFalse(executed["success"])
+        self.assertFalse(executed["error"]["retryable"])
+        self.assertNotIn("dry_run=true", executed["error"]["remediation"])
 
 
 class RippleInsertExecuteTest(unittest.TestCase):
