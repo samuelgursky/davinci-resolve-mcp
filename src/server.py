@@ -61,7 +61,7 @@ from src.utils.resolve211_edits import validate_edit_options, validate_transitio
 from src.utils.film_cues import export_cue_sheet as _export_film_cue_sheet
 
 # Platform-specific Resolve paths
-from src.utils.cdl import normalize_cdl_payload
+from src.utils.cdl import canonicalize_cdl_keys, normalize_cdl_payload
 from src.utils.media_paths import media_exists as _media_exists
 from src.utils.preset_files import preset_export_file as _preset_export_file
 from src.utils.render_target import missing_target_dir_error as _missing_target_dir_error
@@ -30143,6 +30143,7 @@ def _validate_cdl_payload(cdl):
             category="invalid_input",
             remediation="Pass cdl as a dict with NodeIndex, Slope, Offset, Power, Saturation.",
         )
+    cdl = canonicalize_cdl_keys(cdl)
     errors = []
     node_index = cdl.get("NodeIndex", 1)
     if isinstance(node_index, bool):

@@ -180,6 +180,36 @@ class ColorGradeProbeTest(unittest.TestCase):
         self.assertTrue(result["success"])
         self.assertEqual(item.cdl_calls, [])
 
+    def test_safe_set_cdl_canonicalizes_lowercase_and_snake_case_keys(self):
+        item = ItemStub()
+        result = _safe_set_cdl(
+            item,
+            {
+                "cdl": {
+                    "node_index": 2,
+                    "slope": [1.2, 1.0, 0.8],
+                    "offset": [0.01, 0.0, -0.01],
+                    "power": [1.0, 0.95, 1.05],
+                    "saturation": 1.15,
+                },
+            },
+        )
+
+        self.assertTrue(result["success"])
+        self.assertEqual(len(item.cdl_calls), 1)
+        sent = item.cdl_calls[0]
+        self.assertEqual(
+            sent,
+            {
+                "NodeIndex": "2",
+                "Slope": "1.2 1.0 0.8",
+                "Offset": "0.01 0.0 -0.01",
+                "Power": "1.0 0.95 1.05",
+                "Saturation": "1.15",
+            },
+        )
+        self.assertEqual(result["normalized"], sent)
+
     def test_grade_item_snapshot_includes_node_graph_and_versions(self):
         snapshot = _grade_item_snapshot(ItemStub(), ProjectStub())
 
