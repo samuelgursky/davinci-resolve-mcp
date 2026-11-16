@@ -4603,7 +4603,10 @@ def _append_clip_info_from_timeline_item(
         return None, _err(f"GetMediaPoolItem failed: {exc}")
     if not mpi:
         return None, _err(
-            "Timeline item has no MediaPoolItem (generators / titles without pool media cannot use this)"
+            "Timeline item has no MediaPoolItem (transitions / generators / titles / Fusion comps without pool media cannot be rebuilt)",
+            code="NO_MEDIA_POOL_ITEM",
+            category="invalid_input",
+            retryable=False,
         )
     try:
         t_start = _frame_int(item.GetStart())
@@ -6578,7 +6581,7 @@ def _timeline_ripple_insert_impl(proj, tl, p: Dict[str, Any], *, resolve=None) -
         if straddlers:
             reasons.append(f"insert point cuts through {len(straddlers)} item(s) — choose an item boundary")
         if blockers:
-            reasons.append(f"{len(blockers)} later item(s) cannot be rebuilt (no pool media: titles/generators/Fusion comps)")
+            reasons.append(f"{len(blockers)} later item(s) cannot be rebuilt (no pool media: transitions/titles/generators/Fusion comps)")
         if subtitle_blockers:
             reasons.append(f"{subtitle_blockers} subtitle item(s) after the insert point cannot be shifted via the API")
         if locked_tracks:
@@ -6596,7 +6599,7 @@ def _timeline_ripple_insert_impl(proj, tl, p: Dict[str, Any], *, resolve=None) -
                 "category": "invalid_input",
                 "retryable": False,
                 "message": "; ".join(plan["infeasible_reasons"]),
-                "remediation": "Re-run with dry_run=true, resolve the listed blockers, then execute.",
+                "remediation": "Resolve or remove the listed blockers (e.g. transitions, titles, generators, or locked tracks), then re-run.",
             },
         }
 
