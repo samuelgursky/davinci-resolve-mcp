@@ -2,6 +2,18 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v5.2.12 — Lowercase CDL keys now reach Resolve
+
+From #379 by @boomesh11, fixing #378 reported by @willturner-maker.
+
+### Fixed
+
+- **`safe_set_cdl` dropped CDL values sent with lowercase keys.** A payload such as `{"slope": [...], "offset": [...], "power": [...], "saturation": 1.1, "node_index": 2}` kept the requested values under the lowercase keys, while the PascalCase keys Resolve reads (`NodeIndex`, `Slope`, `Offset`, `Power`, `Saturation`) were filled with identity defaults. Lowercase, snake_case and camelCase spellings now map to the PascalCase keys before validation and normalisation, so every path that sends a CDL to `SetCDL` gets the caller's values. When both spellings are given, the PascalCase key wins.
+
+### Not verified here
+
+- Offline tests only; no live Resolve run was made for this release.
+
 ## What's New in v5.2.11 — A typo'd track index no longer grows a new timeline
 
 From a follow-up on #370 by @willturner-maker.
