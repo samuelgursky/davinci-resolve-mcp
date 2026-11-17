@@ -2,6 +2,18 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v5.3.2 — OFX choice and color parameters decode
+
+From #383.
+
+### Added
+
+- **`extractOFXTools` decodes OFX choice menus and RGB colors.** Before, both came back as `null`. A choice parameter now decodes to `{choice: index}`, and a color to `{rgb: [r, g, b], alpha?}`, from the bytes Resolve 19.1.3 writes in a node's OFX container. Index 0 is stored as an empty field, and a parameter left at its default isn't stored at all, so a missing parameter means "default". Only the raw index is returned; what it means depends on each plugin's own menu.
+
+### Not verified here
+
+- Decoding was measured on stills exported from Resolve Studio 19.1.3. No other Resolve version was checked.
+
 ## What's New in v5.3.1 — prettier dev-dependency update
 
 From #375 (Dependabot).
