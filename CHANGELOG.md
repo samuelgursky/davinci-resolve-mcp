@@ -2,6 +2,14 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v5.3.1 — prettier dev-dependency update
+
+From #375 (Dependabot).
+
+### Dependencies
+
+- **`prettier` 3.9.10 → 3.10.1** in `resolve-advanced` (dev dependency only). No runtime or tool behaviour changes.
+
 ## What's New in v5.3.0 — Writes no longer follow the current timeline to another client's
 
 Fixes #382, reported by @willturner-maker.
