@@ -2,6 +2,29 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v5.3.3 — DRP timeline start frame and timecode agree
+
+From #384.
+
+### Fixed
+
+When the DRP/DRT writer builds a timeline, it writes the start twice: as `<StartFrame>` and as the `<StartTC>` label. The two could disagree, or both be wrong.
+
+- **An explicit `startFrame` left `<StartTC>` stale.** `startFrame: 90000` at 24 fps was written next to `StartTC 01:00:00:00`, but 90000 is `01:02:30:00`. The label now matches the frame, in the caller's counting mode.
+- **Drop-frame was applied at every frame rate.** `01:00:00;00` at 24 fps counted to frame 86292. Drop-frame now applies only at 29.97 and 59.94 (SMPTE 12M).
+- **A label that didn't parse became frame 0**, and the bad label was still written out.
+- **Out-of-range fields were counted as if they were valid.** For example, `01:00:00:30` at 29.97 was counted as `01:00:01:00`.
+
+Valid start timecodes count exactly as before.
+
+### Changed
+
+- **An invalid start timecode now throws a `RangeError`** instead of writing a wrong start. This covers malformed labels, out-of-range fields, `;` at a rate with no drop-frame, and labels that drop-frame counting skips.
+
+### Not verified here
+
+- Offline tests only. Drop-frame labels were checked against a second, independent SMPTE 12M labeller over two hours at 29.97 and 59.94. No timeline was imported into Resolve for this release.
+
 ## What's New in v5.3.2 — OFX choice and color parameters decode
 
 From #383.
