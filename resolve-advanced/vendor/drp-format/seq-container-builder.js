@@ -27,7 +27,6 @@ const { encodeRichEffectFiltersBA, buildRichFieldsBlob } = require('./rich-title
 async function buildSeqContainerFile(timeline, options = {}) {
   const {
     frameRate = 24,
-    startTimecode = '01:00:00:00',
     markers = [],
     resolution = '1920x1080',
   } = options;
@@ -60,11 +59,9 @@ async function buildSeqContainerFile(timeline, options = {}) {
   // Build lockable blob with markers
   const lockableBlob = buildLockableBlobElement(markers, lockableBlobId, frameRate);
 
-  // An explicit startFrame wins; otherwise derive it from the timecode
-  // (issue #168 — the spec field used to be ignored entirely).
-  const startFrame = Number.isFinite(options.startFrame)
-    ? Math.round(options.startFrame)
-    : timecodeToFrames(startTimecode, frameRate);
+  // <StartFrame> and the <StartTC> that labels it: an explicit startFrame
+  // wins (issue #168), otherwise counted from the timecode; they always agree.
+  const { startFrame, startTimecode } = resolveTimelineStart(options, frameRate);
 
   // Combine video tracks: standard video tracks first, then Rich title tracks
   const allVideoTrackElements = [...videoTrackElements, ...richTitleTrackElements];
@@ -363,33 +360,119 @@ function buildMarkersFieldsBlob(markers, frameRate) {
   return '0000000100000000';
 }
 
+// =============================================================================
+// TIMELINE START (<StartFrame> / <StartTC>)
+// =============================================================================
+
+const TIMECODE_LABEL = /^(\d{1,2})[:;](\d{2})[:;](\d{2})[:;](\d{2})$/;
+
 /**
- * Convert timecode to frames
+ * The integer timebase SMPTE timecode counts at (24 for 23.976, 30 for 29.97)
+ * and how many numbers drop-frame skips a minute: 2 at 30000/1001, 4 at
+ * 60000/1001, and 0 at every other rate, which has no drop-frame timecode
+ * (SMPTE 12M).
+ */
+function timecodeBase(fps) {
+  const rate = Number(fps);
+  if (!Number.isFinite(rate) || rate <= 0) {
+    throw new RangeError(`frame rate ${JSON.stringify(fps)} is not a positive number`);
+  }
+  const nominal = Math.round(rate);
+  const ntsc = Math.abs(rate - nominal) > 0.001 && Math.abs(rate - (nominal * 1000) / 1001) < 0.01;
+  const dropPerMinute = ntsc && (nominal === 30 || nominal === 60) ? nominal / 15 : 0;
+  return { nominal, dropPerMinute };
+}
+
+/**
+ * Convert a timecode label to a frame count. ';' marks drop-frame.
+ * Throws a RangeError for anything the rate cannot count: a malformed label,
+ * a field out of range, drop-frame at a rate without it, or a drop-frame label
+ * that does not exist (00:01:00;00 at 29.97). It used to return 0 or a wrong
+ * count for these, which was then written as the timeline start.
  */
 function timecodeToFrames(timecode, fps = 24) {
-  if (!timecode || typeof timecode !== 'string') return 0;
-
-  const dropFrame = timecode.includes(';');
-  const parts = timecode.replace(/;/g, ':').split(':').map(Number);
-  if (parts.length !== 4 || parts.some(Number.isNaN)) return 0;
-
-  const [hh, mm, ss, ff] = parts;
+  const m = typeof timecode === 'string' ? timecode.trim().match(TIMECODE_LABEL) : null;
+  if (!m) {
+    throw new RangeError(`timecode ${JSON.stringify(timecode)} is not HH:MM:SS:FF (HH:MM:SS;FF for drop-frame)`);
+  }
+  const [hh, mm, ss, ff] = m.slice(1, 5).map(Number);
+  const { nominal, dropPerMinute } = timecodeBase(fps);
+  if (mm > 59 || ss > 59 || ff >= nominal) {
+    throw new RangeError(`timecode ${JSON.stringify(timecode)} is out of range at ${fps} fps`);
+  }
   // SMPTE timecode counts NOMINAL frames: the fields multiply by the integer
   // base (30 for 29.97, 24 for 23.976), not the exact rate. Measured against
   // Resolve itself (Studio 19.1.3.7): a 29.97 timeline at 01:00:00:00 reads
   // GetStartFrame 108000 = 3600 x 30, and a 23.976 one reads 86400 = 3600 x
   // 24. Both the pre-#168 exact-rate product (107892.107...) and its rounded
   // fix (107892) were wrong; nominal is what Resolve stores.
-  const nominal = Math.round(fps);
   let frames = (hh * 3600 + mm * 60 + ss) * nominal + ff;
-  if (dropFrame) {
-    // Drop-frame skips 2 (or 4 at 59.94) TC numbers per minute except every
-    // tenth minute — same formula as the Python _timecode_to_frame_id.
-    const dropped = Math.round(nominal * 0.0666666667);
+  if (timecode.includes(';')) {
+    if (!dropPerMinute) {
+      throw new RangeError(`drop-frame timecode ${JSON.stringify(timecode)} does not exist at ${fps} fps (only 29.97 and 59.94 drop frames)`);
+    }
+    if (ss === 0 && ff < dropPerMinute && mm % 10 !== 0) {
+      throw new RangeError(`drop-frame timecode ${JSON.stringify(timecode)} is a dropped label`);
+    }
+    // Drop-frame skips 2 (4 at 59.94) numbers per minute except every tenth
+    // minute — same formula as the Python _timecode_to_frame_id.
     const totalMinutes = hh * 60 + mm;
-    frames -= dropped * (totalMinutes - Math.floor(totalMinutes / 10));
+    frames -= dropPerMinute * (totalMinutes - Math.floor(totalMinutes / 10));
   }
   return frames;
+}
+
+/**
+ * Label a frame count as timecode at `fps`: the inverse of timecodeToFrames.
+ * @param {number} frames - non-negative integer frame count
+ * @param {number} fps - frame rate
+ * @param {boolean} [dropFrame=false] - drop-frame labels (29.97 / 59.94 only)
+ * @returns {string} HH:MM:SS:FF, or HH:MM:SS;FF for drop-frame
+ */
+function framesToTimecode(frames, fps, dropFrame = false) {
+  if (!Number.isSafeInteger(frames) || frames < 0) {
+    throw new RangeError(`frame ${JSON.stringify(frames)} is not a non-negative integer`);
+  }
+  const { nominal, dropPerMinute } = timecodeBase(fps);
+  if (dropFrame && !dropPerMinute) {
+    throw new RangeError(`drop-frame timecode does not exist at ${fps} fps (only 29.97 and 59.94 drop frames)`);
+  }
+  let n = frames;
+  if (dropFrame) {
+    // Put back the numbers skipped before this frame, then count as non-drop.
+    const perMinute = nominal * 60 - dropPerMinute;
+    const perTenMinutes = perMinute * 10 + dropPerMinute;
+    const tens = Math.floor(n / perTenMinutes);
+    const rem = n % perTenMinutes;
+    n += dropPerMinute * 9 * tens;
+    if (rem > dropPerMinute) n += dropPerMinute * Math.floor((rem - dropPerMinute) / perMinute);
+  }
+  const pad = (v) => String(v).padStart(2, '0');
+  const totalSeconds = Math.floor(n / nominal);
+  return `${pad(Math.floor(totalSeconds / 3600))}:${pad(Math.floor(totalSeconds / 60) % 60)}:${pad(totalSeconds % 60)}${dropFrame ? ';' : ':'}${pad(n % nominal)}`;
+}
+
+/**
+ * The timeline's first frame as the pair a SeqContainer stores: <StartFrame>
+ * and the <StartTC> that labels it. An explicit startFrame wins (issue #168)
+ * and is labelled in the caller's counting mode (';' in startTimecode means
+ * drop-frame); otherwise the frame is counted from startTimecode. Either way
+ * the two describe the same frame — before, an explicit startFrame was written
+ * beside the caller's (or the default 01:00:00:00) unrelated label.
+ *
+ * @param {{ startTimecode?: string, startFrame?: number }} options
+ * @param {number} frameRate - timeline frame rate
+ * @returns {{ startFrame: number, startTimecode: string }}
+ */
+function resolveTimelineStart(options = {}, frameRate = 24) {
+  const startTimecode = options.startTimecode === undefined ? '01:00:00:00' : options.startTimecode;
+  if (Number.isFinite(options.startFrame)) {
+    const startFrame = Math.round(options.startFrame);
+    const dropFrame = typeof startTimecode === 'string' && startTimecode.includes(';');
+    return { startFrame, startTimecode: framesToTimecode(startFrame, frameRate, dropFrame) };
+  }
+  const label = typeof startTimecode === 'string' ? startTimecode.trim() : startTimecode;
+  return { startFrame: timecodeToFrames(label, frameRate), startTimecode: label };
 }
 
 // =============================================================================
@@ -595,4 +678,6 @@ module.exports = {
   buildRichTitleClipElement,
   buildRichTitleTrackElement,
   timecodeToFrames,
+  framesToTimecode,
+  resolveTimelineStart,
 };
