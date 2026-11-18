@@ -2,6 +2,22 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v5.3.4 — House-style conventions for word-by-word subtitles and motion graphics
+
+From #374 by @nisee22. Adapted on landing.
+
+### Added
+
+- **The house-style skill records its first two conventions.**
+  - **Word-by-word subtitles:** split the existing cards into one word each instead of transcribing again, and write an SRT for the editor to import. Each card's own time span is shared between its words by length, and each word stays on screen for at least 3 frames.
+  - **Motion graphics:** build a native Fusion comp that fills the whole 9:16 frame, instead of a pre-rendered PNG sequence laid over the speaker. Build the comp on its own 1080x1920 timeline, then place that timeline on the main one with `AppendToTimeline`, using `trackIndex` and `recordFrame`.
+
+The one change made on landing was copying the edit into `.agents/skills/house-style/SKILL.md`. The PR had only edited the `.claude` copy, and the two copies must match.
+
+### Not verified here
+
+- Documentation only; no tool behaviour changes.
+
 ## What's New in v5.3.3 — DRP timeline start frame and timecode agree
 
 From #384.
