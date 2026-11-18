@@ -64,6 +64,12 @@ def current_timeline(resolve):
 
 def refusal_detail(what: str, state: Dict[str, Any]) -> Dict[str, Any]:
     """The pieces of a PLAYBACK_ACTIVE error, for the caller's own _err()."""
+    from src.utils import transport_provider  # local: keeps this module importable alone
+    provider_hint = (
+        " A transport provider is configured: timeline_frame capture with "
+        "during_playback='live' takes the newest frame without stopping playback, "
+        "and during_playback='pause' pauses, exports the exact frame and resumes."
+    ) if transport_provider.available() else ""
     return {
         "message": (
             f"Playback is running in Resolve, so {what} was not attempted. A page "
@@ -74,6 +80,7 @@ def refusal_detail(what: str, state: Dict[str, Any]) -> Dict[str, Any]:
         "remediation": (
             "Stop playback in Resolve (Space or K) and retry. The scripting API has no "
             f"call that stops it. Pass {OVERRIDE_PARAM}=true to go ahead anyway."
+            + provider_hint
         ),
         "state": state,
     }
