@@ -323,5 +323,22 @@ class SubtitleLiveTest(unittest.TestCase):
         run.assert_not_called()
         self.t.Export.assert_not_called()
 
+    def test_unavailable_staging_is_a_failure_result_not_an_exception(self):
+        def refuse(_):
+            raise PermissionError('staging root refused')
+        unwritable = lambda _: str(Path(self.tmp.name) / 'file')
+        (Path(self.tmp.name) / 'file').write_text('x', encoding='utf-8')
+        for safe_dir in (refuse, unwritable):
+            for name, call in (
+                    ('inputs', lambda: live.list_subtitle_preset_inputs(self.r, self.t, {}, safe_dir)),
+                    ('captions', lambda: live.list_captions_live(self.r, self.t, {}, safe_dir)),
+                    ('preset', lambda: live.set_subtitle_preset(self.r, self.p, self.t, {'inputs': {'textRed': 0}}, safe_dir))):
+                with self.subTest(action=name, safe_dir=safe_dir), patch.object(live.shutil, 'which', return_value='node'):
+                    result = call()
+                    self.assertFalse(result['success'])
+                    self.assertIn('Staging directory unavailable', result['error'])
+        self.t.Export.assert_not_called()
+        self.p.GetMediaPool.return_value.ImportTimelineFromFile.assert_not_called()
+
 if __name__ == '__main__':
     unittest.main()

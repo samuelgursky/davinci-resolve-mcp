@@ -215,6 +215,20 @@ def _post_write_database_health(resolve, project_id, timeline, target_track):
     return health
 
 
+def _make_staging(safe_dir):
+    """A fresh per-call staging directory, or (None, error result) when it cannot be made.
+
+    Every caller returns ``{"success": False, ...}`` for a failure; a refused or unwritable staging root must do the
+    same instead of raising out of the action.
+    """
+    try:
+        staging = Path(safe_dir(str(ROOT / "logs" / "subtitle-live"))) / uuid.uuid4().hex
+        staging.mkdir(parents=True, exist_ok=False)
+    except (OSError, ValueError) as exc:
+        return None, {"success": False, "error": f"Staging directory unavailable: {exc}"}
+    return staging, None
+
+
 def _revise(resolve, project, timeline, params, safe_dir, *, dry_run, build, check, report, edited_track=None):
     """Export, build(source, output, staging) a patched DRT, import it as a selected
     revision and check(readback, patch) Resolve's re-export of it. The original is
@@ -224,8 +238,9 @@ def _revise(resolve, project, timeline, params, safe_dir, *, dry_run, build, che
     name = params.get("revision_name") or f"{timeline.GetName()} - subtitles {uuid.uuid4().hex[:8]}"
     if any(project.GetTimelineByIndex(i).GetName() == name for i in range(1, project.GetTimelineCount() + 1)):
         return {"success": False, "error": "revision_name already exists"}
-    staging = Path(safe_dir(str(ROOT / "logs" / "subtitle-live"))) / uuid.uuid4().hex
-    staging.mkdir(parents=True, exist_ok=False)
+    staging, refused = _make_staging(safe_dir)
+    if refused:
+        return refused
     source, output = staging / "original.drt", staging / "revision.drt"
     original_active = project.GetCurrentTimeline()
     original_timecode = timeline.GetCurrentTimecode()
@@ -332,8 +347,9 @@ def list_subtitle_preset_inputs(resolve, timeline, params, safe_dir):
     if isinstance(checked, dict):
         return checked
     node, _dry_run, track = checked
-    staging = Path(safe_dir(str(ROOT / "logs" / "subtitle-live"))) / uuid.uuid4().hex
-    staging.mkdir(parents=True, exist_ok=False)
+    staging, refused = _make_staging(safe_dir)
+    if refused:
+        return refused
     result = None
     try:
         source = staging / "inspect.drt"
@@ -421,8 +437,9 @@ def list_captions_live(resolve, timeline, params, safe_dir):
     if isinstance(checked, dict):
         return checked
     node, _, track = checked
-    staging = Path(safe_dir(str(ROOT / "logs" / "subtitle-live"))) / uuid.uuid4().hex
-    staging.mkdir(parents=True, exist_ok=False)
+    staging, refused = _make_staging(safe_dir)
+    if refused:
+        return refused
     try:
         source = staging / "original.drt"
         if not timeline.Export(str(source), resolve.EXPORT_DRT):
