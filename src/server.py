@@ -17911,7 +17911,24 @@ def _provider_frame_capture(p: Dict[str, Any], mode: str):
                     category="precondition",
                     remediation="Set RESOLVE_MCP_TRANSPORT_PROVIDER, or capture with the default "
                                 "during_playback='refuse' after stopping playback.")
-    base = _resolve_safe_dir(os.path.join(tempfile.gettempdir(), "resolve-frame-captures"))
+    # Everything that can refuse is checked before the provider runs: in 'pause' mode the provider stops the
+    # operator's playback, and that must not happen for a capture that was always going to fail afterwards.
+    max_width = p.get("max_width", p.get("maxWidth"))
+    if max_width not in (None, "", 0):
+        try:
+            max_width = int(max_width)
+        except (TypeError, ValueError):
+            max_width = -1
+        if max_width <= 0:
+            return _err(f"max_width must be a positive integer; got {p.get('max_width', p.get('maxWidth'))!r}",
+                        code="INVALID_PARAM", category="invalid_input")
+    else:
+        max_width = None
+    if not shutil.which("ffmpeg"):
+        return _err("during_playback captures need ffmpeg to transcode the provider's frame, and ffmpeg is not on "
+                    "PATH", code="FFMPEG_MISSING", category="precondition",
+                    remediation="Install ffmpeg, or stop playback and capture with the default during_playback.")
+    base =_resolve_safe_dir(os.path.join(tempfile.gettempdir(), "resolve-frame-captures"))
     folder = os.path.join(base, f"{STILL_STAGING_PREFIX}{_uuid.uuid4().hex}")
     os.makedirs(folder, exist_ok=True)
     try:
@@ -17921,10 +17938,9 @@ def _provider_frame_capture(p: Dict[str, Any], mode: str):
             return _err(meta.get("error") or meta.get("why") or "the transport provider did not capture a frame",
                         code=meta.get("code") or "PROVIDER_CAPTURE_FAILED", category="api_error",
                         state={k: v for k, v in meta.items() if k not in ("path",)})
-        src = meta.get("path") or path
-        max_width = p.get("max_width", p.get("maxWidth"))
         out_format = "jpg" if str(p.get("format", "jpg")).lower() in ("jpg", "jpeg") else "png"
-        data, ff_err = _ffmpeg_scale_to_bytes(src, int(max_width) if max_width else None, out_format)
+        # `path`, never meta["path"]: transport_provider.capture refuses a provider that names another file.
+        data, ff_err = _ffmpeg_scale_to_bytes(path, max_width, out_format)
         if ff_err:
             return _err(f"Failed to transcode the provider's frame: {ff_err}", code="RESCALE_FAILED",
                         category="api_error")
@@ -19333,12 +19349,17 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         — List active agent tool execution lifecycle hooks and their enabled status (no connection needed).
     """
     p = _params(params)
-    if action == "transport_status":
-        out = _transport_provider.status()
-        return _err(out["error"], code=out["code"], category="precondition") if "error" in out and "code" in out and "state" not in out else out
-    if action == "transport_press":
-        out = _transport_provider.press(str(p.get("transport_action") or p.get("op") or ""))
-        return _err(out["error"], code=out["code"], category="precondition") if "error" in out and "code" in out and "verdict" not in out else out
+    if action in ("transport_status", "transport_press"):
+        if action == "transport_status":
+            out, verdict_key = _transport_provider.status(), "state"
+        else:
+            out = _transport_provider.press(str(p.get("transport_action") or p.get("op") or ""))
+            verdict_key = "verdict"
+        # A provider's own verdict passes through as it is, even a failed one. Only this module's errors (no
+        # provider, a bad action, a provider that printed nothing usable) become an error envelope.
+        if verdict_key not in out and "error" in out and "code" in out:
+            return _err(out["error"], code=out["code"], category=_transport_provider.error_category(out["code"]))
+        return out
 
     # api_truth is a static knowledge lookup — no Resolve connection needed, and
     # that property is worth keeping: it is the one call that still answers when

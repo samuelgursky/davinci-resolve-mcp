@@ -14,7 +14,7 @@ from src.utils import playback_guard, transport_provider as tp
 
 def _write_provider(folder: str, body: str) -> str:
     path = os.path.join(folder, "provider.py")
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         f.write("#!" + sys.executable + "\nimport json, sys\nargs = sys.argv[1:]\n" + body)
     os.chmod(path, os.stat(path).st_mode | stat.S_IXUSR)
     return path
@@ -90,12 +90,70 @@ class TransportProviderTest(unittest.TestCase):
         self.assertEqual(out["args"][0], "capture-exact")
         self.assertIn("--pause-ok", out["args"])
 
+    def test_capture_naming_another_file_is_refused(self):
+        elsewhere = os.path.join(self.tmp.name, "elsewhere.jpg")
+        with open(elsewhere, "wb") as f:
+            f.write(b"x")
+        prov = _write_provider(
+            self.tmp.name, 'open(args[1], "wb").write(b"x")\n'
+            'print(json.dumps({"ok": True, "path": ' + json.dumps(elsewhere) + '}))\n')
+        with self.env(prov):
+            out = tp.capture(os.path.join(self.tmp.name, "f.jpg"), "live")
+        self.assertFalse(out["ok"])
+        self.assertEqual(out["code"], "PROVIDER_PATH_MISMATCH")
+
+    def test_capture_without_path_field_uses_requested_path(self):
+        prov = _write_provider(self.tmp.name, 'open(args[1], "wb").write(b"x")\nprint(json.dumps({"ok": True}))\n')
+        with self.env(prov):
+            self.assertTrue(tp.capture(os.path.join(self.tmp.name, "f.jpg"), "live")["ok"])
+
+    def test_error_categories(self):
+        self.assertEqual(tp.error_category("INVALID_ACTION"), "invalid_input")
+        self.assertEqual(tp.error_category("PROVIDER_MISSING"), "precondition")
+        self.assertEqual(tp.error_category("PROVIDER_TIMEOUT"), "api_error")
+
     def test_refusal_hint_only_with_provider(self):
         os.environ.pop(tp.ENV, None)
         self.assertNotIn("during_playback='live'", playback_guard.refusal_detail("x", {})["remediation"])
         prov = _write_provider(self.tmp.name, 'print("{}")\n')
         with self.env(prov):
             self.assertIn("during_playback='live'", playback_guard.refusal_detail("x", {})["remediation"])
+
+
+
+class ServerTransportTest(unittest.TestCase):
+    """The server side: refusals land before the provider runs, and errors carry the right category."""
+
+    def setUp(self):
+        from src import server
+        self.server = server
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.ran = os.path.join(self.tmp.name, "ran")
+        prov = _write_provider(self.tmp.name, "open(%r, 'w', encoding='utf-8').write(' '.join(args))\nprint(json.dumps({'ok': False}))\n" % self.ran)
+        patcher = mock.patch.dict(os.environ, {tp.ENV: prov})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_bad_max_width_refused_before_provider_runs(self):
+        for bad in ("wide", -5, "0"):
+            out = self.server._provider_frame_capture({"max_width": bad}, "pause")
+            self.assertEqual(out["error"]["code"] if isinstance(out.get("error"), dict) else out.get("code"),
+                             "INVALID_PARAM", (bad, out))
+        self.assertFalse(os.path.exists(self.ran))
+
+    def test_missing_ffmpeg_refused_before_provider_pauses(self):
+        with mock.patch.object(self.server.shutil, "which", return_value=None):
+            out = self.server._provider_frame_capture({}, "pause")
+        self.assertIn("FFMPEG_MISSING", json.dumps(out))
+        self.assertFalse(os.path.exists(self.ran))
+
+    def test_invalid_press_action_is_invalid_input(self):
+        out = self.server.resolve_control("transport_press", {"transport_action": "eject"})
+        text = json.dumps(out)
+        self.assertIn("INVALID_ACTION", text)
+        self.assertIn("invalid_input", text)
+        self.assertFalse(os.path.exists(self.ran))
 
 
 if __name__ == "__main__":

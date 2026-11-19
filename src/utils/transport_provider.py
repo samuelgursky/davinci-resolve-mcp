@@ -72,6 +72,7 @@ def call(args: List[str], timeout: float = TIMEOUT_S) -> Dict[str, Any]:
         return {"error": f"{ENV_CWD} names {cwd!r}, which is not a directory", "code": "PROVIDER_MISSING"}
     try:
         proc = subprocess.run(argv + list(args), stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                              encoding="utf-8", errors="replace",
                               timeout=timeout, cwd=cwd)
     except subprocess.TimeoutExpired:
         return {"error": f"transport provider did not answer within {timeout:.0f} s", "code": "PROVIDER_TIMEOUT"}
@@ -109,8 +110,27 @@ def capture(path: str, mode: str) -> Dict[str, Any]:
         out = call(["capture-exact", path, "--pause-ok"], timeout=40.0)
     else:
         return {"error": f"mode must be 'live' or 'pause'; got {mode!r}", "code": "INVALID_MODE"}
-    if out.get("ok") and not os.path.isfile(out.get("path") or path):
+    if not out.get("ok"):
+        return out
+    # The frame is read only from the path this server asked for. A provider that names some other file is refused
+    # rather than followed: that file sits outside the staging folder the caller cleans up, and a provider must not
+    # be able to have the server return an arbitrary file on disk as the image.
+    named = out.get("path")
+    if named and os.path.realpath(str(named)) != os.path.realpath(path):
         out["ok"] = False
-        out["error"] = "the provider reported ok but no file exists at the path it named"
+        out["error"] = "the provider wrote its frame somewhere other than the path it was given"
+        out["code"] = "PROVIDER_PATH_MISMATCH"
+    elif not os.path.isfile(path):
+        out["ok"] = False
+        out["error"] = "the provider reported ok but no file exists at the path it was given"
         out["code"] = "PROVIDER_FAILED"
     return out
+
+
+def error_category(code: str) -> str:
+    """The structured-error category for a code this module returns."""
+    if code in ("INVALID_ACTION", "INVALID_MODE"):
+        return "invalid_input"
+    if code == "PROVIDER_MISSING":
+        return "precondition"
+    return "api_error"
