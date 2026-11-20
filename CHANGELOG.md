@@ -2,6 +2,32 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v5.4.0 — Optional transport provider for play state and captures during playback
+
+From #385.
+
+### Added
+
+On Resolve 19.x the scripting API has no Play, Stop or IsPlaying. The server can see the playhead move, but can't tell playing from paused, can't press transport, and can't stop playback to take an exact frame. A site that has another way in (UI automation, a frame tap in the viewer, a control-surface bridge) can now plug it in without the server knowing how it works.
+
+- **`RESOLVE_MCP_TRANSPORT_PROVIDER`** names a local executable, or a JSON argv such as `["python3", "-m", "my_transport"]`. `RESOLVE_MCP_TRANSPORT_PROVIDER_CWD` sets its working directory. The provider prints one JSON object per call. The contract is documented in `src/utils/transport_provider.py`.
+- **`resolve_control(action="transport_status")`** returns the provider's play state (`playing_forward`, `playing_reverse`, `looping`, `paused` or `unknown`) and whether its channels agreed.
+- **`resolve_control(action="transport_press", transport_action=...)`** presses forward, reverse, stop, play/pause, loop, mute, or a frame or second step. The action comes from a closed list, and a verdict of `ok` means the provider saw the effect, not just that it sent the press.
+- **`timeline_frame` capture takes `during_playback`.** `refuse` is the default and behaves exactly as before. `live` returns the provider's newest frame without stopping playback. `pause` has the provider pause (and confirm it), export the exact frame, and restore the play state. Playback is never paused unless `pause` is asked for. The provider's metadata follows the image as `{"capture": {...}}`.
+- When a provider is configured, the `PLAYBACK_ACTIVE` remediation names the two new capture options.
+
+### Fails closed
+
+- With no provider set, or with an empty value, a missing file or a malformed array, every transport call returns `PROVIDER_MISSING`. Nothing changes for servers that don't set the variable.
+- A provider's exit status is never read as success; its own verdict is returned as it is.
+- A capture is read only from the path the server gave the provider. A provider that names another file is refused (`PROVIDER_PATH_MISMATCH`), and one that reports `ok` with no file is downgraded.
+- `max_width` and ffmpeg are checked before the provider runs, so `pause` never stops playback for a capture that was going to fail anyway.
+
+### Not verified here
+
+- The provider path was run live on Resolve Studio 19.1.3 against a site provider before the review fixes: the paused state came back with two independent signals agreeing, and an unset variable returned `PROVIDER_MISSING`. The review fixes (path pinning, early refusals, error categories) are covered by offline tests only.
+- No provider ships with this package. Without one, the new actions return `PROVIDER_MISSING`.
+
 ## What's New in v5.3.4 — House-style conventions for word-by-word subtitles and motion graphics
 
 From #374 by @nisee22. Adapted on landing.

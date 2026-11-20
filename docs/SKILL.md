@@ -1981,6 +1981,12 @@ metadata. (For the raw camera file instead, use
   `frame` is the absolute timeline frame. Omit both to capture the playhead.
 - The page-switching routes (`render`, `thumbnail`, `still`) refuse while
   playback is running; `allow_during_playback=true` overrides.
+- `during_playback` needs an external transport provider
+  (`RESOLVE_MCP_TRANSPORT_PROVIDER`): `live` takes the provider's newest frame
+  without stopping playback, and `pause` has the provider pause (confirmed),
+  export the exact frame and restore the play state. The default, `refuse`,
+  is the behaviour above. With no provider set, both return `PROVIDER_MISSING`.
+  No provider ships with the server.
 
 The playhead, page, current timeline and Gallery are restored. The `render` route
 additionally touches project render settings and puts them back: render mode,
@@ -2592,7 +2598,11 @@ was stuck in a viewer render loop. 19.x has no transport API, so the server
 cannot stop playback. `resolve_control open_page` / `restore_state`,
 `gallery_stills grab_and_export` and the page-switching `timeline_frame` routes
 refuse with `PLAYBACK_ACTIVE` when the playhead is moving; ask the user to stop
-playback (Space or K). `allow_during_playback=true` overrides.
+playback (Space or K). `allow_during_playback=true` overrides. Where a site
+has configured a transport provider (`RESOLVE_MCP_TRANSPORT_PROVIDER`),
+`resolve_control transport_status` reports the play state and
+`transport_press` can stop it; a press verdict of `ok` means the provider saw
+the effect.
 
 **A transform write that reads back can still not render** — On a clip with
 Inspector keyframes (an AAF import can bring them), `SetProperty('ZoomX', v)`
