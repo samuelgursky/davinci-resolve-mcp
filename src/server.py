@@ -72,6 +72,7 @@ from src.utils import typed_api_search
 from src.utils import lut_files
 from src.utils import resolve_writes as _resolve_writes
 from src.utils import playback_guard as _playback_guard
+from src.utils import transport_provider as _transport_provider
 from src.utils.mcp_stdio import run_fastmcp_stdio
 from src.utils.api_truth import lookup_api_truth, VERIFIED_ON as _API_TRUTH_VERIFIED_ON
 from src.utils import clip_colors as _clip_colors
@@ -17823,6 +17824,15 @@ def _playhead_frame_capture(p: Dict[str, Any]):
     if requested == "preview" and not p.get("max_width", p.get("maxWidth")):
         p = dict(p)
         p["max_width"] = 1280
+    during = str(p.get("during_playback", "refuse") or "refuse").lower()
+    if during not in ("refuse", "live", "pause"):
+        return _err(f"during_playback must be 'refuse', 'live' or 'pause'; got {during!r}",
+                    code="INVALID_PARAM", category="invalid_input")
+    if during != "refuse":
+        if p.get("timecode") or p.get("frame") is not None or p.get("timeline_name", p.get("timelineName")):
+            return _err("during_playback captures the frame on screen now; timecode, frame and timeline_name "
+                        "do not apply", code="INVALID_PARAM", category="invalid_input")
+        return _provider_frame_capture(p, during)
     proj, tl, err = _get_tl()
     if err:
         return err
@@ -17886,6 +17896,58 @@ def _playhead_frame_capture(p: Dict[str, Any]):
                     f"{restore_err['error']['message']}"
                 )
     return _capture_with_teardown(result, teardown)
+
+
+def _provider_frame_capture(p: Dict[str, Any], mode: str):
+    """Capture through the external transport provider (src/utils/transport_provider.py).
+
+    mode 'live': the newest frame the provider holds, tagged with the timeline frame it carries; the transport is not
+    touched, so playback goes on. mode 'pause': the provider pauses (and confirms it), exports the exact frame, and
+    restores the play state. Returns [image, {"capture": provider metadata}] or an error.
+    """
+    if not _transport_provider.available():
+        why = _transport_provider.provider_argv()[1]
+        return _err(f"during_playback={mode!r} needs a transport provider: {why}", code="PROVIDER_MISSING",
+                    category="precondition",
+                    remediation="Set RESOLVE_MCP_TRANSPORT_PROVIDER, or capture with the default "
+                                "during_playback='refuse' after stopping playback.")
+    # Everything that can refuse is checked before the provider runs: in 'pause' mode the provider stops the
+    # operator's playback, and that must not happen for a capture that was always going to fail afterwards.
+    max_width = p.get("max_width", p.get("maxWidth"))
+    if max_width not in (None, "", 0):
+        try:
+            max_width = int(max_width)
+        except (TypeError, ValueError):
+            max_width = -1
+        if max_width <= 0:
+            return _err(f"max_width must be a positive integer; got {p.get('max_width', p.get('maxWidth'))!r}",
+                        code="INVALID_PARAM", category="invalid_input")
+    else:
+        max_width = None
+    if not shutil.which("ffmpeg"):
+        return _err("during_playback captures need ffmpeg to transcode the provider's frame, and ffmpeg is not on "
+                    "PATH", code="FFMPEG_MISSING", category="precondition",
+                    remediation="Install ffmpeg, or stop playback and capture with the default during_playback.")
+    base =_resolve_safe_dir(os.path.join(tempfile.gettempdir(), "resolve-frame-captures"))
+    folder = os.path.join(base, f"{STILL_STAGING_PREFIX}{_uuid.uuid4().hex}")
+    os.makedirs(folder, exist_ok=True)
+    try:
+        path = os.path.join(folder, "frame.jpg" if mode == "live" else "frame.png")
+        meta = _transport_provider.capture(path, mode)
+        if not meta.get("ok"):
+            return _err(meta.get("error") or meta.get("why") or "the transport provider did not capture a frame",
+                        code=meta.get("code") or "PROVIDER_CAPTURE_FAILED", category="api_error",
+                        state={k: v for k, v in meta.items() if k not in ("path",)})
+        out_format = "jpg" if str(p.get("format", "jpg")).lower() in ("jpg", "jpeg") else "png"
+        # `path`, never meta["path"]: transport_provider.capture refuses a provider that names another file.
+        data, ff_err = _ffmpeg_scale_to_bytes(path, max_width, out_format)
+        if ff_err:
+            return _err(f"Failed to transcode the provider's frame: {ff_err}", code="RESCALE_FAILED",
+                        category="api_error")
+        info = {k: v for k, v in meta.items() if k != "path"}
+        return [Image(data=data, format=out_format), {"capture": info}]
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
 
 
 def _playback_refusal(p: Optional[Dict[str, Any]], what: str, *, tl=None, resolve=None):
@@ -19177,6 +19239,16 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         Omit symbol for every recorded gate this build does not clear.
       verification_stats() -> {stats}  — readback-verification tally
         (verified/contradicted/unverified) since server start (no connection needed).
+      transport_status() -> provider's {state, verified, agree, position, ...}
+        — Is Resolve playing forward, in reverse, looping, or paused? Needs an external
+          transport provider (RESOLVE_MCP_TRANSPORT_PROVIDER, see
+          src/utils/transport_provider.py); the scripting API on 19.x cannot tell.
+          Without one: PROVIDER_MISSING. The provider's verdict is returned as is:
+          'verified' false means fewer than two of its channels agreed.
+      transport_press(transport_action) -> provider's {verdict: ok|failed|refused, ...}
+        — forward, reverse, stop, play_pause, loop, mute, step_frame_forward/back,
+          step_second_forward/back, through the provider. A verdict of ok means the
+          provider saw the effect, not merely that it sent the press.
       report_issue(kind, title, summary, steps?, expected?, actual?, error?, tool?,
                    tool_action?, use_case?, proposal?, include_environment?)
         -> {title, body, labels, url, url_truncated, redactions, submitted: false, next_step}
@@ -19277,6 +19349,17 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         — List active agent tool execution lifecycle hooks and their enabled status (no connection needed).
     """
     p = _params(params)
+    if action in ("transport_status", "transport_press"):
+        if action == "transport_status":
+            out, verdict_key = _transport_provider.status(), "state"
+        else:
+            out = _transport_provider.press(str(p.get("transport_action") or p.get("op") or ""))
+            verdict_key = "verdict"
+        # A provider's own verdict passes through as it is, even a failed one. Only this module's errors (no
+        # provider, a bad action, a provider that printed nothing usable) become an error envelope.
+        if verdict_key not in out and "error" in out and "code" in out:
+            return _err(out["error"], code=out["code"], category=_transport_provider.error_category(out["code"]))
+        return out
 
     # api_truth is a static knowledge lookup — no Resolve connection needed, and
     # that property is worth keeping: it is the one call that still answers when
@@ -19760,7 +19843,7 @@ def resolve_control(action: str, params: Optional[Dict[str, Any]] = None) -> Dic
         if err:
             return _err(err)
         return {"success": bool(r.ExportUserPreferencesPreset(clean["name"], clean["path"]))}
-    return _unknown(action, ["is_studio","get_keyboard_presets","get_current_keyboard_preset","launch","runtime_mode","get_version","search_api","describe_api","api_surface","api_truth","check_version_support","verification_stats","report_issue","job_status","list_jobs","get_execution_trace","get_execution","list_recent_executions","begin_execution","end_execution","export_execution_report","clear_executions","inspect_operation","list_lifecycle_hooks","mcp_update_status","set_mcp_update_policy","ignore_mcp_update","snooze_mcp_update","clear_mcp_update_preferences","get_page","open_page","get_keyframe_mode","set_keyframe_mode","quit","get_fairlight_presets","set_high_priority","disable_background_tasks_for_current_session","list_user_preferences_presets","save_user_preferences_preset","load_user_preferences_preset","delete_user_preferences_preset","import_user_preferences_preset","export_user_preferences_preset","open_control_panel","control_panel_status","close_control_panel","save_state","restore_state"])
+    return _unknown(action, ["transport_status","transport_press","is_studio","get_keyboard_presets","get_current_keyboard_preset","launch","runtime_mode","get_version","search_api","describe_api","api_surface","api_truth","check_version_support","verification_stats","report_issue","job_status","list_jobs","get_execution_trace","get_execution","list_recent_executions","begin_execution","end_execution","export_execution_report","clear_executions","inspect_operation","list_lifecycle_hooks","mcp_update_status","set_mcp_update_policy","ignore_mcp_update","snooze_mcp_update","clear_mcp_update_preferences","get_page","open_page","get_keyframe_mode","set_keyframe_mode","quit","get_fairlight_presets","set_high_priority","disable_background_tasks_for_current_session","list_user_preferences_presets","save_user_preferences_preset","load_user_preferences_preset","delete_user_preferences_preset","import_user_preferences_preset","export_user_preferences_preset","open_control_panel","control_panel_status","close_control_panel","save_state","restore_state"])
 
 
 # ─── V2 C4: Per-field corrections with provenance + changelog ────────────────
@@ -29507,6 +29590,14 @@ def timeline_frame(action: str, params: Optional[Dict[str, Any]] = None) -> Any:
       format       jpg (default), png, or tif.
       timeline_name  Capture from a different timeline; it is made current for
                    the read and the original is restored afterwards.
+      during_playback  'refuse' (default): the behaviour below. 'live': the newest
+                   frame from an external transport provider, tagged with the
+                   timeline frame it carries, without stopping playback. 'pause':
+                   the provider pauses (confirmed), exports the exact frame and
+                   restores the play state. Both need RESOLVE_MCP_TRANSPORT_PROVIDER
+                   (src/utils/transport_provider.py), else PROVIDER_MISSING; the
+                   metadata follows the image as {"capture": {...}}. Never pauses
+                   unless 'pause' is asked for.
       allow_during_playback  The page-switching routes ('render', 'thumbnail',
                    'still') refuse while playback is running (PLAYBACK_ACTIVE):
                    a page switch during playback has hung Resolve. true
