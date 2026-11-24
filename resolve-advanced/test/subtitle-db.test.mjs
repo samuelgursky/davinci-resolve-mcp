@@ -8,6 +8,7 @@ import childProcess from 'node:child_process';
 import { createRequire } from 'node:module';
 import { BuiltinSqlite, loadSqlite, openGuarded, requireResolveQuit, snapshotBackup } from '../server/db-patch.mjs';
 import { projectDbTool } from '../server/tools/project_db.mjs';
+import { subtitleSchemas } from '../server/subtitle-db.mjs';
 const require = createRequire(import.meta.url);
 const { field, decodeCaption, encodeCaption, checkCaptions } = require('../vendor/drp-format/subtitle-captions.js');
 const { wrapEffectFilters, unwrapEffectFilters } = require('../vendor/drp-format/subtitle-style.js');
@@ -111,6 +112,78 @@ test('Word Highlight shadow and alignment round-trip; scale and other templates 
   const lollipop = fs.readFileSync(new URL('../assets/lollipop-track.xml', import.meta.url), 'utf8');
   const other = Buffer.from(lollipop.match(/<CompositionBA>([^<]+)<\/CompositionBA>/)[1], 'hex');
   assert.throws(() => setPresetInputs(other, { shadowEnabled: 0 }), /unknown or unsupported/);
+});
+
+function bundled(name) {
+  const xml = fs.readFileSync(new URL(`../assets/${name}`, import.meta.url), 'utf8');
+  return Buffer.from(xml.match(/<CompositionBA>([^<]+)<\/CompositionBA>/)[1], 'hex');
+}
+function graphOf(blob) {
+  const outer = zlib.inflateSync(blob.subarray(4));
+  const offset = outer.indexOf(0, outer.indexOf('Compressed = true, }')) + 1;
+  return zlib.inflateSync(outer.subarray(offset + 4)).toString();
+}
+
+test('Word Highlight exposes its highlight fill, background, layout and write-on controls (#295)', () => {
+  const blob = bundled('word-highlight-track.xml');
+  const inputs = {
+    highlightFillEnabled: 0, highlightSoftness: 2, highlightGlow: 0.3, highlightBlend: 0.8,
+    highlightBackgroundEnabled: 1, highlightBackgroundRed: 1, highlightBackgroundGreen: 0.8, highlightBackgroundBlue: 0,
+    highlightBackgroundOffsetX: 0.01, highlightBackgroundOffsetY: -0.02, highlightBackgroundWidth: 0.1,
+    highlightBackgroundHeight: 0.05, highlightBackgroundRound: 0.4, highlightBackgroundSoftness: 1,
+    highlightBackgroundGlow: 0.2, highlightBackgroundBlend: 1, wordsPerLine: 4, writeOn: 1, showSpeaker: 0,
+  };
+  const out = setPresetInputs(blob, inputs), read = decodePreset(out);
+  for (const [key, value] of Object.entries(inputs)) assert.deepEqual(read.inputs[key], value, key);
+  for (const key of Object.keys(inputs)) assert.ok(read.editableInputs.includes(key), key);
+  const graph = graphOf(out);
+  for (const name of ['HFill', 'HBack', 'HBackR', 'HBackRound', 'Words', 'WriteOn', 'Speaker']) {
+    assert.match(graph, new RegExp(`\\b${name} = Input \\{ Value = `), name);
+  }
+  assert.match(graph, /HFill = InstanceInput \{ SourceOp = "Template"/, 'macro controls stay published');
+  assert.deepEqual(setPresetInputs(out, inputs), out, 'identity re-encode converges');
+});
+
+test('Word Highlight outline on every word uses Text+ element 4 as a text outline (#295)', () => {
+  const blob = bundled('word-highlight-track.xml');
+  const inputs = { allWordsOutlineEnabled: 1, allWordsOutlineRed: 0, allWordsOutlineGreen: 0,
+    allWordsOutlineBlue: 0, allWordsOutlineThickness: 0.04 };
+  const out = setPresetInputs(blob, inputs), read = decodePreset(out);
+  for (const [key, value] of Object.entries(inputs)) assert.deepEqual(read.inputs[key], value, key);
+  const graph = graphOf(out);
+  // Same element/shape pairing Resolve's own Lollipop template writes for its second outline.
+  assert.match(graph, /\bElementShape4 = Input \{ Value = 1, \}/);
+  assert.match(graph, /\bEnabled4 = Input \{ Value = 1, \}/);
+  assert.match(graph, /\bThickness4 = Input \{ Value = 0\.04, \}/);
+  // The drop shadow (element 8) and the spoken-word outline stay as they were.
+  assert.equal(read.inputs.shadowEnabled, 1);
+  assert.equal(read.inputs.outlineEnabled, 1);
+  assert.equal(read.inputs.thickness, 0.1);
+  assert.ok(read.editableInputs.includes('allWordsOutlineThickness'));
+  assert.ok(!read.editableInputs.includes('allWordsOutlineShape'), 'shape is written by the codec, not the caller');
+  const colourOnly = graphOf(setPresetInputs(blob, { allWordsOutlineRed: 0.5 }));
+  assert.match(colourOnly, /\bElementShape4 = Input \{ Value = 1, \}/, 'any element 4 write pins it to an outline');
+  assert.deepEqual(setPresetInputs(out, inputs), out, 'identity re-encode converges');
+});
+
+test('new Word Highlight controls are refused on other templates', () => {
+  const lollipop = bundled('lollipop-track.xml');
+  for (const key of ['allWordsOutlineEnabled', 'highlightBackgroundEnabled', 'wordsPerLine']) {
+    assert.throws(() => setPresetInputs(lollipop, { [key]: 1 }), /unknown or unsupported/, key);
+  }
+});
+
+test('preset input schema bounds the new Word Highlight controls', () => {
+  const parse = (inputs) => subtitleSchemas.set_subtitle_preset.parse({ timeline: 't', inputs });
+  assert.equal(parse({ wordsPerLine: 3, allWordsOutlineThickness: 0.05 }).inputs.wordsPerLine, 3);
+  for (const bad of [{ wordsPerLine: 0 }, { wordsPerLine: 2.5 }, { highlightBackgroundEnabled: 2 },
+    { allWordsOutlineRed: 1.5 }, { allWordsOutlineShape: 0 }, { highlightScale: 1.1 }]) {
+    assert.throws(() => parse(bad), undefined, JSON.stringify(bad));
+  }
+  // A decoded `after` (which carries the codec-written shape) is valid input for the next edit.
+  const after = decodePreset(setPresetInputs(bundled('word-highlight-track.xml'),
+    { allWordsOutlineEnabled: 1, wordsPerLine: 3 })).inputs;
+  assert.equal(parse(after).inputs.allWordsOutlineShape, 1);
 });
 
 test('preset codec updates scoped controls, preserves other tools and all framing', () => {

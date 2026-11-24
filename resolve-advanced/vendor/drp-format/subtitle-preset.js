@@ -20,7 +20,25 @@ const INPUTS = {
   shadowOffset: 'Offset8',
   shadowSoftness: 'Softness8', shadowSoftnessX: 'SoftnessX8', shadowSoftnessY: 'SoftnessY8',
   horizontalAlign: 'HorizontalJustificationNew', verticalAlign: 'VerticalJustificationNew',
+  // The macro's own published controls (UserControls on the Template tool),
+  // the same mechanism as HOutline: the spoken word's fill and background pill.
+  highlightFillEnabled: 'HFill', highlightSoftness: 'HSoftness', highlightGlow: 'HGlow', highlightBlend: 'HBlend',
+  highlightBackgroundEnabled: 'HBack',
+  highlightBackgroundRed: 'HBackR', highlightBackgroundGreen: 'HBackG', highlightBackgroundBlue: 'HBackB',
+  highlightBackgroundOffsetX: 'HBackOffsetX', highlightBackgroundOffsetY: 'HBackOffsetY',
+  highlightBackgroundWidth: 'HBackWidth', highlightBackgroundHeight: 'HBackHeight',
+  highlightBackgroundRound: 'HBackRound', highlightBackgroundSoftness: 'HBackSoftness',
+  highlightBackgroundGlow: 'HBackGlow', highlightBackgroundBlend: 'HBackBlend',
+  wordsPerLine: 'Words', writeOn: 'WriteOn', showSpeaker: 'Speaker',
+  // An outline on every word. The per-word style overrides elements 2, 3 and 5
+  // for the spoken word only, so element 4 is free; Resolve's own Lollipop
+  // template draws its second outline the same way (ElementShape4 = 1).
+  allWordsOutlineEnabled: 'Enabled4',
+  allWordsOutlineRed: 'Red4', allWordsOutlineGreen: 'Green4', allWordsOutlineBlue: 'Blue4',
+  allWordsOutlineThickness: 'Thickness4',
+  allWordsOutlineShape: 'ElementShape4', // written by setPresetInputs, never by the caller
 };
+const INTERNAL_INPUTS = ['allWordsOutlineShape'];
 const COMMON_INPUTS = Object.fromEntries(Object.entries(INPUTS).filter(([key]) =>
   ['font', 'fontStyle', 'size', 'position', 'textRed', 'textGreen', 'textBlue', 'textAlpha', 'textFillMode'].includes(key)));
 function unpack(blob) {
@@ -107,13 +125,17 @@ function decodePreset(blob) {
   return { templateId: u.templateId, inputs: values,
     parameterEditingSupported: u.templateId.startsWith('Templates/Edit/Titles/Subtitles/'),
     editableInputs: Object.keys(u.templateId === TEMPLATE ? INPUTS
-      : u.templateId.startsWith('Templates/Edit/Titles/Subtitles/') ? COMMON_INPUTS : {}) };
+      : u.templateId.startsWith('Templates/Edit/Titles/Subtitles/') ? COMMON_INPUTS : {})
+      .filter(key => !INTERNAL_INPUTS.includes(key)) };
 }
-function setPresetInputs(blob, changes) {
+function setPresetInputs(blob, requested) {
   const u = unpack(blob);
   if (!u.templateId.startsWith('Templates/Edit/Titles/Subtitles/')) throw new Error('not a subtitle template');
   const mapping = u.templateId === TEMPLATE ? INPUTS : COMMON_INPUTS;
-  for (const key of Object.keys(changes)) if (!mapping[key]) throw new Error(`unknown or unsupported preset input ${key} for ${u.templateId}`);
+  for (const key of Object.keys(requested)) if (!mapping[key]) throw new Error(`unknown or unsupported preset input ${key} for ${u.templateId}`);
+  // Element 4's default shape is not a text outline; pin it whenever it is styled.
+  const changes = Object.keys(requested).some(key => key.startsWith('allWordsOutline'))
+    ? { ...requested, allWordsOutlineShape: 1 } : requested;
   if ('textFillMode' in changes && changes.textFillMode !== 'solid') throw new Error('textFillMode only supports explicit solid fill');
   const current = decodePreset(blob).inputs;
   if (Object.keys(changes).some(key => ['textRed','textGreen','textBlue','textAlpha'].includes(key))

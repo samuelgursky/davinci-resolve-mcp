@@ -111,6 +111,28 @@ test('Word Highlight lists and sets its drop shadow; per-word scale is refused',
   } finally { await fs.rm(dir, { recursive: true, force: true }); }
 });
 
+test('social caption look: outline on every word plus a spoken-word background, through an exported DRT (#295)', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'subtitle-social-'));
+  try {
+    const source = await fixture(dir, 'source.drt'), output = path.join(dir, 'out.drt');
+    const inputs = { textRed: 1, textGreen: 1, textBlue: 1, allWordsOutlineEnabled: 1, allWordsOutlineRed: 0,
+      allWordsOutlineGreen: 0, allWordsOutlineBlue: 0, allWordsOutlineThickness: 0.03,
+      highlightBackgroundEnabled: 1, highlightBackgroundRed: 1, highlightBackgroundGreen: 0.85,
+      highlightBackgroundBlue: 0, wordsPerLine: 3 };
+    const result = await editSubtitleTimeline({ source, output, inputs });
+    for (const [key, value] of Object.entries(inputs)) assert.deepEqual(result.after[key], value, key);
+    assert.equal(result.after.allWordsOutlineShape, 1);
+    const zip = await JSZip.loadAsync(await fs.readFile(output));
+    const xml = await zip.file('SeqContainer/22222222-2222-2222-2222-222222222222.xml').async('string');
+    assert.equal(XMLValidator.validate(xml), true);
+    assert.match(xml, /keep-word-timing/, 'caption items are untouched');
+    await assert.rejects(
+      editSubtitleTimeline({ source, output: path.join(dir, 'bad.drt'), inputs: { wordsPerLine: 0 } }),
+      /wordsPerLine/,
+    );
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
 const captionBlobs = ['00000002000000748128b52ffd206a5103000a5568007204204f682c72072074686174277372052073756368720220617205206375746578ec980d7894990d78ba990d78c6990d78d2990d800194990d8001ba990d8001c6990d8001d2990d8001de990da801b6cc06121100000024789c6366606420040000b20005',
   '00000002000000738128b52ffd20694903000a5468007204206361747205206974277372022061720420646f6772072064756d6d792e78de990d78fa990d78ea9a0d78ec9a0d78809b0d8001fa990d8001ea9a0d8001ec9a0d8001809b0d8001949b0da801efcc06121100000024789c6366606420040000b20005'];
 const generator = (id, blob, name, start, duration) => `<Element><Sm2TiGenerator DbId="${id}"><FieldsBlob>${blob}</FieldsBlob><PrettyType>Subtitle</PrettyType><Name>${name}</Name><Start>${start}</Start><Duration>${duration}</Duration><MarkersBA>keep-marker</MarkersBA><In/></Sm2TiGenerator></Element>`;
