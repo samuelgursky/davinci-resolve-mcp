@@ -8,12 +8,14 @@ import tempfile
 import unittest
 import urllib.parse
 import xml.etree.ElementTree as ET
+from unittest import mock
 
 from src.utils.timeline_xml import (
     analyze_timeline_xml,
     sanitize_timeline_xml,
     _pathurl_to_disk,
 )
+from src.utils import timeline_xml
 
 
 def _xmeml(present_path, missing_path):
@@ -71,6 +73,26 @@ class TimelineXmlSanitizeTest(unittest.TestCase):
         self.assertEqual(_pathurl_to_disk("file://localhost/a%20b/c.mov"), "/a b/c.mov")
         self.assertEqual(_pathurl_to_disk("file:///a%20b/c.mov"), "/a b/c.mov")
         self.assertIsNone(_pathurl_to_disk(None))
+
+    def test_pathurl_to_disk_windows_drive_letter(self):
+        # Premiere on Windows writes file://localhost/C%3a/dir/clip.mov
+        with mock.patch.object(timeline_xml, "_IS_WINDOWS", True):
+            self.assertEqual(
+                _pathurl_to_disk("file://localhost/C%3a/Users/a/My%20Clip.mp4"),
+                "C:/Users/a/My Clip.mp4",
+            )
+            self.assertEqual(_pathurl_to_disk("file:///d:/x/y.mov"), "d:/x/y.mov")
+            self.assertEqual(_pathurl_to_disk("file://localhost/C%3a"), "C:")
+            # not a drive letter: left alone
+            self.assertEqual(_pathurl_to_disk("file://localhost/a%20b/c.mov"), "/a b/c.mov")
+            self.assertEqual(_pathurl_to_disk("file://localhost/ab:/c.mov"), "/ab:/c.mov")
+        with mock.patch.object(timeline_xml, "_IS_WINDOWS", False):
+            self.assertEqual(_pathurl_to_disk("file://localhost/C%3a/x.mov"), "/C:/x.mov")
+
+    @unittest.skipUnless(os.name == "nt", "needs a Windows drive-letter path")
+    def test_premiere_windows_pathurl_finds_existing_media(self):
+        url = "file://localhost/" + urllib.parse.quote(self.present.replace("\\", "/"), safe="/").replace("%3A", "%3a", 1)
+        self.assertTrue(timeline_xml._media_exists(url))
 
     def test_analyze_counts(self):
         rep = analyze_timeline_xml(self.xml_path)

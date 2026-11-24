@@ -26,6 +26,7 @@ conform XMLs.
 from __future__ import annotations
 
 import os
+import re
 import tempfile
 import urllib.parse
 import xml.etree.ElementTree as ET
@@ -39,6 +40,10 @@ from typing import Any, Dict, List, Optional
 # — the default and only critical path — never depends on them.
 
 
+_IS_WINDOWS = os.name == "nt"
+_DRIVE_AFTER_SLASH = re.compile(r"^/[A-Za-z]:(?:[/\\]|$)")
+
+
 def _pathurl_to_disk(pathurl: Optional[str]) -> Optional[str]:
     """Convert an xmeml ``<pathurl>`` (file URL) to a local filesystem path."""
     if not pathurl:
@@ -48,7 +53,12 @@ def _pathurl_to_disk(pathurl: Optional[str]) -> Optional[str]:
         if p.startswith(prefix):
             p = p[len(prefix):]
             break
-    return urllib.parse.unquote(p)
+    p = urllib.parse.unquote(p)
+    # Premiere on Windows writes file://localhost/C%3a/dir/clip.mov. After the
+    # prefix is gone that is "/C:/dir/clip.mov", which Windows does not resolve.
+    if _IS_WINDOWS and _DRIVE_AFTER_SLASH.match(p):
+        p = p[1:]
+    return p
 
 
 def _media_exists(pathurl: Optional[str]) -> bool:
