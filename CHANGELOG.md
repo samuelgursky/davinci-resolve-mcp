@@ -2,6 +2,19 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v5.5.1 — House-style conventions withdrawn
+
+From #391 by @nisee22.
+
+### Documentation
+
+- **The two house-style conventions from v5.3.4 are removed**, at the request of their author, who contributed them in #374. They covered word-by-word subtitles (split existing cards, don't transcribe again) and motion graphics (native Fusion, full 9:16 frame). The skill is back to its empty template, ready for each site to record its own conventions.
+- The PR changed only the `.claude/skills/` copy. On landing, the same change was made to the main copy in `.agents/skills/`, so the two copies match again.
+
+### Validation
+
+- Docs only; no server behavior changed, so no live run. The full Python suite, the release static checks and the skill-copy parity test pass.
+
 ## What's New in v5.5.0 — Word Highlight: outline on every word, a box behind the spoken word, words per line
 
 From #392 by @devreddy1015. For #295.
