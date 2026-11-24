@@ -73,46 +73,7 @@ thrown away:
 
 <!-- Aspect ratios, timeline naming, versioning, where renders go. -->
 
-### Word-by-word subtitles: split the existing cards, do not re-transcribe
-
-When word-for-word captions are asked for and a subtitle track already exists,
-split those cards into one word each. Do not run `CreateSubtitlesFromAudio`
-again to get word-level timing.
-
-**Why:** the existing track is the transcript that has already been read and
-lived with. Re-transcribing throws that away and returns a different wording,
-including different mistakes, for no gain the editor asked for.
-
-**The trap:** Resolve's API cannot write subtitle items — `CreateSubtitlesFromAudio`
-is the only path that creates them, and it always transcribes. So splitting has
-to leave the tool: build an SRT and let the editor import it (File > Import >
-Subtitle). Offering "regenerate with chars-per-line = 1" as the convenient route
-is offering to discard the transcript.
-
-**Timing:** divide each card's own span between its words by character length,
-so the speech timing the card already carries is never stretched or shifted.
-Hold each word at least 3 frames (120 ms) or it cannot be read; take the extra
-frames from the longest words in the same gapless run, so the run's start and
-end stay put.
-
-### Motion graphics: native Fusion, and full-frame
-
-When a spoken statement is illustrated with motion graphics, build it as a
-**native Fusion comp**, not as a pre-rendered PNG sequence, and let it take the
-**whole 9:16 frame** as a cutaway rather than sitting as an overlay over the
-speaker.
-
-**Why:** a Fusion comp stays editable in Resolve after handover — a baked
-sequence has to be re-rendered and re-imported for every change. And in vertical
-format a graphic that shares the frame with a talking head gets too small to
-read in the seconds it is on screen; the audio carries the speaker while the
-picture does the explaining.
-
-**The trap:** `Insert*IntoTimeline` cannot choose a track, so a comp built this
-way lands on V1 and cannot be moved. Build the comp on its own timeline (set
-that timeline to 1080x1920 — it inherits the project's 1920x1080 otherwise),
-then place THAT timeline's media pool item with `AppendToTimeline` clipInfo
-`trackIndex`/`recordFrame`. Everything stays editable through the nesting.
+_Not yet captured._
 
 ---
 
