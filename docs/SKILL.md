@@ -1791,7 +1791,10 @@ Key actions:
   with transform/crop/composite/retime re-applied; grades, keyframes,
   transitions, and link state on shifted items are NOT preserved (the archive
   keeps them). Refuses mid-item insert points, non-pool items in the tail
-  (titles/generators/Fusion comps), subtitle shifts, and locked tracks.
+  (titles/generators/Fusion comps), subtitle shifts, locked tracks, and insert
+  points past the last item. Probes report ABSOLUTE frames: pass a probe-read
+  frame with `record_frame_mode="absolute"`. With no mode, a `record_frame` at
+  or past the timeline start is refused as `AMBIGUOUS_RECORD_FRAME`.
 - `copy_range` / `duplicate_range` — copy exact video/audio source segments
   from `start_frame`/`end_frame` or mark in/out to `record_frame`
 - `overwrite_range` — delete whole destination overlaps, then copy the exact

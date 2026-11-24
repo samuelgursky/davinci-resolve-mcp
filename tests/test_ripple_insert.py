@@ -313,6 +313,60 @@ class RippleInsertExecuteTest(unittest.TestCase):
         self.assertEqual(shifted_tail.GetProperty("ZoomX"), 0.5)
 
 
+class RecordFrameOriginTest(unittest.TestCase):
+    """Issue #389: a probe-read (absolute) record_frame must not be read as an offset."""
+
+    def test_absolute_looking_frame_without_mode_is_refused(self):
+        proj, tl, mp, _ = _ripple_fixture()
+        out = s._timeline_ripple_insert_impl(proj, tl, _insert_params(record_frame=TL_START + 48))
+        self.assertEqual(out["error"]["code"], "AMBIGUOUS_RECORD_FRAME")
+        self.assertIn("record_frame_mode='absolute'", out["error"]["remediation"])
+        executed = s._timeline_ripple_insert_impl(
+            proj, tl, _insert_params(record_frame=TL_START + 48, dry_run=False)
+        )
+        self.assertEqual(executed["error"]["code"], "AMBIGUOUS_RECORD_FRAME")
+        self.assertEqual(mp.append_count, 0)
+
+    def test_absolute_mode_plans_the_probe_frame(self):
+        proj, tl, _, _ = _ripple_fixture()
+        out = s._timeline_ripple_insert_impl(
+            proj, tl, _insert_params(record_frame=TL_START + 48, record_frame_mode="absolute")
+        )
+        self.assertTrue(out["success"])
+        plan = out["plan"]
+        self.assertEqual(plan["insert_frame_absolute"], TL_START + 48)
+        self.assertEqual(plan["record_frame_mode_used"], "absolute")
+        self.assertEqual(plan["timeline_start_frame"], TL_START)
+        self.assertEqual(plan["content_end_frame"], TL_START + 144)
+
+    def test_offset_below_start_still_defaults_to_relative(self):
+        proj, tl, _, _ = _ripple_fixture()
+        out = s._timeline_ripple_insert_impl(proj, tl, _insert_params())
+        self.assertEqual(out["plan"]["record_frame_mode_used"], "relative")
+        self.assertEqual(out["plan"]["insert_frame_absolute"], TL_START + 48)
+
+    def test_explicit_relative_past_the_end_is_blocked(self):
+        proj, tl, mp, _ = _ripple_fixture()
+        params = _insert_params(record_frame=TL_START + 48, record_frame_mode="relative")
+        out = s._timeline_ripple_insert_impl(proj, tl, params)
+        self.assertFalse(out["success"])
+        self.assertTrue(any("past the end" in r for r in out["plan"]["infeasible_reasons"]))
+        executed = s._timeline_ripple_insert_impl(proj, tl, dict(params, dry_run=False))
+        self.assertEqual(executed["error"]["code"], "RIPPLE_PLAN_BLOCKED")
+        self.assertEqual(mp.append_count, 0)
+
+    def test_insert_exactly_at_the_end_is_allowed(self):
+        proj, tl, _, _ = _ripple_fixture()
+        out = s._timeline_ripple_insert_impl(proj, tl, _insert_params(record_frame=144))
+        self.assertTrue(out["success"])
+        self.assertEqual(out["plan"]["tail_item_count"], 0)
+
+    def test_action_help_is_registered(self):
+        out = s._action_help("timeline", {"name": "ripple_insert"})
+        self.assertTrue(out["success"])
+        self.assertIn("record_frame_mode", out["example"])
+
+
 class DuplicateVerifiedGateTest(unittest.TestCase):
     """AppendToTimeline null-id items must never count as verified duplicates."""
 

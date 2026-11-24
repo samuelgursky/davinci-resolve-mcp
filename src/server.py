@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 377-tool granular server instead
 """
 
-VERSION = "5.4.2"
+VERSION = "5.4.3"
 
 import base64
 import os
@@ -6551,6 +6551,7 @@ def _timeline_ripple_insert_impl(proj, tl, p: Dict[str, Any], *, resolve=None) -
         insert_frame, err = _timeline_timecode_to_frame_id(tl, record_timecode)
         if err:
             return err
+        record_frame_mode_used = "timecode"
     else:
         rf_raw = p.get("record_frame", p.get("recordFrame"))
         if rf_raw is None:
@@ -6561,9 +6562,34 @@ def _timeline_ripple_insert_impl(proj, tl, p: Dict[str, Any], *, resolve=None) -
                 remediation="Pass record_timecode from the viewer/playhead, or record_frame "
                             "relative to timeline start (record_frame_mode='absolute' for raw frames).",
             )
+        mode_given = p.get("record_frame_mode", p.get("recordFrameMode"))
+        rf_int = _frame_int(rf_raw)
+        # Every probe (get_items, probe_timeline_structure, detect_gaps_overlaps)
+        # reports ABSOLUTE record frames, so a value at or past the timeline
+        # start with no mode named is most likely one of those, passed verbatim.
+        # Read as an offset it lands a whole timeline-start later (issue #389:
+        # 108442 on a 01:00:00:00 timeline planned an insert at 216442, 107k
+        # frames past the end, and executed with success: true). Ask instead of
+        # guessing: below the start the value can only be an offset.
+        if mode_given is None and tl_start and rf_int is not None and rf_int >= tl_start:
+            return _err(
+                f"record_frame {rf_int} is ambiguous on a timeline that starts at frame "
+                f"{tl_start}: as an offset from the start it is absolute frame "
+                f"{tl_start + rf_int}; as an absolute frame it is offset {rf_int - tl_start}.",
+                code="AMBIGUOUS_RECORD_FRAME",
+                category="invalid_input",
+                remediation=(
+                    "Name the frame origin. A frame read from get_items, "
+                    "probe_timeline_structure or detect_gaps_overlaps is absolute: pass "
+                    "record_frame_mode='absolute'. An offset from the timeline start: pass "
+                    "record_frame_mode='relative'. Or pass record_timecode instead."
+                ),
+                state={"timeline_start_frame": tl_start},
+            )
+        record_frame_mode_used = str(mode_given or "relative").strip().lower()
         synthetic = {
             "recordFrame": rf_raw,
-            "recordFrameMode": p.get("record_frame_mode", p.get("recordFrameMode", "relative")),
+            "recordFrameMode": mode_given if mode_given is not None else "relative",
         }
         insert_frame, err = _normalize_record_frame(synthetic, 0, tl_start)
         if err:
@@ -6618,6 +6644,7 @@ def _timeline_ripple_insert_impl(proj, tl, p: Dict[str, Any], *, resolve=None) -
     blockers: List[Dict[str, Any]] = []
     locked_tracks: List[str] = []
     head_rows: List[Dict[str, Any]] = []
+    content_end = None
     for track_type in ("video", "audio"):
         for track_index in range(1, _timeline_track_count(tl, track_type) + 1):
             track_rows = [
@@ -6629,6 +6656,7 @@ def _timeline_ripple_insert_impl(proj, tl, p: Dict[str, Any], *, resolve=None) -
                 if row["start"] is None or row["end"] is None:
                     blockers.append({**_ripple_public_row(row), "reason": "unreadable start/end"})
                     continue
+                content_end = row["end"] if content_end is None else max(content_end, row["end"])
                 if row["end"] <= insert_frame:
                     head_rows.append(row)
                 elif row["start"] < insert_frame:
@@ -6710,9 +6738,15 @@ def _timeline_ripple_insert_impl(proj, tl, p: Dict[str, Any], *, resolve=None) -
         )
     if linked_tail_ids:
         warnings.append(f"{len(linked_tail_ids)} shifted item(s) had linked items; links will not survive the shift")
+    # An insert point past the last item shifts nothing and strands the inserts
+    # in empty timeline: the #389 failure shape. Exactly at the end is an append.
+    past_end_frames = insert_frame - (content_end if content_end is not None else tl_start)
     plan = {
         "insert_frame_absolute": insert_frame,
         "insert_frame_relative": insert_frame - tl_start,
+        "timeline_start_frame": tl_start,
+        "content_end_frame": content_end,
+        "record_frame_mode_used": record_frame_mode_used,
         "shift_frames": shift,
         "inserts": insert_summaries,
         "tail_item_count": len(tail_rows),
@@ -6725,9 +6759,15 @@ def _timeline_ripple_insert_impl(proj, tl, p: Dict[str, Any], *, resolve=None) -
         "gap_frames_by_track": gap_by_track,
         "warnings": warnings,
     }
-    feasible = not (straddlers or blockers or subtitle_blockers or locked_tracks)
+    feasible = not (straddlers or blockers or subtitle_blockers or locked_tracks or past_end_frames > 0)
     if not feasible:
         reasons = []
+        if past_end_frames > 0:
+            reasons.append(
+                f"insert point {insert_frame} is {past_end_frames} frame(s) past the end of the "
+                f"timeline's content ({content_end if content_end is not None else tl_start}); "
+                f"check record_frame_mode (used: {record_frame_mode_used}, timeline starts at {tl_start})"
+            )
         if straddlers:
             reasons.append(f"insert point cuts through {len(straddlers)} item(s) — choose an item boundary")
         if blockers:
@@ -6749,7 +6789,7 @@ def _timeline_ripple_insert_impl(proj, tl, p: Dict[str, Any], *, resolve=None) -
                 "category": "invalid_input",
                 "retryable": False,
                 "message": "; ".join(plan["infeasible_reasons"]),
-                "remediation": "Resolve or remove the listed blockers (e.g. transitions, titles, generators, or locked tracks), then re-run.",
+                "remediation": "Resolve or remove the listed blockers (e.g. transitions, titles, generators, or locked tracks), or fix an insert point past the end, then re-run.",
             },
         }
 
@@ -28400,7 +28440,10 @@ def timeline(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, 
         clip_infos rows: {clip_id|media_pool_item_id, start_frame, end_frame (SOURCE,
         end-exclusive), track_index?, media_type?} placed back-to-back at the insert point.
         record_frame is relative to timeline start by default (record_frame_mode
-        absolute|auto accepted); record_timecode takes timeline 'HH:MM:SS:FF'. Refuses when
+        absolute|auto accepted); a record_frame at or past the timeline start with no mode
+        is refused as AMBIGUOUS_RECORD_FRAME, because probes report absolute frames.
+        record_timecode takes timeline 'HH:MM:SS:FF'. Refuses when the insert point is past
+        the last item, when
         the insert point cuts through an item, when shifted items lack pool media
         (titles/generators/Fusion comps), when subtitle items would need shifting, or when
         a locked track holds tail items. Shifted items are re-created from pool media with
@@ -31468,6 +31511,19 @@ _ACTION_HELP: Dict[str, Dict[str, Dict[str, Any]]] = {
         },
     },
     "timeline": {
+        "ripple_insert": {
+            "summary": "Insert media-pool source ranges at a record point and shift every later video/audio item right. DRY-RUN by default; executing is confirm-token gated and archives the timeline first.",
+            "params": "clip_infos: [{clip_id|media_pool_item_id, start_frame, end_frame (SOURCE, end-exclusive), track_index?, media_type?}], record_frame + record_frame_mode (relative|absolute|auto) | record_timecode ('HH:MM:SS:FF', timeline TC), dry_run? (default True), confirm_token?",
+            "returns": "dry run → {success, plan: {insert_frame_absolute, insert_frame_relative, timeline_start_frame, content_end_frame, record_frame_mode_used, shift_frames, tail_items, straddlers, blockers, gap_frames_by_track, warnings, infeasible_reasons?}}; execute → {success, insert_frame_absolute, shift_frames, inserted_clips, tail_items_shifted, ...}",
+            "notes": "Probes report ABSOLUTE record frames. Pass one with record_frame_mode='absolute'; with no mode, a record_frame at or past the timeline start is refused as AMBIGUOUS_RECORD_FRAME. An insert point past the last item, or one that cuts through an item, is refused. Shifted items are re-created from pool media: grades, keyframes, transitions and links on them are not kept.",
+            "example": (
+                '# frame 108442 read from probe_timeline_structure (absolute):\n'
+                'timeline(action="ripple_insert", params={\n'
+                '  "clip_infos": [{"clip_id": "<pool-id>", "start_frame": 0, "end_frame": 101, "track_index": 1, "media_type": 1}],\n'
+                '  "record_frame": 108442, "record_frame_mode": "absolute"\n'
+                '})  # returns the plan; re-run with dry_run=False, then again with the confirm_token'
+            ),
+        },
         "get_items": {
             "summary": "List items on one track as a summary (name/id/start/end/duration/kind). Transitions ARE items — a video Cross Dissolve by name, an AUDIO cross-fade with an EMPTY name — and generators/subtitles look identical to them by media-pool item and properties (all None), so `kind` (clip | transition | generator | subtitle) is decided by geometry: a transition straddles a cut; `generator` also covers Fusion titles (Text+), which enumerate the same way.",
             "params": "track_type (video|audio|subtitle), index|track_index (1-based)",
