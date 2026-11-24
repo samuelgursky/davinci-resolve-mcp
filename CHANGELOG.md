@@ -2,9 +2,9 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
-## Unreleased — Word Highlight: outline on every word, a box behind the spoken word, words per line
+## What's New in v5.5.0 — Word Highlight: outline on every word, a box behind the spoken word, words per line
 
-For #295.
+From #392 by @devreddy1015. For #295.
 
 ### Added
 
@@ -24,6 +24,9 @@ The new keys are Word Highlight only. Other templates refuse them, as before.
 
 - Codec round-trips, the input schema and a full exported-DRT edit are covered by tests against the bundled Word Highlight reference. Nothing was run against a live Resolve: Resolve's re-export readback and the rendered look of element 4 and the background box are unmeasured.
 
+### Validation
+
+- Python suite (4529 tests) and Node suite (1275 tests, fresh `npm ci`) on the PR merged with main. The element 4 shape pin was mutation-checked: removing it turns 3 tests red. No live run: Word Highlight presets are not on this machine's Resolve 19.1.3.7, so the items above stay unmeasured.
 
 ## What's New in v5.4.3 — ripple_insert refuses an ambiguous or past-the-end record_frame
 
