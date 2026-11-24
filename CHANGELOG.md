@@ -2,6 +2,22 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v5.4.1 — Premiere Windows xmeml paths find their media
+
+From #388 by @goranai. Fixes #387.
+
+### Fixed
+
+- **Premiere on Windows writes media paths as `file://localhost/C%3a/...`.** The xmeml pre-check read that as `/C:/...`, which Windows can't find, so `import_timeline_checked` with `sanitize_media=true` removed every such clip even when the file was on disk, and `analyze_timeline_xml` listed them as missing. On Windows, a path that starts with `/X:` now drops the leading slash. macOS and Linux paths, UNC shares and every other form are unchanged.
+
+### Not changed
+
+- `_disk_to_pathurl`, the URL builder used when relinking, still writes Windows paths in the old form.
+
+### Validation
+
+- Python suite (4523 tests) and Node suite (1270 tests, fresh `npm ci`) on the PR merged with main. A mocked-Windows test runs on every platform. The Windows-only test that checks a real file on disk was run by the contributor on Windows 11. No Resolve behavior changed, so no live run.
+
 ## What's New in v5.4.0 — Optional transport provider for play state and captures during playback
 
 From #385.
