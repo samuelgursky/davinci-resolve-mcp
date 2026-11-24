@@ -59,8 +59,45 @@ as a drop shadow (`shadowEnabled`, `shadowRed`, `shadowGreen`, `shadowBlue`,
 `horizontalAlign` / `verticalAlign`, which write the template's justification
 integers. The centred bundled reference stores `3`. That shadow is not a stroke
 on the unhighlighted words; `outlineEnabled` and `thickness` remain the
-spoken-word outline. Per-word scale and cue in/out transitions are not literal
-inputs on this macro and are refused. A dry run's `editableInputs` lists the
+spoken-word outline.
+
+For an outline on every word, Word Highlight accepts `allWordsOutlineEnabled`,
+`allWordsOutlineRed`, `allWordsOutlineGreen`, `allWordsOutlineBlue` and
+`allWordsOutlineThickness`. These write Text+ shading element 4 and pin it to a
+text outline (`ElementShape4 = 1`), the same pairing Resolve's own Lollipop
+template uses for its second outline. The per-word highlight overrides only
+elements 2, 3 and 5, so the spoken word keeps this outline and can add its own
+thicker or coloured one through `outlineEnabled` / `thickness`.
+
+The macro's other published controls are mapped too:
+
+| Input | Template control | Notes |
+|---|---|---|
+| `highlightFillEnabled` | `HFill` | 0 or 1. Colours the spoken word with `highlightRed/Green/Blue` |
+| `highlightSoftness`, `highlightGlow`, `highlightBlend` | `HSoftness`, `HGlow`, `HBlend` | Softness 0–20, glow 0–10, blend 0–1 |
+| `highlightBackgroundEnabled` | `HBack` | 0 or 1. A box ("pill") behind the spoken word |
+| `highlightBackgroundRed/Green/Blue` | `HBackR/G/B` | 0–1 |
+| `highlightBackgroundOffsetX/OffsetY/Width/Height` | `HBackOffsetX/Y`, `HBackWidth/Height` | −1 to 1 |
+| `highlightBackgroundRound`, `highlightBackgroundBlend` | `HBackRound`, `HBackBlend` | 0–1 |
+| `highlightBackgroundSoftness`, `highlightBackgroundGlow` | `HBackSoftness`, `HBackGlow` | 0–20, 0–10 |
+| `wordsPerLine` | `Words` | Integer, at least 1 |
+| `writeOn`, `showSpeaker` | `WriteOn`, `Speaker` | 0 or 1 |
+
+A common social-caption look (white text, black outline on every word, a
+coloured box behind the spoken word, three words per line):
+
+```json
+{"textRed": 1, "textGreen": 1, "textBlue": 1,
+ "allWordsOutlineEnabled": 1, "allWordsOutlineRed": 0, "allWordsOutlineGreen": 0,
+ "allWordsOutlineBlue": 0, "allWordsOutlineThickness": 0.03,
+ "highlightBackgroundEnabled": 1, "highlightBackgroundRed": 1,
+ "highlightBackgroundGreen": 0.85, "highlightBackgroundBlue": 0, "wordsPerLine": 3}
+```
+
+Per-word scale and cue in/out transitions are not literal inputs on this macro
+and are refused. Resolve's bundled Lollipop preset stores a per-word scale pop
+as keyframes in its macro `CustomData`, not as an input; that format has not
+been measured on Word Highlight, so it is not written. A dry run's `editableInputs` lists the
 controls the holder actually accepts. Connected/animated controls, different
 layouts and unmapped effect controls are refused. Do not guess their meanings. The live
 matrix is documented in [title library automation](title-library-automation.md).

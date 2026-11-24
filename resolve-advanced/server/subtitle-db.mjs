@@ -14,6 +14,10 @@ const frame = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const word = z.object({ text: z.string().min(1), start: z.number().nonnegative(), end: z.number().nonnegative() }).strict();
 const caption = { text: z.string().min(1), start: frame, end: frame, words: z.array(word).min(1) };
 const rgb = z.number().min(0).max(1);
+const flag = z.union([z.literal(0), z.literal(1)]);
+const soft = z.number().min(0).max(20);
+const glow = z.number().min(0).max(10);
+const signed = z.number().min(-1).max(1);
 const inputs = z.object({
   font: z.string().min(1).optional(), fontStyle: z.string().min(1).optional(),
   size: z.number().positive().max(1).optional(), position: z.tuple([rgb, rgb]).optional(),
@@ -33,6 +37,21 @@ const inputs = z.object({
   shadowSoftnessY: z.number().min(0).max(20).optional(),
   horizontalAlign: z.number().int().min(0).max(8).optional(),
   verticalAlign: z.number().int().min(0).max(8).optional(),
+  // Word Highlight's published highlight controls and element 4 outline on every word (#295).
+  highlightFillEnabled: flag.optional(), highlightSoftness: soft.optional(),
+  highlightGlow: glow.optional(), highlightBlend: rgb.optional(),
+  highlightBackgroundEnabled: flag.optional(),
+  highlightBackgroundRed: rgb.optional(), highlightBackgroundGreen: rgb.optional(), highlightBackgroundBlue: rgb.optional(),
+  highlightBackgroundOffsetX: signed.optional(), highlightBackgroundOffsetY: signed.optional(),
+  highlightBackgroundWidth: signed.optional(), highlightBackgroundHeight: signed.optional(),
+  highlightBackgroundRound: rgb.optional(), highlightBackgroundSoftness: soft.optional(),
+  highlightBackgroundGlow: glow.optional(), highlightBackgroundBlend: rgb.optional(),
+  wordsPerLine: z.number().int().min(1).max(100).optional(), writeOn: flag.optional(), showSpeaker: flag.optional(),
+  allWordsOutlineEnabled: flag.optional(),
+  allWordsOutlineRed: rgb.optional(), allWordsOutlineGreen: rgb.optional(), allWordsOutlineBlue: rgb.optional(),
+  allWordsOutlineThickness: z.number().min(0).max(1).optional(),
+  // Codec-written; accepted only as 1 so a decoded `after` can be passed back as inputs.
+  allWordsOutlineShape: z.literal(1).optional(),
 }).strict();
 export const subtitleSchemas = {
   list_subtitle_presets: z.object({ ...target, timeline: z.string().optional() }).strict(),

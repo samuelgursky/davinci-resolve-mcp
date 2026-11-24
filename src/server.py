@@ -29759,7 +29759,12 @@ def timeline_ai(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[st
         also supports mapped highlight/outline colours and thickness, its drop
         shadow (shadowEnabled, shadowRed/Green/Blue, shadowOffset, shadowSoftness
         and the X/Y pair) and horizontalAlign/verticalAlign justification
-        integers (the centred reference stores 3). Per-word scale and cue
+        integers (the centred reference stores 3). Word Highlight also takes
+        allWordsOutlineEnabled/Red/Green/Blue/Thickness (outline on every word),
+        highlightFillEnabled/Softness/Glow/Blend, highlightBackgroundEnabled
+        plus highlightBackgroundRed/Green/Blue/OffsetX/OffsetY/Width/Height/
+        Round/Softness/Glow/Blend (box behind the spoken word), wordsPerLine,
+        writeOn and showSpeaker. Per-word scale and cue
         in/out transitions are not literal inputs and are refused. Native
         export -> codec -> native import as a selected revision; original retained.
         Word Highlight and Lollipop have bundled references; other installed

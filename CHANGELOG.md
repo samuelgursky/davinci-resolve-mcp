@@ -2,6 +2,29 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## Unreleased — Word Highlight: outline on every word, a box behind the spoken word, words per line
+
+For #295.
+
+### Added
+
+`set_subtitle_preset` (live `timeline_ai` and offline `project_db`) could set Word Highlight's font, colours, spoken-word outline and drop shadow, but not the outline on every word that social captions use, nor most of the macro's own highlight controls.
+
+- **Outline on every word:** `allWordsOutlineEnabled`, `allWordsOutlineRed/Green/Blue` and `allWordsOutlineThickness`. These write Text+ shading element 4 and pin it to a text outline (`ElementShape4 = 1`), the same element and shape Resolve's bundled Lollipop template uses for its second outline. The per-word highlight overrides only elements 2, 3 and 5, so the spoken word keeps this outline, and `outlineEnabled`/`thickness` can still give it a thicker or coloured one.
+- **Spoken-word highlight controls** published by the macro: `highlightFillEnabled`, `highlightSoftness`, `highlightGlow`, `highlightBlend`, and a box behind the spoken word: `highlightBackgroundEnabled`, `highlightBackgroundRed/Green/Blue`, `highlightBackgroundOffsetX/OffsetY/Width/Height/Round/Softness/Glow/Blend`.
+- **Layout:** `wordsPerLine` (the macro's `Words`), `writeOn` and `showSpeaker`.
+
+The new keys are Word Highlight only. Other templates refuse them, as before.
+
+### Still refused
+
+- Per-word scale ("pop") and cue in/out transitions. Resolve's Lollipop preset stores its pop as `WordScaleX` keyframes in the macro's `CustomData`, not as an input. Whether Word Highlight's animator reads the same keyframes has not been measured, so nothing writes them.
+
+### Not verified here
+
+- Codec round-trips, the input schema and a full exported-DRT edit are covered by tests against the bundled Word Highlight reference. Nothing was run against a live Resolve: Resolve's re-export readback and the rendered look of element 4 and the background box are unmeasured.
+
+
 ## What's New in v5.4.3 — ripple_insert refuses an ambiguous or past-the-end record_frame
 
 Fixes #389, reported by @willturner-maker.
