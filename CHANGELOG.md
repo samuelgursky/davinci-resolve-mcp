@@ -2,6 +2,18 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v5.4.2 — fast-xml-parser 5.12.1
+
+From #386 (Dependabot).
+
+### Dependencies
+
+- **`fast-xml-parser` 5.12.0 → 5.12.1**, in the root lockfile and in `resolve-advanced`. A patch release upstream; no server behavior changed.
+
+### Validation
+
+- Node suite from a fresh `npm ci` in `resolve-advanced`: 1270 tests, 0 failed. Python suite and the release static checks pass. No Resolve behavior changed, so no live run.
+
 ## What's New in v5.4.1 — Premiere Windows xmeml paths find their media
 
 From #388 by @goranai. Fixes #387.
