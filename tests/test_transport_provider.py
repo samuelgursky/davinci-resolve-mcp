@@ -13,11 +13,13 @@ from src.utils import playback_guard, transport_provider as tp
 
 
 def _write_provider(folder: str, body: str) -> str:
+    """Write a provider script and return the RESOLVE_MCP_TRANSPORT_PROVIDER value that runs it."""
     path = os.path.join(folder, "provider.py")
     with open(path, "w", encoding="utf-8") as f:
         f.write("#!" + sys.executable + "\nimport json, sys\nargs = sys.argv[1:]\n" + body)
     os.chmod(path, os.stat(path).st_mode | stat.S_IXUSR)
-    return path
+    # Windows cannot exec a shebang script; use the documented JSON-argv form there.
+    return json.dumps([sys.executable, path]) if os.name == "nt" else path
 
 
 class TransportProviderTest(unittest.TestCase):
