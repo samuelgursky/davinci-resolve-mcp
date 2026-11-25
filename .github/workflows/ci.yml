@@ -149,12 +149,14 @@ jobs:
       - name: Install ffmpeg
         # Not on the runner image; the tests that need it skip without it,
         # and those are the ones worth running here too. The Chocolatey
-        # community feed times out now and then, so retry before failing.
+        # community feed times out now and then, so retry before failing. Its
+        # exit code is no proof: a feed 504 exits 0 with "installed 0/0
+        # packages", so check for the binary itself.
         run: |
           foreach ($attempt in 1..3) {
             choco install ffmpeg -y --no-progress
-            if ($LASTEXITCODE -eq 0) { exit 0 }
-            Write-Host "choco install ffmpeg failed (attempt $attempt of 3)"
+            if (Get-Command ffmpeg -ErrorAction SilentlyContinue) { exit 0 }
+            Write-Host "ffmpeg is not installed (attempt $attempt of 3)"
             if ($attempt -lt 3) { Start-Sleep -Seconds 20 }
           }
           exit 1
