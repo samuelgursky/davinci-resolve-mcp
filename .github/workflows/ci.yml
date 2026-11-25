@@ -125,6 +125,45 @@ jobs:
       - name: Check for whitespace damage
         run: git diff --check
 
+  test-windows:
+    # Windows-only breakage (CRLF checkouts #278, Premiere pathurl #387, the
+    # bridge) kept reaching users because the suite only ever ran on Linux.
+    # Same install and suite as `test`, on one Python, without the Linux-shaped
+    # drift/smoke steps that already run above.
+    runs-on: windows-latest
+    name: test (Windows, Python 3.11)
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+
+      - name: Install ffmpeg
+        # Not on the runner image; the tests that need it skip without it,
+        # and those are the ones worth running here too.
+        run: choco install ffmpeg -y --no-progress
+
+      - name: Install advanced-server Node dependencies
+        run: npm install --omit=dev --omit=optional --no-audit --no-fund
+        working-directory: resolve-advanced
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pyflakes numpy pillow requests
+
+      - name: Run the offline test suite
+        run: python -m pytest tests -q
+
   advanced-node:
     # The advanced server's own suite. The job above only installs
     # resolve-advanced's production deps for the Python fallback tier; it never
