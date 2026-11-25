@@ -45,6 +45,7 @@ DIRECT_READ_ALIASES = {
     # decision, so set_mcp_update_policy has a direct readback without a get_
     # name.
     "mcp_update_policy": ("mcp_update_status",),
+    "subtitle_preset": ("list_subtitle_preset_inputs",),
 }
 
 
