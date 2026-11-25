@@ -1,4 +1,5 @@
 """Tests for deep-QC P1: settings/options whitelist + DeleteProject routing."""
+import tempfile
 import unittest
 from unittest import mock
 
@@ -48,9 +49,10 @@ class RenderSettingsWhitelistTest(unittest.TestCase):
         captured = {}
         fake_proj = mock.Mock()
         fake_proj.SetRenderSettings.side_effect = lambda s_: captured.update(s=s_) or True
+        target = tempfile.gettempdir()  # must exist: a missing TargetDir is refused (#368)
         with mock.patch.object(s, "_check", return_value=(mock.Mock(), fake_proj, None)):
-            out = s.render("set_settings", {"settings": {"TargetDir": "/tmp", "Nonsense": 9}})
-        self.assertEqual(captured["s"], {"TargetDir": "/tmp"})
+            out = s.render("set_settings", {"settings": {"TargetDir": target, "Nonsense": 9}})
+        self.assertEqual(captured["s"], {"TargetDir": target})
         self.assertEqual(out.get("ignored_settings"), ["Nonsense"])
 
     def test_set_settings_requires_dict(self):
