@@ -18,6 +18,8 @@ import unittest
 
 from src.utils import analysis_caps, media_analysis, timeline_brain_db
 
+BS = chr(92)
+
 
 class PreCallRefusal(unittest.TestCase):
     def setUp(self) -> None:
@@ -309,6 +311,28 @@ class CapsRefusalThroughCompactTransform(unittest.TestCase):
         clip: dict = {"clip_id": "ok", "success": True, "record": {"clip_id": "ok"}}
         compact = server._compact_clip_row_for_response(clip)
         self.assertNotIn("caps_refusal", compact)
+
+    def test_compact_clip_row_frame_directory_splits_windows_and_posix_paths(self) -> None:
+        from src import server
+
+        for first, last, directory in (
+            (BS + "Users" + BS + "me" + BS + "frames" + BS + "frame_0000.jpg",
+             BS + "Users" + BS + "me" + BS + "frames" + BS + "frame_0009.jpg",
+             BS + "Users" + BS + "me" + BS + "frames"),
+            ("C:" + BS + "frames" + BS + "frame_0000.jpg", "C:" + BS + "frames" + BS + "frame_0009.jpg",
+             "C:" + BS + "frames"),
+            ("/tmp/frames/frame_0000.jpg", "/tmp/frames/frame_0009.jpg", "/tmp/frames"),
+        ):
+            clip: dict = {
+                "clip_id": "c",
+                "success": True,
+                "record": {"clip_id": "c"},
+                "visual": {"status": "pending", "frame_paths": [first, last], "shot_table": []},
+            }
+            summary = server._compact_clip_row_for_response(clip)["visual"]["frame_paths_summary"]
+            self.assertEqual(summary["directory"], directory)
+            self.assertEqual(summary["first"], first)
+            self.assertEqual(summary["last"], last)
 
 
 if __name__ == "__main__":

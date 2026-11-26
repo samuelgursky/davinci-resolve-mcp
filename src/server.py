@@ -14214,7 +14214,7 @@ def _compact_clip_row_for_response(clip: Any) -> Any:
             "vision_token": visual.get("vision_token"),
             "frame_count": len(frame_paths),
             "frame_paths_summary": {
-                "directory": (frame_paths[0].rsplit("/", 1)[0] if frame_paths else None),
+                "directory": (re.sub(r"[\\/][^\\/]*$", "", frame_paths[0]) if frame_paths else None),
                 "first": frame_paths[0] if frame_paths else None,
                 "last": frame_paths[-1] if frame_paths else None,
                 "count": len(frame_paths),
