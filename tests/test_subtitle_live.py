@@ -278,5 +278,19 @@ class SubtitleLiveTest(unittest.TestCase):
         run.assert_not_called()
         self.t.Export.assert_not_called()
 
+    def test_caption_check_is_read_only_and_passes_qc_options(self):
+        qc = {'ok': False, 'issues': [{'id': '10', 'code': 'too_short'}], 'fps': 30}
+        with patch.object(live.shutil, 'which', return_value='node'), \
+             patch.object(live.subprocess, 'run', return_value=Mock(returncode=0, stdout=json.dumps(qc))) as run:
+            result = live.check_captions_live(self.r, self.t, {'min_frames_per_word': 3}, lambda _: self.tmp.name)
+        self.assertTrue(result['success'], result)
+        self.assertFalse(result['ok'])
+        request = json.loads(run.call_args.kwargs['input'])
+        self.assertEqual((request['operation'], request['maxCharacters'], request['minFramesPerWord']),
+                         ('check_captions', 24, 3))
+        self.t.Export.assert_called_once()
+        self.p.GetMediaPool.return_value.ImportTimelineFromFile.assert_not_called()
+        self.p.SetCurrentTimeline.assert_not_called()
+
 if __name__ == '__main__':
     unittest.main()

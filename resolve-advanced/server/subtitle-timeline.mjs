@@ -6,7 +6,7 @@ import JSZip from 'jszip';
 import { subtitleSchemas, planCaptionEdit } from './subtitle-db.mjs';
 const require = createRequire(import.meta.url);
 const { decodePreset, setPresetInputs } = require('../vendor/drp-format/subtitle-preset.js');
-const { decodeCaption } = require('../vendor/drp-format/subtitle-captions.js');
+const { decodeCaption, checkCaptions } = require('../vendor/drp-format/subtitle-captions.js');
 const REFERENCES = { 'Word Highlight': 'word-highlight-track.xml', Lollipop: 'lollipop-track.xml' };
 
 async function readTimeline(path) {
@@ -132,6 +132,11 @@ async function readCaptions(source, track) {
 export async function inspectCaptionTimeline({ source, track = 1 }) {
   const { fps, items } = await readCaptions(source, track);
   return { track, fps, timeUnit: 'timeline_frames', captions: items.map((c) => c.decoded) };
+}
+export async function checkCaptionTimeline({ source, track = 1, maxCharacters = 24, minFramesPerWord = 0 }) {
+  const { fps, items } = await readCaptions(source, track);
+  return { track, fps, timeUnit: 'timeline_frames',
+    ...checkCaptions(items.map((c) => c.decoded), { maxCharacters, fps, minFramesPerWord }) };
 }
 export async function editCaptionTimeline({ source, output, track = 1, add = [], replace = [], delete: remove = [], templateCaptionId }) {
   const p = subtitleSchemas.write_captions.parse({ timeline: 'export', track, add, replace, delete: remove, templateCaptionId });

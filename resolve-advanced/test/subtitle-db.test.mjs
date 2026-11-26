@@ -96,6 +96,14 @@ test('QC flags gaps, invalid words, overlap and length without claiming pixel ve
   for (const code of ['overflow_length', 'word_gap', 'zero_or_negative_word_duration']) assert.ok(qc.issues.some((r) => r.code === code));
   assert.match(qc.note, /heuristic/);
 });
+test('QC flags cards too short to read only when minFramesPerWord is asked for', () => {
+  const card = { id: '100', text: 'two words', start: 100, end: 104,
+    words: [{ text: 'two', start: 100, end: 102 }, { text: 'words', start: 102, end: 104 }] };
+  assert.ok(!checkCaptions([card]).issues.some((i) => i.code === 'too_short'), 'off by default');
+  const issue = checkCaptions([card], { minFramesPerWord: 3 }).issues.find((i) => i.code === 'too_short');
+  assert.deepEqual(issue, { id: '100', code: 'too_short', frames: 4, minimum: 6, severity: 'warning' });
+  assert.ok(!checkCaptions([{ ...card, end: 106 }], { minFramesPerWord: 3 }).issues.some((i) => i.code === 'too_short'));
+});
 test('Word Highlight shadow and alignment round-trip; scale and other templates do not', () => {
   const xml = fs.readFileSync(new URL('../assets/word-highlight-track.xml', import.meta.url), 'utf8');
   const blob = Buffer.from(xml.match(/<CompositionBA>([^<]+)<\/CompositionBA>/)[1], 'hex');

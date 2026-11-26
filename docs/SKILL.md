@@ -483,6 +483,9 @@ Operating rules an agent must know:
   [title library automation](guides/title-library-automation.md) for acceptance.
 - **Live caption text and word timing**: `timeline_ai.list_captions_live` reads
   one subtitle track's captions from a native DRT export, with Resolve open.
+  `timeline_ai.check_captions_live` runs the codec caption QC on the same
+  export (overlaps, word gaps and timing, line length; cards under
+  `minFramesPerWord` frames per word when it is set). Both are read-only.
   `timeline_ai.write_captions_live` takes the same `replace` / `add` / `delete`
   shape as `project_db` `write_captions` and imports the result as a selected
   revision. A caption `id` is its start frame as a string, because Resolve
@@ -2022,7 +2025,7 @@ against it, and image content fails that validation.
 
 Key actions: `create_subtitles(settings?)` (human-readable settings resolved to
 `SUBTITLE_*`/`AUTO_CAPTION_*` enums + read-back verified — see
-`subtitle_generation_probe`), `list_captions_live`, `write_captions_live`,
+`subtitle_generation_probe`), `list_captions_live`, `check_captions_live`, `write_captions_live`,
 `detect_scene_cuts`,
 `grab_still`, `grab_all_stills(source?)`, `analyze_dolby_vision`
 

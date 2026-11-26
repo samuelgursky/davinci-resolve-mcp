@@ -377,8 +377,8 @@ def _caption_shape(captions):
              "words": [(w["text"], w["start"], w["end"]) for w in c["words"]]} for c in captions]
 
 
-def list_captions_live(resolve, timeline, params, safe_dir):
-    """Decode one subtitle track's captions from a native export; mutates nothing."""
+def _read_track(resolve, timeline, params, safe_dir, operation, **extra):
+    """Export the timeline natively and run one read-only codec operation on a subtitle track."""
     checked = _preflight(timeline, {**params, "dry_run": False})
     if isinstance(checked, dict):
         return checked
@@ -390,12 +390,24 @@ def list_captions_live(resolve, timeline, params, safe_dir):
         if not timeline.Export(str(source), resolve.EXPORT_DRT):
             return {"success": False, "error": "Native timeline export failed"}
         return {"success": True, "timeline": timeline.GetName(),
-                **_codec(node, {"operation": "inspect_captions", "source": str(source), "track": track})}
+                **_codec(node, {"operation": operation, "source": str(source), "track": track, **extra})}
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
         return {"success": False, "error": str(exc)}
     finally:
         # This UUID directory belongs only to this read.
         shutil.rmtree(staging, ignore_errors=True)
+
+
+def list_captions_live(resolve, timeline, params, safe_dir):
+    """Decode one subtitle track's captions from a native export; mutates nothing."""
+    return _read_track(resolve, timeline, params, safe_dir, "inspect_captions")
+
+
+def check_captions_live(resolve, timeline, params, safe_dir):
+    """Caption QC (overlaps, gaps, word timing, line length) from a native export; mutates nothing."""
+    return _read_track(resolve, timeline, params, safe_dir, "check_captions",
+                       maxCharacters=params.get("maxCharacters", params.get("max_characters", 24)),
+                       minFramesPerWord=params.get("minFramesPerWord", params.get("min_frames_per_word", 0)))
 
 
 def write_captions_live(resolve, project, timeline, params, safe_dir):

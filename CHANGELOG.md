@@ -2,6 +2,17 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## Unreleased
+
+### Added
+
+- **`timeline_ai.check_captions_live`: caption QC with Resolve open.** It exports the timeline natively and runs the codec's `checkCaptions` on one subtitle track: overlaps, word gaps and timing, and line length (`maxCharacters`, default 24). It is read-only, like `list_captions_live`, which now shares its export path. Asked for in #393.
+- **Opt-in `minFramesPerWord` in `checkCaptions`.** A card shown for fewer than that many frames per word gets a `too_short` warning. It is off by default (0), so existing callers, including the offline `project_db` `check_captions`, are unchanged.
+
+### Validation
+
+- New Node tests cover `checkCaptionTimeline` on an exported DRT and the `too_short` rule; a Python test checks that the live check exports once, passes both options to the codec, and never imports or switches timelines. Not run against a live Resolve.
+
 ## What's New in v5.6.0 — Security: confined report, log and output file paths; setup can no longer lower the guards
 
 Fixes two reported advisories: GHSA-3rvw-8897-xq63 (reported by @Vektori) and GHSA-c3m4-m58c-4pc7 (reported by @GeniusKangaroo). It also fixes the other places the same bug class turned up.
