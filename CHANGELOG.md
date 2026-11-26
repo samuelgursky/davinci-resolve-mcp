@@ -2,6 +2,18 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v5.5.2 — media_analysis frame folder on Windows
+
+From #396 by @goranai. Fixes #395.
+
+### Fixed
+
+- **On Windows, `media_analysis` reported the first frame's full path as its folder.** The compact clip row's `visual.frame_paths_summary.directory` split the path on `/` only, and Windows frame paths use `\`. It now splits on either, so `directory` is the folder on every OS. On macOS and Linux the result is the same as before, except for a file name that contains a backslash, and only in this summary field.
+
+### Validation
+
+- Python suite on the PR merged with main. The new test uses literal Windows paths, so it fails without the fix on any OS. GitHub CI passed. No Resolve behavior changed, so no live run.
+
 ## What's New in v5.5.1 — House-style conventions withdrawn
 
 From #391 by @nisee22.
