@@ -23,7 +23,6 @@ class NativeDirectoryPickerArgvTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="picker-")
         self.hostile = os.path.join(self.tmp, HOSTILE_NAME)
-        os.mkdir(self.hostile)
 
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
@@ -40,7 +39,9 @@ class NativeDirectoryPickerArgvTest(unittest.TestCase):
     def _script_args(argv):
         return [argv[i + 1] for i, arg in enumerate(argv[:-1]) if arg == "-e"]
 
+    @unittest.skipIf(os.name == "nt", 'NTFS forbids " in names, so this directory cannot exist on Windows')
     def test_hostile_directory_name_never_reaches_script_source(self):
+        os.mkdir(self.hostile)
         self.assertTrue(os.path.isdir(self.hostile))
         result, argv = self._run_picker(self.hostile)
         self.assertEqual(result, {"success": True, "path": "/chosen"})
