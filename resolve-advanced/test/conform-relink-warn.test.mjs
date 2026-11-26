@@ -176,3 +176,12 @@ test('accepts relative roots and custom exclusions', async (t) => {
   const r = await call({ footageDir: path.relative(process.cwd(), root), indexExcludeMarkers: ['/OFFLINE/'] });
   assert.equal(r.mediaIndexed, 1);
 });
+
+test('exclusion markers written with backslashes match the same folder', async (t) => {
+  const { root, call } = indexingFixture(t);
+  fs.mkdirSync(path.join(root, 'OFFLINE'));
+  fs.writeFileSync(path.join(root, 'OFFLINE', 'A001.mov'), '');
+  fs.writeFileSync(path.join(root, 'A002.mp4'), '');
+  const r = await call({ footageDir: root, indexExcludeMarkers: ['\\OFFLINE\\'] });
+  assert.equal(r.mediaIndexed, 1);
+});

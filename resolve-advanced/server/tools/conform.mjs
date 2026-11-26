@@ -87,6 +87,14 @@ const deriveSchema = z.object({
 const manifestSchema = z.object({ conformed: z.array(z.object({}).passthrough()), opts: z.object({}).passthrough().optional() });
 const reportSchema = z.object({ meta: z.object({}).passthrough().optional(), cuts: z.array(z.object({}).passthrough()).optional() });
 
+// Exclude markers are written with forward slashes ("/PROXY/"), and a Windows
+// path joins with backslashes, so compare both sides in one separator. A
+// marker may also be written with backslashes.
+function isExcluded(filePath, excludeMarkers) {
+  const slashPath = path.sep === '\\' ? filePath.replaceAll('\\', '/') : filePath;
+  return excludeMarkers.some((marker) => slashPath.includes(marker.replaceAll('\\', '/')));
+}
+
 async function indexFootageRoots(roots, excludeMarkers) {
   // Treat every root as a filesystem path, never as an external command argument.
   // Validate the complete list before traversal so malformed roots fail closed.
@@ -109,7 +117,7 @@ async function indexFootageRoots(roots, excludeMarkers) {
     seen.add(directory);
     for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
       const filePath = path.join(directory, entry.name);
-      if (filePath.includes(`${path.sep}._`) || excludeMarkers.some((marker) => filePath.includes(marker))) continue;
+      if (filePath.includes(`${path.sep}._`) || isExcluded(filePath, excludeMarkers)) continue;
       // Do not follow nested directory symlinks (including cycles).
       if (entry.isDirectory()) pending.push(filePath);
       else if (
