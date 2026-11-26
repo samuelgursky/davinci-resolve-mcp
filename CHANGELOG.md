@@ -2,6 +2,22 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v5.5.3 — The test suite runs on Windows in CI
+
+From #394 by @devreddy1015.
+
+### CI
+
+- **The offline suite now runs on Windows.** A `test (Windows, Python 3.11)` job runs `python -m pytest tests -q` on `windows-latest`, with ffmpeg and the same Python and `resolve-advanced` installs as the Linux `test` job. Until now Windows-only breakage (#278 CRLF checkouts, #387 Premiere `pathurl`) was found by users, not CI.
+- Three tests assumed POSIX and failed there. No server code changed:
+  - The transport-provider fixture ran a shebang script, which Windows cannot execute. On Windows it now uses the documented JSON-argv form, so the passthrough tests reach the provider, and the "provider never ran" checks no longer pass just because it could not start.
+  - The render whitelist test passed `TargetDir: "/tmp"`, which does not exist on Windows and is correctly refused (#368). It now uses the system temp directory.
+  - The folder-picker test's directory name contains `"`, which NTFS forbids. Only that test is skipped on Windows; the two portable picker tests now run there.
+
+### Validation
+
+- The new Windows job passed on the PR's own CI run, alongside the Linux and Node jobs. Python suite on the PR merged with main. No server code or Resolve behavior changed, so no live run.
+
 ## What's New in v5.5.2 — media_analysis frame folder on Windows
 
 From #396 by @goranai. Fixes #395.
