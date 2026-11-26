@@ -490,6 +490,10 @@ Operating rules an agent must know:
   next edit. Resolve's re-export must keep the text, bounds and word frames,
   or the original stays selected. Adding to an empty track needs an existing
   caption as a template; per-caption Fusion compositions are refused.
+  `timeline_ai.check_captions_live` runs the `project_db` `check_captions` QC
+  on that export, read-only: overlaps, gaps, word timing and lines over
+  `max_characters`; with `min_frames_per_word` it also warns `too_short` for a
+  card on screen under that many frames per word (3 is the readable floor).
 - **Offline subtitle DB edits**: `project_db` `list_captions` / `write_captions` /
   `check_captions` cover text, bounds, explicit per-word timing, add and delete.
   `list_subtitle_presets` / `copy_subtitle_preset` / `set_subtitle_preset` handle
@@ -2022,7 +2026,7 @@ against it, and image content fails that validation.
 
 Key actions: `create_subtitles(settings?)` (human-readable settings resolved to
 `SUBTITLE_*`/`AUTO_CAPTION_*` enums + read-back verified — see
-`subtitle_generation_probe`), `list_captions_live`, `write_captions_live`,
+`subtitle_generation_probe`), `list_captions_live`, `check_captions_live`, `write_captions_live`,
 `detect_scene_cuts`,
 `grab_still`, `grab_all_stills(source?)`, `analyze_dolby_vision`
 

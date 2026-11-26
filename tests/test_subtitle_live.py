@@ -251,6 +251,51 @@ class SubtitleLiveTest(unittest.TestCase):
                 'revision_name': 'Revision'}, lambda _: self.tmp.name)
         return result, run, inventory
 
+    def check(self, params):
+        report = {'track': 1, 'fps': 30, 'ok': False, 'issues': [{'id': '100', 'code': 'too_short', 'severity': 'warning'}]}
+        with patch.object(live.shutil, 'which', return_value='node'), \
+             patch.object(live.subprocess, 'run', return_value=Mock(returncode=0, stdout=json.dumps(report))) as run:
+            result = live.check_captions_live(self.r, self.t, params, lambda _: self.tmp.name)
+        return result, run
+
+    def test_caption_check_exports_and_runs_the_codec_check(self):
+        for params in ({'track': 1, 'max_characters': 30, 'min_frames_per_word': 3},
+                       {'track': 1, 'maxCharacters': 30, 'minFramesPerWord': 3}):
+            with self.subTest(params=params):
+                result, run = self.check(params)
+                self.assertTrue(result['success'], result)
+                self.assertEqual(result['issues'][0]['code'], 'too_short')
+                request = json.loads(run.call_args.kwargs['input'])
+                self.assertEqual((request['operation'], request['track'], request['maxCharacters'],
+                                  request['minFramesPerWord']), ('check_captions', 1, 30, 3))
+        _, run = self.check({})
+        defaults = json.loads(run.call_args.kwargs['input'])
+        self.assertEqual((defaults['maxCharacters'], defaults['minFramesPerWord']), (24, 0), 'off unless asked')
+
+    def test_caption_check_refuses_bad_limits_before_exporting(self):
+        for params in ({'max_characters': 0}, {'max_characters': '24'}, {'max_characters': True},
+                       {'min_frames_per_word': -1}, {'min_frames_per_word': 'three'},
+                       {'min_frames_per_word': float('nan')}, {'min_frames_per_word': float('inf')}):
+            with self.subTest(params=params):
+                self.t.Export.reset_mock()
+                result, run = self.check(params)
+                self.assertFalse(result['success'])
+                self.t.Export.assert_not_called()
+                run.assert_not_called()
+
+    def test_dispatch_caption_check_is_read_only(self):
+        from src import server
+        with patch.object(server, '_get_tl', return_value=(self.p, self.t, None)), \
+             patch.object(server, 'get_resolve', return_value=self.r), \
+             patch.object(server, '_resolve_safe_dir', return_value=self.tmp.name):
+            report = {'track': 1, 'fps': 30, 'ok': True, 'issues': []}
+            with patch.object(live.shutil, 'which', return_value='node'), \
+                 patch.object(live.subprocess, 'run', return_value=Mock(returncode=0, stdout=json.dumps(report))) as run:
+                result = server.timeline_ai('check_captions_live', {'track': 1, 'min_frames_per_word': 3})
+        self.assertTrue(result['ok'], result)
+        self.assertEqual(json.loads(run.call_args.kwargs['input'])['minFramesPerWord'], 3)
+        self.p.GetMediaPool.assert_not_called()
+
     def test_caption_write_selects_verified_revision(self):
         result, run, inventory = self.captions()
         self.assertTrue(result['success'], result)

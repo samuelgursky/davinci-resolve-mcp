@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import shutil
 import subprocess
@@ -377,8 +378,8 @@ def _caption_shape(captions):
              "words": [(w["text"], w["start"], w["end"]) for w in c["words"]]} for c in captions]
 
 
-def list_captions_live(resolve, timeline, params, safe_dir):
-    """Decode one subtitle track's captions from a native export; mutates nothing."""
+def _read_track(resolve, timeline, params, safe_dir, operation, **extra):
+    """Export the timeline natively and run one read-only codec operation on a subtitle track."""
     checked = _preflight(timeline, {**params, "dry_run": False})
     if isinstance(checked, dict):
         return checked
@@ -390,12 +391,30 @@ def list_captions_live(resolve, timeline, params, safe_dir):
         if not timeline.Export(str(source), resolve.EXPORT_DRT):
             return {"success": False, "error": "Native timeline export failed"}
         return {"success": True, "timeline": timeline.GetName(),
-                **_codec(node, {"operation": "inspect_captions", "source": str(source), "track": track})}
+                **_codec(node, {"operation": operation, "source": str(source), "track": track, **extra})}
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
         return {"success": False, "error": str(exc)}
     finally:
         # This UUID directory belongs only to this read.
         shutil.rmtree(staging, ignore_errors=True)
+
+
+def list_captions_live(resolve, timeline, params, safe_dir):
+    """Decode one subtitle track's captions from a native export; mutates nothing."""
+    return _read_track(resolve, timeline, params, safe_dir, "inspect_captions")
+
+
+def check_captions_live(resolve, timeline, params, safe_dir):
+    """Caption QC (overlaps, gaps, word timing, line length) from a native export; mutates nothing."""
+    max_characters = params.get("max_characters", params.get("maxCharacters", 24))
+    min_frames = params.get("min_frames_per_word", params.get("minFramesPerWord", 0))
+    if isinstance(max_characters, bool) or not isinstance(max_characters, int) or max_characters < 1:
+        return {"success": False, "error": "max_characters must be a positive integer"}
+    if (isinstance(min_frames, bool) or not isinstance(min_frames, (int, float))
+            or not math.isfinite(min_frames) or min_frames < 0):
+        return {"success": False, "error": "min_frames_per_word must be a non-negative number"}
+    return _read_track(resolve, timeline, params, safe_dir, "check_captions",
+                       maxCharacters=max_characters, minFramesPerWord=min_frames)
 
 
 def write_captions_live(resolve, project, timeline, params, safe_dir):

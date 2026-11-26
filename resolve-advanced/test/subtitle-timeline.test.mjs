@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import JSZip from 'jszip';
 import { XMLValidator } from 'fast-xml-parser';
-import { editSubtitleTimeline, editCaptionTimeline, inspectCaptionTimeline } from '../server/subtitle-timeline.mjs';
+import { editSubtitleTimeline, editCaptionTimeline, inspectCaptionTimeline, checkCaptionTimeline } from '../server/subtitle-timeline.mjs';
 
 const native = await fs.readFile(new URL('../assets/word-highlight-track.xml', import.meta.url), 'utf8');
 const section = /<FusionCompHolderItems>[\s\S]*?<\/FusionCompHolderItems>/.exec(native)[0];
@@ -147,6 +147,19 @@ async function captionFixture(dir, secondStart = 108143) {
   await fs.writeFile(file, await zip.generateAsync({ type: 'nodebuffer' }));
   return file;
 }
+test('check_captions reports the codec QC for one track of an exported DRT', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'subtitle-check-'));
+  try {
+    const source = await captionFixture(dir);
+    const tight = await checkCaptionTimeline({ source, maxCharacters: 10 });
+    assert.equal(tight.fps, 30);
+    assert.equal(tight.ok, false);
+    assert.ok(tight.issues.some((i) => i.code === 'overflow_length' && i.id === '108086'));
+    const wide = await checkCaptionTimeline({ source, maxCharacters: 40 });
+    assert.ok(!wide.issues.some((i) => i.code === 'overflow_length'));
+  } finally { await fs.rm(dir, { recursive: true, force: true }); }
+});
+
 test('replace, add and delete caption text and word timing in an exported DRT', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'subtitle-captions-'));
   try {

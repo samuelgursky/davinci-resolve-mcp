@@ -2,6 +2,23 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## Unreleased — Caption QC with Resolve open
+
+For #393.
+
+### Added
+
+Caption QC (`check_captions`) only ran on a closed project library through `project_db`. With Resolve open, a caller had to read the captions and check them itself.
+
+- **`timeline_ai.check_captions_live(track?, max_characters?, min_frames_per_word?)`** runs the same checks on a native DRT export of the current timeline, read-only: overlaps, gaps, word timing and lines over `max_characters` (default 24). It is the `check_captions` codec operation (`checkCaptionTimeline` in `resolve-advanced/server/subtitle-timeline.mjs`, `check_captions_live` in `src/utils/subtitle_live.py`) behind the same export path as `list_captions_live`.
+- **`min_frames_per_word`** is an opt-in readability floor in `checkCaptions`: a card on screen for fewer frames than that times its word count gets a `too_short` warning. It is off by default, so `project_db` `check_captions` and the caption-write checks are unchanged.
+
+Limits that are not positive integers (`max_characters`) or non-negative numbers (`min_frames_per_word`) are refused before anything is exported.
+
+### Not verified here
+
+- The codec operation is tested on exported-timeline fixtures and the Python side with a mocked Resolve. It was not run against a live Resolve.
+
 ## What's New in v5.5.3 — The test suite runs on Windows in CI
 
 From #394 by @devreddy1015.

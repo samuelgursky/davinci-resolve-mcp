@@ -92,7 +92,7 @@ function encodeCaption(blob, caption, fps, { fresh = false } = {}) {
   return wrapEffectFilters(Buffer.concat(outer.map((r) => r === entry ? field(1, Buffer.concat(parts)) : r.raw)));
 }
 
-function checkCaptions(captions, { maxCharacters = 24, fps = 30 } = {}) {
+function checkCaptions(captions, { maxCharacters = 24, fps = 30, minFramesPerWord = 0 } = {}) {
   const issues = [], epsilon = 1e-6;
   const sorted = [...captions].sort((a, b) => a.start - b.start);
   for (let i = 0; i < sorted.length; i++) {
@@ -102,6 +102,9 @@ function checkCaptions(captions, { maxCharacters = 24, fps = 30 } = {}) {
     if (i && c.start < sorted[i - 1].end) add('caption_overlap', { previousId: sorted[i - 1].id });
     const length = Math.max(...c.text.split(/\r?\n/).map((line) => [...line].length));
     if (length > maxCharacters) add('overflow_length', { characters: length, maxCharacters, severity: 'warning' });
+    // Opt-in readability floor: a card on screen under N frames per word cannot be read.
+    const minimum = minFramesPerWord * c.words.length;
+    if (minimum && c.end - c.start < minimum) add('too_short', { frames: c.end - c.start, minimum, severity: 'warning' });
     for (const code of c.decodeIssues || []) add(code);
     if (!c.words.length) add('missing_word_timings');
     let cursor = c.start;
