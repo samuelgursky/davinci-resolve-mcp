@@ -2,6 +2,18 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v5.6.1 — Windows: temp paths accepted again; conform skips the PROXY folder
+
+### Fixed
+
+- **v5.6.0 refused temp-folder paths on Windows.** The temp-path check behind timeline, project, LUT and DRX exports, renders and `apply_trace_plan` compared every temp root inside one `try`. On Windows, `/tmp` resolves onto the current drive, and comparing paths on two drives raises an error. Whenever that root came first, the check refused everything, including the system temp folder itself. Each root is now checked on its own, in a fixed order, ignoring case. macOS and Linux were not affected. Windows CI caught it on the v5.6.0 commit.
+- **On Windows, `conform` indexed the PROXY folder** (from #400 by @goranai, fixes #399). The footage index skipped folders by matching markers such as `/PROXY/` against the file path, but Windows paths use backslashes, so the marker never matched. Paths and markers are now compared with forward slashes, so a marker written with either separator works. On macOS and Linux nothing changes, except that a marker containing a backslash now matches the folder.
+
+### Validation
+
+- Full Python suite and the full Node suite (from a fresh `npm ci`) pass, and the Windows CI job passes again. The new temp-path test simulates a root on another drive. The old code fails it for about half of all hash seeds, which is the same random set order that failed on Windows. #400's new test fails without its fix.
+- No Resolve behavior changed, so no live run.
+
 ## What's New in v5.6.0 — Security: confined report, log and output file paths; setup can no longer lower the guards
 
 Fixes two reported advisories: GHSA-3rvw-8897-xq63 (reported by @Vektori) and GHSA-c3m4-m58c-4pc7 (reported by @GeniusKangaroo). It also fixes the other places the same bug class turned up.
