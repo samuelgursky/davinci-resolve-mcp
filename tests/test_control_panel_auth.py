@@ -120,6 +120,16 @@ class PanelGateTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(payload["transport"]["token"], "TRANSPORT-SECRET")
 
+    def test_non_ascii_bearer_and_cookie_return_401_not_500(self):
+        status, _, _ = self.panel.request(
+            "GET", "/api/mcp/status", headers={"Authorization": "Bearer caf\xe9"}
+        )
+        self.assertEqual(status, 401)
+        status, _, _ = self.panel.request(
+            "GET", "/api/mcp/status", headers={"Cookie": f"{dash.PANEL_COOKIE_NAME}=caf\xe9"}
+        )
+        self.assertEqual(status, 401)
+
     def test_boot_requires_token(self):
         status, _, _ = self.panel.request("GET", "/api/boot")
         self.assertEqual(status, 401)

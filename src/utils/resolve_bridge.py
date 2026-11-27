@@ -146,7 +146,12 @@ def sign_request(token: str, request: Dict[str, Any]) -> str:
 
 
 def signature_is_valid(token: str, request: Dict[str, Any], signature: str) -> bool:
-    return hmac.compare_digest(sign_request(token, request), signature)
+    if not isinstance(signature, str):
+        return False
+    return hmac.compare_digest(
+        sign_request(token, request).encode("ascii"),
+        signature.encode("utf-8", "surrogatepass"),
+    )
 
 
 # ── host model detection ─────────────────────────────────────────────────────
