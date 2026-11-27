@@ -22790,11 +22790,21 @@ def _render_temp_path_ok(path: str) -> bool:
     if not path or not isinstance(path, str):
         return False
     try:
-        target = os.path.realpath(path)
-        temp_roots = {os.path.realpath(root) for root in (tempfile.gettempdir(), "/private/tmp", "/tmp")}
-        return any(os.path.commonpath([target, root]) == root for root in temp_roots)
+        target = os.path.normcase(os.path.realpath(path))
     except ValueError:
         return False
+    for root in (tempfile.gettempdir(), "/private/tmp", "/tmp"):
+        # Each root is tried on its own: on Windows "/tmp" resolves onto the
+        # current drive, and commonpath raises ValueError for paths on two
+        # drives. One such root must not hide a match on another (v5.6.0
+        # refused the temp dir itself whenever "/tmp" was compared first).
+        try:
+            resolved = os.path.normcase(os.path.realpath(root))
+            if os.path.commonpath([target, resolved]) == resolved:
+                return True
+        except ValueError:
+            continue
+    return False
 
 
 def _render_formats(proj):

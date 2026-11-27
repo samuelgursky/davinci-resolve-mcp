@@ -335,6 +335,26 @@ class ApplyTracePlanTest(unittest.TestCase):
             self.assertFalse(compound._render_temp_path_ok(os.path.join(link, "x.drx")))
             self.assertFalse(compound._grade_temp_path_ok(os.path.join(link, "x.drx")))
 
+    def test_shared_temp_guard_survives_a_root_on_another_drive(self):
+        """v5.6.0 broke Windows: "/tmp" resolves onto the current drive, and
+        commonpath raises ValueError for two drives. One try around all roots
+        let that error refuse the temp dir itself. Simulated here by making
+        every root except the system temp dir raise."""
+        from unittest import mock
+
+        temp_root = os.path.normcase(os.path.realpath(tempfile.gettempdir()))
+        real_commonpath = os.path.commonpath
+
+        def commonpath(paths):
+            if paths[1] != temp_root:
+                raise ValueError("Paths don't have the same drive")
+            return real_commonpath(paths)
+
+        with mock.patch.object(compound.os.path, "commonpath", side_effect=commonpath):
+            self.assertTrue(compound._render_temp_path_ok(tempfile.gettempdir()))
+            self.assertTrue(compound._render_temp_path_ok(os.path.join(self.tmp, "x.json")))
+            self.assertFalse(compound._render_temp_path_ok(os.path.abspath(__file__)))
+
 
 if __name__ == "__main__":
     unittest.main()
