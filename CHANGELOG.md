@@ -2,6 +2,19 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v5.7.1 — Non-ASCII auth headers get a 401, not a crash
+
+From #401 by @FFXFF1.
+
+### Fixed
+
+- **A non-ASCII `Authorization` or `Cookie` header crashed the auth check.** Python's `compare_digest` raises an error on a string that contains non-ASCII characters, and HTTP servers decode header bytes as latin-1, so a header containing bytes 0x80–0xff got a 500 instead of a 401. Secrets are now compared as UTF-8 bytes in the control panel (bearer token and session cookie), the networked MCP transport, and the bridge's request signature check, which also returns False for a signature that is not a string.
+- Severity: low. The crash happened before any access was granted, so it never let a request through, and all three surfaces listen on loopback only. These four calls are every `compare_digest` call in the server.
+
+### Validation
+
+- Full Python suite with the PR merged into main. Its three new tests fail on the previous code. No Resolve behavior changed, so no live run.
+
 ## What's New in v5.7.0 — Check captions with Resolve open
 
 From #398 by @devreddy1015. Asked for in #393.
