@@ -2,6 +2,27 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v5.6.0 — Security: confined report, log and output file paths; setup can no longer lower the guards
+
+Fixes two reported advisories: GHSA-3rvw-8897-xq63 (reported by @Vektori) and GHSA-c3m4-m58c-4pc7 (reported by @GeniusKangaroo). It also fixes the other places the same bug class turned up.
+
+### Changed — behaviour
+
+- **Through MCP, `setup` can turn the security guards on, but no longer off.** `set_defaults` and `clear_defaults` refuse to switch off safe mode, the confirm token, the audit log or the operation log, and refuse to set updates to `auto`. The refusal code is `SECURITY_SETTING_OPERATOR_ONLY`. A refused call changes nothing, and a reset of all defaults keeps safe mode on. To lower a guard, edit the `destructive` section of the preferences file. To turn on automatic updates, run `python install.py --update-policy auto`. The per-call `allow_risky_operation: true` override is unchanged: it applies to one call, which the client shows to the user.
+
+### Fixed — security
+
+- **GHSA-3rvw-8897-xq63: `setup` could point the audit or operation log at any file.** A path such as `~/.zshrc` turned the next logged call's parameters into shell commands. Log paths set through `setup` must now be `.jsonl` or `.log` files under the server's `logs/` folder or the system temp folder, and can't be symlinks (`LOG_PATH_NOT_ALLOWED`). Log files are opened without following a symlink and created with mode 0600. A bad path saved by an older version is ignored, and the server writes to the default log instead. The operator can still send the logs anywhere with the `RESOLVE_MCP_AUDIT_LOG_FILE` and `RESOLVE_MCP_OPERATION_LOG_FILE` environment variables.
+- **GHSA-c3m4-m58c-4pc7: `apply_trace_plan` wrote its report to any path.** The report is written even on a dry run, before the confirm token. `report_path` must now be a `.json` file under the system temp folder, not a symlink (`REPORT_PATH_NOT_ALLOWED`). This holds even with `require_temp_path=false`. The default report goes next to the plan only when the plan is in temp, else into temp. `plan_path` now gets the usual temp check (`PLAN_PATH_NOT_TEMP`), which `require_temp_path=false` still turns off.
+- **GHSA-c3m4-m58c-4pc7: clip ids became file names.** In `extract_frames` and the nine colour matchers (black balance, exposure, contrast, skin, white balance, shot match, match to reference, saturation, tone curve), an id such as `../../x` wrote a PNG or DRX outside the output folder. Ids and group/scene names that are used in a file name may now contain only letters, digits, spaces, `.`, `_` and `-`. Other values are refused, not cleaned up, so two clips can never end up with the same file name. `extract_frames` skips a refused clip and gives the reason. The matchers stop with an error naming the field.
+- **The reverse-clip database backup** went to a predictable `/tmp` name built from the item id. It now goes into a new private temp folder.
+- **The temp-folder check followed symlinks on only one side.** A symlink inside `/tmp` that pointed elsewhere passed it. The check now compares real paths on both sides. This affects every write that requires a temp path: timeline, project, LUT and DRX exports, and renders.
+
+### Validation
+
+- Full Python suite and the full Node suite (from a fresh `npm ci`) pass. The new tests fail on the previous code. A new Node test fails when a file name built from a value is added to the advanced server without being reviewed.
+- Not run against a live Resolve. The changes are in path checks and preferences, which the offline tests reach directly.
+
 ## What's New in v5.5.3 — The test suite runs on Windows in CI
 
 From #394 by @devreddy1015.
