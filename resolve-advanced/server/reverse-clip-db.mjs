@@ -245,6 +245,13 @@ export function inForTarget(K, targetFrame) {
 }
 
 // ---- helpers ----
+// itemId can come from a caller-supplied database, and a fixed name in the
+// shared temp dir can be pre-planted as a symlink. Write into a fresh private
+// directory, with the id reduced to a plain file name (GHSA-c3m4-m58c-4pc7).
+function backupFile(itemId) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'reverse-clip-backup-'));
+  return path.join(dir, `${String(itemId).replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 120) || 'item'}.txt`);
+}
 function sqliteDbPath(opts) {
   if (opts.projectDb) return opts.projectDb;
   throw new Error('provide projectDb (path) for the SQLite backend, or a postgres connection object');
@@ -252,8 +259,8 @@ function sqliteDbPath(opts) {
 function sqliteBackupRow(db, dbPath, itemId) {
   const row = db.prepare('SELECT "In" AS inv, "MediaTimemapBA" AS blob FROM "Sm2TiItem" WHERE "Sm2TiItem_id"=?').get(itemId);
   const hex = row && row.blob ? Buffer.from(row.blob).toString('hex') : '';
-  const out = path.join(os.tmpdir(), `reverse-clip-backup-${itemId}.txt`);
-  fs.writeFileSync(out, `${row ? row.inv : ''}~~${hex}`);
+  const out = backupFile(itemId);
+  fs.writeFileSync(out, `${row ? row.inv : ''}~~${hex}`, { flag: 'wx' });
   return out;
 }
 async function pgBackupRow(pg, client, itemId) {
@@ -261,7 +268,7 @@ async function pgBackupRow(pg, client, itemId) {
     itemId,
   ]);
   const r = rows[0] || { inv: '', hex: '' };
-  const out = path.join(os.tmpdir(), `reverse-clip-backup-${itemId}.txt`);
-  fs.writeFileSync(out, `${r.inv}~~${r.hex}`);
+  const out = backupFile(itemId);
+  fs.writeFileSync(out, `${r.inv}~~${r.hex}`, { flag: 'wx' });
   return out;
 }

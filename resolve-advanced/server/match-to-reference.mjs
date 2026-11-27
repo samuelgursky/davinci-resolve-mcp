@@ -20,6 +20,7 @@ import { createRequire } from 'node:module';
 import { generateAssertedAffineDRX } from './contrast-normalize.mjs';
 import { provenanceLabel, gist } from './node-provenance.mjs';
 import { isSkin } from './skin-match.mjs';
+import { outputFileIn } from './safe-path.mjs';
 
 const require = createRequire(import.meta.url);
 function loadSharp() {
@@ -154,7 +155,7 @@ export async function computeMatchToReference(clips, opts = {}) {
       for (const k of ['r', 'g', 'b']) offset[k] = clamp(offset[k] + delta, olo, ohi);
     }
     const corr = Math.max(...['r', 'g', 'b'].map((k) => Math.max(Math.abs(gain[k] - 1), Math.abs(offset[k]))));
-    const drxPath = `${opts.outDir}/${c.id}_matchref.drx`;
+    const drxPath = outputFileIn(opts.outDir, { id: c.id }, '_matchref.drx');
     await generateAssertedAffineDRX(
       gain,
       offset,

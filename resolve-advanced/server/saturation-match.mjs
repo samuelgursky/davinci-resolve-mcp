@@ -11,6 +11,7 @@ import { createRequire } from 'node:module';
 import { drxTool } from './tools/drx.mjs';
 import { provenanceLabel } from './node-provenance.mjs';
 import { isSkin } from './skin-match.mjs';
+import { outputFileIn } from './safe-path.mjs';
 
 const require = createRequire(import.meta.url);
 function loadSharp() {
@@ -99,7 +100,7 @@ export async function computeSaturationMatch(clips, opts = {}) {
     const scale = clamp((hero.sat || 1e-6) / (c.sat || 1e-6), lo, hi);
     const corr = Math.abs(scale - 1);
     maxCorr = Math.max(maxCorr, corr);
-    const drxPath = `${opts.outDir}/${c.id}_sat.drx`;
+    const drxPath = outputFileIn(opts.outDir, { id: c.id }, '_sat.drx');
     await generateAssertedSatDRX(scale, provenanceLabel('saturation_match', { source: `hero:${hero.id}`, gist: `sat(${scale.toFixed(2)})` }), drxPath);
     grades.push({ id: c.id, satScale: +scale.toFixed(3), correctionPct: +(100 * corr).toFixed(2), drxPath, isHero: c === hero });
   }

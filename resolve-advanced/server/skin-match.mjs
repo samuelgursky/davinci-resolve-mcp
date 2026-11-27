@@ -21,6 +21,7 @@ import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import { generateAssertedGainDRX } from './exposure-level.mjs';
 import { provenanceLabel, gist } from './node-provenance.mjs';
+import { outputFileIn } from './safe-path.mjs';
 
 const require = createRequire(import.meta.url);
 function loadSharp() {
@@ -177,7 +178,7 @@ export async function computeSkinMatch(clips, opts = {}) {
       }
       const corr = Math.max(...['r', 'g', 'b'].map((k) => Math.abs(gain[k] - 1)));
       maxCorr = Math.max(maxCorr, corr);
-      const drxPath = `${opts.outDir}/${group}_${c.id}_skin.drx`;
+      const drxPath = outputFileIn(opts.outDir, { group, id: c.id }, '_skin.drx');
       await generateAssertedGainDRX(gain, provenanceLabel('skin_match', { source: `hero:${hero.id}`, gist: gist('gain', gain) }), drxPath);
       grades.push({ id: c.id, group, gain, correctionPct: +(100 * corr).toFixed(2), skinFracPct: +(100 * c.skinFrac).toFixed(2), drxPath, isHero: c === hero });
     }

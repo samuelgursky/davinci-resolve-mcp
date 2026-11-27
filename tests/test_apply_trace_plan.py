@@ -260,6 +260,81 @@ class ApplyTracePlanTest(unittest.TestCase):
         self.assertTrue(out.get("success"), out)
         self.assertEqual(out["resolution"]["rows"][0]["reason"], "live_item_not_found")
 
+    # GHSA-c3m4-m58c-4pc7: report_path was opened for writing with no check,
+    # on a dry run and before any confirm token.
+    def _outside_temp_dir(self):
+        outside = tempfile.mkdtemp(prefix="trace-outside-", dir=os.path.dirname(os.path.abspath(__file__)))
+        self.addCleanup(lambda: __import__("shutil").rmtree(outside, ignore_errors=True))
+        return outside
+
+    def test_report_path_outside_temp_is_refused_before_anything_is_written(self):
+        path = self._plan([_match(0, "SHOT_A", 86400, 48, self.drx_a)])
+        victim = os.path.join(self._outside_temp_dir(), "overwritten.json")
+        with open(victim, "w", encoding="utf-8") as fh:
+            fh.write("keep me")
+        for extra in ({"dry_run": True}, {}, {"dry_run": True, "require_temp_path": False}):
+            with self.subTest(extra=extra):
+                out = compound._apply_trace_plan({"plan_path": path, "report_path": victim, **extra})
+                self.assertEqual(out["error"]["code"], "REPORT_PATH_NOT_ALLOWED", out)
+        with open(victim, encoding="utf-8") as fh:
+            self.assertEqual(fh.read(), "keep me")
+
+    def test_report_path_must_be_json_and_not_a_symlink(self):
+        path = self._plan([_match(0, "SHOT_A", 86400, 48, self.drx_a)])
+        out = compound._apply_trace_plan({"plan_path": path, "dry_run": True,
+                                          "report_path": os.path.join(self.tmp, "report.sh")})
+        self.assertEqual(out["error"]["code"], "REPORT_PATH_NOT_ALLOWED")
+        if os.name != "nt":
+            victim = os.path.join(self._outside_temp_dir(), "victim.json")
+            link = os.path.join(self.tmp, "link-report.json")
+            os.symlink(victim, link)
+            out = compound._apply_trace_plan({"plan_path": path, "dry_run": True, "report_path": link})
+            self.assertEqual(out["error"]["code"], "REPORT_PATH_NOT_ALLOWED")
+            self.assertFalse(os.path.exists(victim))
+
+    def test_trace_report_helper_itself_never_writes_outside_temp(self):
+        victim = os.path.join(self._outside_temp_dir(), "overwritten.json")
+        written = compound._trace_report({"report_path": victim, "dry_run": True}, {"source": "t"},
+                                         "dry-run", {"summary": {}})
+        self.assertIsNone(written)
+        self.assertFalse(os.path.exists(victim))
+
+    def test_temp_report_path_is_honoured(self):
+        path = self._plan([_match(0, "SHOT_A", 86400, 48, self.drx_a)])
+        target = os.path.join(self.tmp, "custom-report.json")
+        out = compound._apply_trace_plan({"plan_path": path, "dry_run": True, "report_path": target})
+        self.assertTrue(out["success"], out)
+        self.assertEqual(out["report_path"], target)
+        self.assertTrue(os.path.isfile(target))
+
+    def test_plan_outside_temp_is_refused_unless_opted_out_and_report_falls_back_to_temp(self):
+        outside = self._outside_temp_dir()
+        plan_path = os.path.join(outside, "plan.json")
+        with open(self._plan([_match(0, "SHOT_A", 86400, 48, self.drx_a)]), encoding="utf-8") as src, \
+                open(plan_path, "w", encoding="utf-8") as dst:
+            dst.write(src.read())
+        out = compound._apply_trace_plan({"plan_path": plan_path, "dry_run": True})
+        self.assertEqual(out["error"]["code"], "PLAN_PATH_NOT_TEMP")
+        out = compound._apply_trace_plan({"plan_path": plan_path, "dry_run": True, "require_temp_path": False})
+        self.assertTrue(out["success"], out)
+        self.assertFalse(os.path.exists(os.path.join(outside, "dry-run-report.json")))
+        self.assertTrue(compound._temp_path_resolved_ok(out["report_path"]), out["report_path"])
+
+    def test_shared_temp_guard_resolves_symlinks(self):
+        """_render_temp_path_ok backs every require_temp_path guard (timeline
+        export, LUT, DRX, project export, renders). It compared abspaths, so a
+        link inside /tmp pointing elsewhere passed."""
+        self.assertTrue(compound._render_temp_path_ok(os.path.join(self.tmp, "x.json")))
+        self.assertTrue(compound._render_temp_path_ok(os.path.join(tempfile.gettempdir(), "new", "x.drx")))
+        self.assertFalse(compound._render_temp_path_ok(os.path.abspath(__file__)))
+        self.assertFalse(compound._render_temp_path_ok(""))
+        if os.name != "nt":
+            outside = self._outside_temp_dir()
+            link = os.path.join(self.tmp, "escape")
+            os.symlink(outside, link)
+            self.assertFalse(compound._render_temp_path_ok(os.path.join(link, "x.drx")))
+            self.assertFalse(compound._grade_temp_path_ok(os.path.join(link, "x.drx")))
+
 
 if __name__ == "__main__":
     unittest.main()

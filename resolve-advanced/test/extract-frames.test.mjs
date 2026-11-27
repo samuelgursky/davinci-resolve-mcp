@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { assessColorspace, resolvePosition, extractFrames } from '../server/extract-frames.mjs';
+import { assessColorspace, resolvePosition, extractFrames, frameOutputPath } from '../server/extract-frames.mjs';
 import { hasFfmpeg, hasFfprobe } from '../server/capabilities.mjs';
 
 const FF = hasFfmpeg() && hasFfprobe();
@@ -95,4 +95,30 @@ test('extractFrames refuses an untagged (unknown-space) source, then extracts wh
   // Extracts only when the caller explicitly asserts display-referred.
   const ok = await extractFrames([{ id: 'U', source: src, at: 'midpoint', displayReferred: true }], { outDir: path.join(dir, 'out2') });
   assert.ok(ok.frames.U, `expected a frame with assertion, got ${JSON.stringify(ok.skipped)}`);
+});
+
+// ── GHSA-c3m4-m58c-4pc7: a clip id is a file name, never a path ───────
+test('frameOutputPath keeps every frame inside outDir', () => {
+  const out = path.join(os.tmpdir(), 'ef-ids');
+  for (const id of ['A001', 12, 'A001 C003', 'x.y-z_1', '3f2a-uuid']) {
+    assert.equal(path.dirname(frameOutputPath(out, id)), path.resolve(out), String(id));
+  }
+  for (const id of ['../../outside_target', '..', '.', 'a/b', 'a\\b', '/etc/x', 'C:\\x', '', 'ok\n', 'x'.repeat(201)]) {
+    assert.equal(frameOutputPath(out, id), null, JSON.stringify(id));
+  }
+});
+
+test('extractFrames skips a traversal id instead of writing outside outDir', { skip: !FF }, async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ef-'));
+  const src = path.join(dir, 'disp.mp4');
+  makeDisplayClip(src);
+  const outDir = path.join(dir, 'a', 'b', 'out');
+  const r = await extractFrames(
+    [{ id: '../../outside_target', source: src }, { id: 'OK', source: src }],
+    { outDir },
+  );
+  assert.ok(r.skipped.some((s) => s.id === '../../outside_target' && /safe file name/.test(s.reason)));
+  assert.ok(r.frames.OK);
+  assert.equal(fs.existsSync(path.join(dir, 'a', 'outside_target.png')), false);
+  fs.rmSync(dir, { recursive: true, force: true });
 });

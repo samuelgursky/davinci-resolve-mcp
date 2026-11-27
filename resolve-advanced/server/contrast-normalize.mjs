@@ -25,6 +25,7 @@ import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import { drxTool } from './tools/drx.mjs';
 import { provenanceLabel, gist } from './node-provenance.mjs';
+import { outputFileIn } from './safe-path.mjs';
 
 const require = createRequire(import.meta.url);
 function loadSharp() {
@@ -166,7 +167,7 @@ export async function computeContrastNormalize(clips, opts = {}) {
       }
       const corr = Math.max(...['r', 'g', 'b'].map((k) => Math.max(Math.abs(gain[k] - 1), Math.abs(offset[k]))));
       maxCorr = Math.max(maxCorr, corr);
-      const drxPath = `${opts.outDir}/${group}_${c.id}_contrast.drx`;
+      const drxPath = outputFileIn(opts.outDir, { group, id: c.id }, '_contrast.drx');
       await generateAssertedAffineDRX(gain, offset, provenanceLabel('contrast_normalize', { source: `hero:${hero.id}`, gist: gist('gain', gain) }), drxPath, warnings);
       grades.push({ id: c.id, group, gain, offset, correctionPct: +(100 * corr).toFixed(2), drxPath, isHero: c === hero });
     }

@@ -20,6 +20,7 @@ import { createRequire } from 'node:module';
 import { drxTool } from './tools/drx.mjs';
 import { provenanceLabel } from './node-provenance.mjs';
 import { shouldExcludeFromNeutralize } from './shot-intent.mjs';
+import { outputFileIn } from './safe-path.mjs';
 
 const require = createRequire(import.meta.url);
 function loadSharp() {
@@ -167,7 +168,7 @@ export async function computeToneCurveTransfer(clips, opts = {}) {
       skipped.push({ id: c.id, reason: 'tone already matches the reference (near-identity curve)', maxDeltaPct: +(100 * maxDelta).toFixed(2) });
       continue;
     }
-    const drxPath = `${opts.outDir}/${c.id}_tonecurve.drx`;
+    const drxPath = outputFileIn(opts.outDir, { id: c.id }, '_tonecurve.drx');
     await generateAssertedYCurveDRX(
       points,
       provenanceLabel('tone_curve_transfer', { source: `ref:${refPath.split('/').pop()}`, gist: `Δ${(100 * maxDelta).toFixed(0)}%` }),

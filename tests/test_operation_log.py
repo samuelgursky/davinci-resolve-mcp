@@ -220,18 +220,21 @@ class OperationLogSetup(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_setup_sets_and_clears_operation_log_defaults(self) -> None:
+        # Switching the log off is operator-only since GHSA-3rvw-8897-xq63.
+        refused = compound.setup("set_defaults", {"destructive": {"operation_log": False}})
+        self.assertEqual(refused["error"]["code"], "SECURITY_SETTING_OPERATOR_ONLY")
         configured = compound.setup(
             "set_defaults",
             {
                 "destructive": {
-                    "operation_log": False,
+                    "operation_log": True,
                     "operation_log_path": os.path.join(self.tmp.name, "ops.jsonl"),
                 },
             },
         )
         self.assertTrue(configured["success"])
         destructive = configured["defaults"]["destructive"]
-        self.assertFalse(destructive["operation_log"])
+        self.assertTrue(destructive["operation_log"])
         self.assertEqual(
             destructive["operation_log_path"],
             os.path.realpath(os.path.join(self.tmp.name, "ops.jsonl")),

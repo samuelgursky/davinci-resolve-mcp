@@ -28,6 +28,7 @@ import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import { generateAssertedGainDRX } from './exposure-level.mjs';
 import { provenanceLabel, gist } from './node-provenance.mjs';
+import { outputFileIn } from './safe-path.mjs';
 
 const require = createRequire(import.meta.url);
 function loadSharp() {
@@ -132,7 +133,7 @@ export async function computeShotMatch(clips, opts = {}) {
       }
       const corr = Math.max(...['r', 'g', 'b'].map((k) => Math.abs(gain[k] - 1)));
       maxCorr = Math.max(maxCorr, corr);
-      const drxPath = `${opts.outDir}/${scene}_${c.id}_shot.drx`;
+      const drxPath = outputFileIn(opts.outDir, { scene, id: c.id }, '_shot.drx');
       await generateAssertedGainDRX(gain, provenanceLabel('shot_match', { source: mode === 'hero' ? `hero:${opts.heroId}` : 'neutralize', gist: gist('gain', gain) }), drxPath);
       grades.push({ id: c.id, scene, mode, gain, correctionPct: +(100 * corr).toFixed(2), drxPath, isHero: hero ? c === hero : false });
     }

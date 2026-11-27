@@ -17,6 +17,7 @@ import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import { drxTool } from './tools/drx.mjs';
 import { provenanceLabel, gist } from './node-provenance.mjs';
+import { outputFileIn } from './safe-path.mjs';
 
 const require = createRequire(import.meta.url);
 function loadSharp() {
@@ -109,7 +110,7 @@ export async function computeLevels(clips, opts = {}) {
       const gain = { r: clamp(H.r / c.mean.r, lo, hi), g: clamp(H.g / c.mean.g, lo, hi), b: clamp(H.b / c.mean.b, lo, hi) };
       const corr = Math.max(...['r', 'g', 'b'].map((k) => Math.abs(gain[k] - 1)));
       maxCorr = Math.max(maxCorr, corr);
-      const drxPath = `${opts.outDir}/${group}_${c.id}.drx`;
+      const drxPath = outputFileIn(opts.outDir, { group, id: c.id }, '.drx');
       await generateAssertedGainDRX(gain, provenanceLabel('exposure_level', { source: `hero:${valid[0].id}`, gist: gist('gain', gain) }), drxPath);
       grades.push({ id: c.id, group, gain, correctionPct: +(100 * corr).toFixed(2), drxPath, isHero: c === valid[0] });
     }

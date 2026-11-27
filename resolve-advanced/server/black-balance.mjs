@@ -11,6 +11,7 @@ import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import { generateAssertedAffineDRX } from './contrast-normalize.mjs';
 import { provenanceLabel, gist } from './node-provenance.mjs';
+import { outputFileIn } from './safe-path.mjs';
 
 const require = createRequire(import.meta.url);
 function loadSharp() {
@@ -83,7 +84,7 @@ export async function computeBlackBalance(clips, opts = {}) {
     }
     const gain = { r: 1, g: 1, b: 1 };
     const offset = { r: clamp(target - bp.r, olo, ohi), g: clamp(target - bp.g, olo, ohi), b: clamp(target - bp.b, olo, ohi) };
-    const drxPath = `${opts.outDir}/${c.id}_blackbal.drx`;
+    const drxPath = outputFileIn(opts.outDir, { id: c.id }, '_blackbal.drx');
     await generateAssertedAffineDRX(gain, offset, provenanceLabel('black_balance', { source: 'shadow-neutral', gist: gist('offset', offset) }), drxPath, warnings);
     grades.push({ id: c.id, offset, castSpreadPct: +(100 * spread).toFixed(2), drxPath });
     report[c.id] = { castSpreadPct: +(100 * spread).toFixed(2) };

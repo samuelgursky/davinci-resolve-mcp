@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
 from src.utils.bool_params import coerce_bool, explicit_bool_param
-from src.utils import operation_result
+from src.utils import log_paths, operation_result
 
 logger = logging.getLogger("resolve-mcp.operation-log")
 
@@ -50,13 +50,20 @@ def operation_log_enabled() -> bool:
 
 
 def operation_log_path() -> str:
-    configured = (
-        os.environ.get("RESOLVE_MCP_OPERATION_LOG_FILE")
-        or _read_preference("destructive.operation_log_path", None)
-    )
+    operator = os.environ.get("RESOLVE_MCP_OPERATION_LOG_FILE")
+    if operator:
+        return log_paths.normalize(operator)
+    default = str(_REPO_ROOT / "logs" / "operation-log.jsonl")
+    configured = _read_preference("destructive.operation_log_path", None)
     if configured:
-        return os.path.realpath(os.path.abspath(os.path.expanduser(str(configured))))
-    return str(_REPO_ROOT / "logs" / "operation-log.jsonl")
+        # Writable through setup and possibly set before the confinement
+        # (GHSA-3rvw-8897-xq63), so it is checked on every use.
+        problem = log_paths.log_path_problem(str(configured))
+        if problem:
+            logger.warning("ignoring destructive.operation_log_path %r: %s", configured, problem)
+            return default
+        return log_paths.normalize(str(configured))
+    return default
 
 
 def _now_iso() -> str:
@@ -201,8 +208,6 @@ def write_record(record: Dict[str, Any]) -> None:
         return
     path = operation_log_path()
     try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "a", encoding="utf-8") as handle:
-            handle.write(json.dumps(record, sort_keys=True, default=str) + "\n")
+        log_paths.append_line(path, json.dumps(record, sort_keys=True, default=str) + "\n")
     except Exception as exc:
         logger.warning("operation log write failed: %s", exc)

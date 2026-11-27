@@ -11,7 +11,7 @@ Usage:
     python src/server.py --full       # Start the 377-tool granular server instead
 """
 
-VERSION = "5.5.3"
+VERSION = "5.6.0"
 
 import base64
 import os
@@ -70,6 +70,7 @@ from src.utils import archive_guard
 from src.utils import subtitle_append_guard
 from src.utils import typed_api_search
 from src.utils import lut_files
+from src.utils import log_paths
 from src.utils import resolve_writes as _resolve_writes
 from src.utils import playback_guard as _playback_guard
 from src.utils import transport_provider as _transport_provider
@@ -18269,6 +18270,14 @@ def _setup_defaults_snapshot() -> Dict[str, Any]:
     }
 
 
+def _setup_log_path_shown(configured: Any, default_name: str) -> str:
+    """The configured log path when it passes the confinement, else the default;
+    the hooks ignore a configured path that fails it (GHSA-3rvw-8897-xq63)."""
+    if configured and not log_paths.log_path_problem(str(configured)):
+        return log_paths.normalize(str(configured))
+    return os.path.join(project_dir, "logs", default_name)
+
+
 def _setup_destructive_defaults() -> Dict[str, Any]:
     prefs = _read_media_analysis_preferences()
     destructive = prefs.get("destructive") if isinstance(prefs.get("destructive"), dict) else {}
@@ -18276,16 +18285,74 @@ def _setup_destructive_defaults() -> Dict[str, Any]:
         "require_confirm_token": _setup_bool(destructive.get("require_confirm_token"), True),
         "safe_mode": _setup_bool(destructive.get("safe_mode"), False),
         "audit_log": _setup_bool(destructive.get("audit_log"), True),
-        "audit_log_path": destructive.get("audit_log_path") or os.path.join(project_dir, "logs", "security-audit.jsonl"),
+        "audit_log_path": _setup_log_path_shown(destructive.get("audit_log_path"), "security-audit.jsonl"),
         "operation_log": _setup_bool(destructive.get("operation_log"), True),
-        "operation_log_path": destructive.get("operation_log_path") or os.path.join(project_dir, "logs", "operation-log.jsonl"),
+        "operation_log_path": _setup_log_path_shown(destructive.get("operation_log_path"), "operation-log.jsonl"),
         "preferences_path": _media_analysis_preferences_path(),
     }
+
+
+# Guards an MCP caller may switch on but never off. A prompt-injected agent
+# could otherwise drop every guard and the audit trail in one ordinary-looking
+# setup call, and the change would outlive the call it was approved in
+# (GHSA-3rvw-8897-xq63). Lowering them is the operator's job: edit the
+# preferences file, or use the installer for the update mode.
+_SETUP_PROTECTED_DESTRUCTIVE_KEYS = ("require_confirm_token", "safe_mode", "audit_log", "operation_log")
+
+
+def _setup_security_refusal(update_defaults: Dict[str, Any], destructive_defaults: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Refuse a set_defaults call that would weaken a security setting.
+
+    Runs before any section is written, so a refused call changes nothing.
+    """
+    lowered: List[str] = []
+    if destructive_defaults:
+        before = _setup_destructive_defaults()
+        defaults_if_cleared = {"require_confirm_token": True, "safe_mode": False, "audit_log": True, "operation_log": True}
+        for raw_key, raw_value in destructive_defaults.items():
+            compact = _setup_text_key(raw_key).replace("_", "")
+            key = next((k for k in _SETUP_PROTECTED_DESTRUCTIVE_KEYS
+                        if compact in {k.replace("_", ""), *(("confirmtoken",) if k == "require_confirm_token" else ())}),
+                       None)
+            if not key:
+                continue
+            current = bool(before.get(key))
+            if raw_value is None or (not isinstance(raw_value, bool) and _setup_text_key(raw_value) in _SETUP_CHOICE_CLEAR_VALUES):
+                after = defaults_if_cleared[key]
+            else:
+                after = _setup_bool(raw_value, current)
+            if current and not after:
+                lowered.append(f"destructive.{key}")
+    if update_defaults:
+        mode = _first_param(update_defaults, "mode", "update_mode", "updateMode", "policy",
+                            "update_policy", "updatePolicy", default=None)
+        if mode is not None and str(mode).strip().lower().replace("-", "_") in {"auto", "automatic", "autoupdate", "auto_update"}:
+            if (_setup_updates_defaults().get("mode") or "") != "auto":
+                lowered.append("updates.mode=auto")
+    if not lowered:
+        return None
+    return _err(
+        "Refusing to lower security settings through the MCP surface: " + ", ".join(lowered) + ". "
+        "Nothing was changed.",
+        code="SECURITY_SETTING_OPERATOR_ONLY", category="destructive_blocked",
+        remediation=(
+            "These can be switched on from here but only switched off by the operator: edit the "
+            f"'destructive' section of {_media_analysis_preferences_path()}, or for automatic updates run "
+            "`python install.py --update-policy auto`. For a single high-risk call while safe mode is on, "
+            "pass allow_risky_operation=true on that call instead."
+        ),
+    )
 
 
 def _setup_set_destructive_defaults(destructive_defaults: Dict[str, Any], dry_run: bool) -> Dict[str, Any]:
     if not destructive_defaults:
         return {"changed": False, "recognized": False}
+    # Backstop for every caller (set_defaults and clear_defaults): the
+    # dispatcher checks first so a refusal writes nothing, and this keeps a
+    # future caller from skipping the check.
+    refusal = _setup_security_refusal({}, destructive_defaults)
+    if refusal:
+        return refusal
 
     alias_to_key = {
         "require_confirm_token": "require_confirm_token",
@@ -18335,7 +18402,18 @@ def _setup_set_destructive_defaults(destructive_defaults: Dict[str, Any], dry_ru
             destructive[key] = normalized
             updates[key] = {"before": before.get(key), "after": normalized}
         elif key in {"audit_log_path", "operation_log_path"}:
-            path = os.path.realpath(os.path.abspath(os.path.expanduser(str(raw_value))))
+            problem = log_paths.log_path_problem(raw_value)
+            if problem:
+                return _err(
+                    f"Refusing destructive.{key}: {problem}.",
+                    code="LOG_PATH_NOT_ALLOWED", category="invalid_input",
+                    remediation=(
+                        f"Use a .jsonl or .log file under {log_paths.server_log_dir()} or the system temp "
+                        "directory. To log elsewhere, the operator sets RESOLVE_MCP_AUDIT_LOG_FILE or "
+                        "RESOLVE_MCP_OPERATION_LOG_FILE in the server's environment."
+                    ),
+                )
+            path = log_paths.normalize(raw_value)
             destructive[key] = path
             updates[key] = {"before": before.get(key), "after": path}
 
@@ -18746,6 +18824,9 @@ def _setup_set_media_analysis_defaults(media_defaults: Dict[str, Any], dry_run: 
 
 
 def _setup_set_updates_defaults(update_defaults: Dict[str, Any], dry_run: bool) -> Dict[str, Any]:
+    refusal = _setup_security_refusal(update_defaults, {})
+    if refusal:
+        return refusal
     mode = _first_param(
         update_defaults,
         "mode",
@@ -18839,6 +18920,10 @@ def _setup_clear_defaults(keys: Any, dry_run: bool) -> Dict[str, Any]:
 
     clear_all = not normalized_keys or "all" in normalized_keys
     result: Dict[str, Any] = {"dry_run": dry_run, "cleared": []}
+    if not clear_all and normalized_keys & {"safe_mode", "destructive.safe_mode"}:
+        refusal = _setup_security_refusal({}, {"safe_mode": "clear"})
+        if refusal:
+            return refusal
 
     media_clear_keys = {
         "timed_markers_default": "media_analysis.timed_markers_default",
@@ -18891,6 +18976,12 @@ def _setup_clear_defaults(keys: Any, dry_run: bool) -> Dict[str, Any]:
     destructive_payload: Dict[str, Any] = {}
     if clear_all or "destructive" in normalized_keys:
         destructive_payload = {key: "clear" for key in destructive_clear_keys}
+        # Clearing safe_mode resets it to off. A blanket reset keeps it on
+        # rather than refusing the whole reset; switching it off stays
+        # operator-only (GHSA-3rvw-8897-xq63).
+        if _setup_destructive_defaults().get("safe_mode"):
+            destructive_payload.pop("safe_mode")
+            result["kept"] = ["destructive.safe_mode"]
     else:
         for key, label in destructive_clear_keys.items():
             if key in normalized_keys or label in normalized_keys:
@@ -19038,7 +19129,7 @@ def setup(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any
                     "storage": _media_analysis_preferences_path(),
                 },
                 "destructive.safe_mode": {
-                    "description": "When enabled, safe mode blocks high/dangerous destructive actions unless allow_risky_operation=true is passed.",
+                    "description": "When enabled, safe mode blocks high/dangerous destructive actions unless allow_risky_operation=true is passed. It can be switched on from here; switching it off is operator-only (edit the preferences file).",
                     "values": [True, False],
                     "storage": _media_analysis_preferences_path(),
                 },
@@ -19048,8 +19139,8 @@ def setup(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any
                     "storage": _media_analysis_preferences_path(),
                 },
                 "destructive.audit_log_path": {
-                    "description": "Absolute path for the JSONL security audit log.",
-                    "values": "absolute or expandable path",
+                    "description": "Path for the JSONL security audit log: a .jsonl or .log file under the server's logs directory or the system temp directory. The operator can log elsewhere with an environment variable.",
+                    "values": "path under logs/ or the temp directory",
                     "storage": _media_analysis_preferences_path(),
                 },
                 "destructive.operation_log": {
@@ -19058,8 +19149,8 @@ def setup(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any
                     "storage": _media_analysis_preferences_path(),
                 },
                 "destructive.operation_log_path": {
-                    "description": "Absolute path for the mutating-operation JSONL log.",
-                    "values": "absolute or expandable path",
+                    "description": "Path for the mutating-operation JSONL log: a .jsonl or .log file under the server's logs directory or the system temp directory. The operator can log elsewhere with an environment variable.",
+                    "values": "path under logs/ or the temp directory",
                     "storage": _media_analysis_preferences_path(),
                 },
             },
@@ -19194,6 +19285,9 @@ def setup(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any
             } if any(key in merged for key in ("operation_log_path", "operationLogPath")) else {}),
         }
 
+        refusal = _setup_security_refusal(update_defaults, destructive_defaults)
+        if refusal:
+            return refusal
         general_result = _setup_set_general_defaults(general_defaults, dry_run)
         if general_result.get("error"):
             return general_result
@@ -22690,15 +22784,14 @@ _RENDER_KERNEL_ACTIONS = [
 
 
 def _render_temp_path_ok(path: str) -> bool:
-    if not path:
+    """Whether a path is under the system temp directory, with symlinks
+    resolved on both sides: a link inside /tmp cannot point a write outside it,
+    and macOS's /var -> /private/var still counts as temp."""
+    if not path or not isinstance(path, str):
         return False
     try:
-        target = os.path.abspath(path)
-        temp_roots = [
-            os.path.abspath(tempfile.gettempdir()),
-            os.path.abspath("/private/tmp"),
-            os.path.abspath("/tmp"),
-        ]
+        target = os.path.realpath(path)
+        temp_roots = {os.path.realpath(root) for root in (tempfile.gettempdir(), "/private/tmp", "/tmp")}
         return any(os.path.commonpath([target, root]) == root for root in temp_roots)
     except ValueError:
         return False
@@ -31058,6 +31151,9 @@ def _load_trace_plan(p: Dict[str, Any]):
                 remediation="Run the advanced server's color_trace plan with emitDir set "
                             "(a temp-dir path) and pass its planPath here.",
             )
+        if _coerce_bool(p.get("require_temp_path"), True) and not _temp_path_resolved_ok(str(plan_path)):
+            return None, _err("plan_path must be under the system temp directory unless require_temp_path=False",
+                              code="PLAN_PATH_NOT_TEMP", category="invalid_input")
         if not os.path.isfile(plan_path):
             return None, _err(f"plan not found: {plan_path}", code="PLAN_NOT_FOUND", category="invalid_input")
         try:
@@ -31162,16 +31258,45 @@ def _resolve_trace_plan(tl, plan: Dict[str, Any], p: Dict[str, Any]) -> List[Dic
 _TRACE_MAX_ROWS_DEFAULT = 40
 
 
+def _temp_path_resolved_ok(path: Any) -> bool:
+    return _render_temp_path_ok(path)
+
+
+def _trace_report_path_problem(report_path: Any) -> Optional[str]:
+    """A caller report_path is written on dry runs and before any confirm token,
+    so it is always confined to the system temp directory, whatever
+    require_temp_path says (GHSA-c3m4-m58c-4pc7)."""
+    if not isinstance(report_path, str) or not report_path.strip():
+        return "report_path must be a non-empty string"
+    if not report_path.lower().endswith(".json"):
+        return "report_path must end in .json"
+    if os.path.islink(report_path):
+        return "report_path must not be a symlink"
+    if not _temp_path_resolved_ok(report_path):
+        return "report_path must be under the system temp directory"
+    return None
+
+
+def _trace_report_path(p: Dict[str, Any], kind: str) -> Optional[str]:
+    report_path = p.get("report_path")
+    if report_path:
+        return None if _trace_report_path_problem(report_path) else os.path.abspath(report_path)
+    plan_path = p.get("plan_path")
+    base = os.path.dirname(os.path.abspath(plan_path)) if plan_path else tempfile.gettempdir()
+    # The default sits next to the plan only when the plan is in the temp dir.
+    if not _temp_path_resolved_ok(base):
+        base = tempfile.gettempdir()
+    return os.path.join(base, f"{kind}-report.json")
+
+
 def _trace_report(p: Dict[str, Any], plan: Dict[str, Any], kind: str, payload: Dict[str, Any]) -> Optional[str]:
     """Write the full per-clip tables next to the plan (or to report_path) and
     return the path. A real cut is 800+ rows — far past what a tool response
     should carry — so the file is the durable artifact and the response stays
     compact (see max_rows)."""
-    report_path = p.get("report_path")
+    report_path = _trace_report_path(p, kind)
     if not report_path:
-        plan_path = p.get("plan_path")
-        base = os.path.dirname(os.path.abspath(plan_path)) if plan_path else tempfile.gettempdir()
-        report_path = os.path.join(base, f"{kind}-report.json")
+        return None
     try:
         with open(report_path, "w", encoding="utf-8") as fh:
             json.dump({"kind": f"color_trace.{kind}", "written_at": _time.time(),
@@ -31187,6 +31312,12 @@ def _trace_compact(rows: List[Dict[str, Any]], max_rows: int) -> Dict[str, Any]:
 
 
 def _apply_trace_plan(p: Dict[str, Any]) -> Dict[str, Any]:
+    if p.get("report_path"):
+        problem = _trace_report_path_problem(p.get("report_path"))
+        if problem:
+            return _err(f"{problem}.", code="REPORT_PATH_NOT_ALLOWED", category="invalid_input",
+                        remediation="Pass a .json path under the system temp directory, or omit "
+                                    "report_path to write next to a temp-dir plan.")
     plan, err = _load_trace_plan(p)
     if err:
         return err

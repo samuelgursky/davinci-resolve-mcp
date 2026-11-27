@@ -35,7 +35,7 @@ import time
 import uuid
 from typing import Any, Callable, Dict, FrozenSet, Optional, Tuple
 
-from src.utils import analysis_runs, brain_edits, media_pool_changes, timeline_versioning
+from src.utils import analysis_runs, brain_edits, log_paths, media_pool_changes, timeline_versioning
 from src.utils.api_truth import API_TRUTH, traps_for, trap_notice
 from src.utils.bool_params import coerce_bool, explicit_bool_param
 from src.utils.execution_lifecycle import (
@@ -632,11 +632,20 @@ def _audit_enabled() -> bool:
 
 
 def _audit_log_path() -> str:
+    operator = os.environ.get("RESOLVE_MCP_AUDIT_LOG_FILE")
+    if operator:
+        return log_paths.normalize(operator)
+    default = os.path.join(log_paths.server_log_dir(), "security-audit.jsonl")
     configured = _read_preference("destructive.audit_log_path", None)
     if configured:
-        return os.path.expanduser(str(configured))
-    project_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    return os.path.join(project_dir, "logs", "security-audit.jsonl")
+        # The preference is writable through setup and may predate the
+        # confinement (GHSA-3rvw-8897-xq63), so it is checked on every use.
+        problem = log_paths.log_path_problem(str(configured))
+        if problem:
+            logger.warning("ignoring destructive.audit_log_path %r: %s", configured, problem)
+            return default
+        return log_paths.normalize(str(configured))
+    return default
 
 
 def _safe_params_for_audit(params: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -679,9 +688,7 @@ def _audit_security_event(
     }
     path = _audit_log_path()
     try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "a", encoding="utf-8") as handle:
-            handle.write(json.dumps(event, sort_keys=True, default=str) + "\n")
+        log_paths.append_line(path, json.dumps(event, sort_keys=True, default=str) + "\n")
     except Exception as exc:
         logger.warning("security audit log write failed: %s", exc)
 

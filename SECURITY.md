@@ -62,6 +62,17 @@ report it (see below).
   Resolve, deleting projects, replacing clips, relinking media, deleting markers,
   changing render/project settings, or installing/removing scripts, Fuses, DCTLs,
   and presets.
+- Guards are switched off by the operator only. Through MCP, `setup` can turn
+  on `destructive.safe_mode`, the confirm token and the audit and operation logs,
+  but it cannot turn any of them off or switch updates to `auto`. To lower
+  them, edit the preferences file or use the installer. A single HIGH-risk call
+  can still pass `allow_risky_operation: true`, which the client shows the user
+  as part of that call.
+- The audit and operation logs record caller params. A log path set through
+  `setup` or the preferences file must be a `.jsonl` or `.log` file under the
+  server's `logs/` directory or the system temp directory, and the server will
+  not follow a symlink there. To log elsewhere, the operator sets
+  `RESOLVE_MCP_AUDIT_LOG_FILE` or `RESOLVE_MCP_OPERATION_LOG_FILE`.
 - Source media is immutable by default. This server must not modify, transcode,
   proxy, relink, replace, or create derivatives of source media unless the user
   explicitly asks for that exact operation.

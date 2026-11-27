@@ -21,6 +21,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { requireFfmpeg } from './capabilities.mjs';
 import { assertNotOption } from './spawn-guard.mjs';
+import { fileInside, isSafeFileComponent } from './safe-path.mjs';
 
 // color_transfer values that are DISPLAY-referred (SDR + HDR display). Camera log
 // (SLog3/LogC/RedLog) is NOT in ffmpeg's enum — it shows as 'unknown' → we refuse unless asserted.
@@ -134,6 +135,11 @@ function runFfmpegToFile(args, ffmpegPath) {
   });
 }
 
+/** The PNG path for a clip id inside outDir, or null when the id cannot be a plain file name. */
+export function frameOutputPath(outDir, id) {
+  return isSafeFileComponent(id) ? fileInside(outDir, `${id}.png`) : null;
+}
+
 /**
  * @param {Array<{id:string|number, source:string, at?:any, proxy?:string, displayReferred?:boolean}>} clips
  * @param {{outDir:string, ffmpeg?:string, ffprobe?:string, displayReferred?:boolean}} opts
@@ -173,7 +179,13 @@ export async function extractFrames(clips, opts = {}) {
       skipped.push({ id: c.id, reason: e.message });
       continue;
     }
-    const outPng = path.join(outDir, `${c.id}.png`);
+    // The id becomes a file name. One with a separator or a dot-segment would
+    // let ffmpeg overwrite a PNG outside outDir (GHSA-c3m4-m58c-4pc7).
+    const outPng = frameOutputPath(outDir, c.id);
+    if (!outPng) {
+      skipped.push({ id: c.id, reason: 'id is not a safe file name: use letters, digits, spaces, ".", "_" or "-" only' });
+      continue;
+    }
     const args = ['-v', 'error', '-i', src, '-vf', `select=eq(n\\,${frameIdx})`, '-vframes', '1', '-y', outPng];
     try {
       await runFfmpegToFile(args, ffmpeg);
