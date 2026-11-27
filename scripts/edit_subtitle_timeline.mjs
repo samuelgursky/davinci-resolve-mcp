@@ -1,7 +1,8 @@
 // Structured stdin bridge used by the live Python server.
-import { editSubtitleTimeline, inspectSubtitleTimeline, editCaptionTimeline, inspectCaptionTimeline }
+import { editSubtitleTimeline, inspectSubtitleTimeline, editCaptionTimeline, inspectCaptionTimeline, checkCaptionTimeline }
   from '../resolve-advanced/server/subtitle-timeline.mjs';
-const operations = { inspect: inspectSubtitleTimeline, inspect_captions: inspectCaptionTimeline, write_captions: editCaptionTimeline };
+const operations = { inspect: inspectSubtitleTimeline, inspect_captions: inspectCaptionTimeline, write_captions: editCaptionTimeline,
+  check_captions: checkCaptionTimeline };
 try {
   let input = '';
   for await (const chunk of process.stdin) input += chunk;
