@@ -2,7 +2,9 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
-## Unreleased
+## What's New in v5.7.0 — Check captions with Resolve open
+
+From #398 by @devreddy1015. Asked for in #393.
 
 ### Added
 
@@ -12,6 +14,7 @@ Release history for the DaVinci Resolve MCP Server. The latest release is summar
 ### Validation
 
 - New Node tests cover `checkCaptionTimeline` on an exported DRT and the `too_short` rule; a Python test checks that the live check exports once, passes both options to the codec, and never imports or switches timelines. Not run against a live Resolve.
+- On landing: the full Python suite and the full Node suite (from a fresh `npm ci`) pass with the PR merged into main. Only the CHANGELOG conflicted. The check is read-only and was not run against a live Resolve; the codec path is tested on exported timelines.
 
 ## What's New in v5.6.1 — Windows: temp paths accepted again; conform skips the PROXY folder
 
