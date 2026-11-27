@@ -68,6 +68,12 @@ class SigningTests(unittest.TestCase):
         request = signed(TOKEN, timestamp=1000, nonce="n" * 20)
         self.assertFalse(rb.signature_is_valid("x" * 48, request, request["signature"]))
 
+    def test_non_ascii_and_non_str_signatures_return_false(self) -> None:
+        request = signed(TOKEN, timestamp=1000, nonce="n" * 20)
+        self.assertFalse(rb.signature_is_valid(TOKEN, request, "caf\xe9"))
+        self.assertFalse(rb.signature_is_valid(TOKEN, request, "\ud800"))
+        self.assertFalse(rb.signature_is_valid(TOKEN, request, 123))  # type: ignore[arg-type]
+
 
 class AuthenticationTests(unittest.TestCase):
     def setUp(self) -> None:

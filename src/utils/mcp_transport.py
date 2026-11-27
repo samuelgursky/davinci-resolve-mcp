@@ -123,12 +123,14 @@ def _auth_middleware_cls(token):
     from starlette.middleware.base import BaseHTTPMiddleware
     from starlette.responses import JSONResponse
 
-    expected = f"Bearer {token}"
+    expected = f"Bearer {token}".encode("utf-8")
 
     class BearerAuth(BaseHTTPMiddleware):
         async def dispatch(self, request, call_next):
             provided = request.headers.get("authorization", "")
-            if not secrets.compare_digest(provided, expected):
+            if not secrets.compare_digest(
+                provided.encode("utf-8", "surrogatepass"), expected
+            ):
                 return JSONResponse(
                     {"error": "unauthorized: Authorization: Bearer <token> required"},
                     status_code=401,

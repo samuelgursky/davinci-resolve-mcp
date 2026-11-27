@@ -14708,14 +14708,21 @@ def _cookie_value(cookie_header: Optional[str], name: str) -> Optional[str]:
     return None
 
 
+def _same_secret(provided: str, expected: str) -> bool:
+    return secrets.compare_digest(
+        provided.encode("utf-8", "surrogatepass"),
+        expected.encode("utf-8"),
+    )
+
+
 def _request_presents_token(handler: BaseHTTPRequestHandler, token: str) -> bool:
     if not token:
         return False
     auth = handler.headers.get("Authorization") or ""
-    if auth.startswith("Bearer ") and secrets.compare_digest(auth[len("Bearer "):].strip(), token):
+    if auth.startswith("Bearer ") and _same_secret(auth[len("Bearer "):].strip(), token):
         return True
     cookie = _cookie_value(handler.headers.get("Cookie"), PANEL_COOKIE_NAME)
-    return bool(cookie) and secrets.compare_digest(cookie, token)
+    return bool(cookie) and _same_secret(cookie, token)
 
 
 def _launch_claude_code_terminal() -> Dict[str, Any]:

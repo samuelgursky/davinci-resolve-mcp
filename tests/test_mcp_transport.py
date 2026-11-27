@@ -69,6 +69,48 @@ class AuthMiddlewareTest(unittest.TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.text, "ok")
 
+    def test_rejects_non_ascii_token_with_401(self):
+        import asyncio
+        from starlette.applications import Starlette
+        from starlette.responses import PlainTextResponse
+        from starlette.routing import Route
+
+        async def ok(request):
+            return PlainTextResponse("ok")
+
+        app = Starlette(routes=[Route("/", ok)])
+        app.add_middleware(T._auth_middleware_cls("secret"))
+
+        # ASGI/HTTP decodes header values as latin-1; raw bytes 0x80..0xff
+        # arrive as non-ASCII str and must return 401 rather than crashing 500.
+        sent = []
+
+        async def run():
+            scope = {
+                "type": "http",
+                "asgi": {"version": "3.0"},
+                "http_version": "1.1",
+                "method": "GET",
+                "scheme": "http",
+                "path": "/",
+                "raw_path": b"/",
+                "query_string": b"",
+                "headers": [(b"authorization", b"Bearer caf\xe9")],
+                "client": ("127.0.0.1", 12345),
+                "server": ("127.0.0.1", 80),
+            }
+
+            async def receive():
+                return {"type": "http.request", "body": b"", "more_body": False}
+
+            async def send(message):
+                sent.append(message)
+
+            await app(scope, receive, send)
+
+        asyncio.run(run())
+        self.assertEqual(sent[0]["status"], 401)
+
 
 class GeneratedTokenNeverLoggedTest(unittest.TestCase):
     """The generated token is the transport's only access control.
