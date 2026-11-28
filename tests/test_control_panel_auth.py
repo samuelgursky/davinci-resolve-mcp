@@ -157,6 +157,27 @@ class PanelGateTest(unittest.TestCase):
                 status, _, _ = self.panel.request("GET", "/api/boot", headers=self.bearer, host=host)
                 self.assertEqual(status, 200)
 
+    def test_spoofed_and_duplicate_host_headers_rejected(self):
+        for host in ("[::1].evil.com", "localhost:80@evil.com", "127.0.0.1:notaport"):
+            with self.subTest(host=host):
+                status, _, payload = self.panel.request(
+                    "GET", "/api/boot", headers=self.bearer, host=host
+                )
+                self.assertEqual(status, 403)
+                self.assertIn("Host", payload["error"])
+
+        # Duplicate Host headers must not let a leading loopback Host hide an evil one.
+        conn = http.client.HTTPConnection("127.0.0.1", self.panel.port, timeout=5)
+        conn.putrequest("GET", "/api/boot", skip_host=True, skip_accept_encoding=True)
+        conn.putheader("Host", f"127.0.0.1:{self.panel.port}")
+        conn.putheader("Host", "evil.example")
+        conn.putheader("Authorization", f"Bearer {self.panel.token}")
+        conn.endheaders()
+        resp = conn.getresponse()
+        resp.read()
+        conn.close()
+        self.assertEqual(resp.status, 403)
+
     # ── CSRF: cross-site Origin rejected; JSON content-type required ───────
     def test_cross_site_origin_rejected(self):
         status, _, payload = self.panel.request(
@@ -166,6 +187,35 @@ class PanelGateTest(unittest.TestCase):
             body="{}")
         self.assertEqual(status, 403)
         self.assertIn("origin", payload["error"].lower())
+
+    def test_spoofed_and_duplicate_origin_headers_rejected(self):
+        for origin in (
+            "http://[::1].evil.com",
+            "http://evil.com@localhost",
+            "http://127.0.0.1:notaport",
+            f"http://127.0.0.1:{self.panel.port}/path",
+        ):
+            with self.subTest(origin=origin):
+                status, _, payload = self.panel.request(
+                    "GET",
+                    "/api/boot",
+                    headers={**self.bearer, "Origin": origin},
+                )
+                self.assertEqual(status, 403)
+                self.assertIn("origin", payload["error"].lower())
+
+        # Duplicate Origin headers must be rejected even if the first is loopback.
+        conn = http.client.HTTPConnection("127.0.0.1", self.panel.port, timeout=5)
+        conn.putrequest("GET", "/api/boot", skip_host=True, skip_accept_encoding=True)
+        conn.putheader("Host", f"127.0.0.1:{self.panel.port}")
+        conn.putheader("Origin", f"http://127.0.0.1:{self.panel.port}")
+        conn.putheader("Origin", "https://evil.example")
+        conn.putheader("Authorization", f"Bearer {self.panel.token}")
+        conn.endheaders()
+        resp = conn.getresponse()
+        resp.read()
+        conn.close()
+        self.assertEqual(resp.status, 403)
 
     def test_loopback_origin_accepted(self):
         status, _, _ = self.panel.request(
@@ -230,8 +280,18 @@ class GateHelpersTest(unittest.TestCase):
         self.assertTrue(dash._host_is_loopback("127.0.0.1:8765"))
         self.assertTrue(dash._host_is_loopback("LOCALHOST"))
         self.assertTrue(dash._host_is_loopback("[::1]:8765"))
+        self.assertTrue(dash._host_is_loopback("[::1]"))
         self.assertFalse(dash._host_is_loopback("127.0.0.1.evil.com"))
         self.assertFalse(dash._host_is_loopback("localhost.evil.com:80"))
+        self.assertFalse(dash._host_is_loopback("[::1].evil.com"))
+        self.assertFalse(dash._host_is_loopback("[::1]:80@evil.com"))
+        self.assertFalse(dash._host_is_loopback("[::1]evil"))
+        self.assertFalse(dash._host_is_loopback("localhost:80@evil.com"))
+        self.assertFalse(dash._host_is_loopback("localhost:notaport"))
+        self.assertFalse(dash._host_is_loopback("127.0.0.1:99999"))
+        self.assertFalse(dash._host_is_loopback("127.0.0.1:0"))
+        self.assertFalse(dash._host_is_loopback("localhost:"))
+        self.assertFalse(dash._host_is_loopback("127.0.0.1:\u00b2"))
         self.assertFalse(dash._host_is_loopback(None))
 
     def test_origin_parsing(self):
@@ -242,6 +302,13 @@ class GateHelpersTest(unittest.TestCase):
         self.assertFalse(dash._origin_is_loopback("https://evil.example"))
         self.assertFalse(dash._origin_is_loopback("file://"))
         self.assertFalse(dash._origin_is_loopback("http://127.0.0.1.evil.com"))
+        self.assertFalse(dash._origin_is_loopback("http://[::1].evil.com"))
+        self.assertFalse(dash._origin_is_loopback("http://evil.com@localhost"))
+        self.assertFalse(dash._origin_is_loopback("http://127.0.0.1:notaport"))
+        self.assertFalse(dash._origin_is_loopback("http://localhost:8765/path"))
+        self.assertFalse(dash._origin_is_loopback("http://localhost:8765?q=1"))
+        self.assertFalse(dash._origin_is_loopback("http://localhost:8765#frag"))
+        self.assertFalse(dash._origin_is_loopback(""))
 
     def test_token_from_env_or_generated(self):
         with mock.patch.dict(os.environ, {dash.PANEL_TOKEN_ENV: "pinned"}):
