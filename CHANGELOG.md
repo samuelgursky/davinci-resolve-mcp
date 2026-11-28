@@ -2,6 +2,21 @@
 
 Release history for the DaVinci Resolve MCP Server. The latest release is summarized in the root README; older entries live here to keep the README focused.
 
+## What's New in v5.7.2 — Stricter Host and Origin checks in the control panel
+
+From #402 by @FFXFF1.
+
+### Fixed
+
+- **The control panel's Host check (DNS-rebinding guard) accepted malformed values** such as `[::1].evil.com`, `localhost:80@evil.com`, `localhost:notaport` and `127.0.0.1:99999`. It now refuses `@`, `/`, whitespace, anything after `]` other than a port, and any port that isn't 1–65535.
+- **The Origin check (CSRF guard) accepted origins with a username, a path, a query or a bad port**, such as `http://evil.com@localhost` or `http://localhost:8765/path`. An origin must now be a bare `http` or `https` origin whose host passes the Host check.
+- **Duplicate headers:** the gate read only the first `Host` and `Origin` header, so a loopback first header could hide a foreign second one. A request now needs exactly one `Host` header and at most one `Origin` header.
+- Severity: low, defence in depth. A browser can't send these values, and every request still needs the per-launch bearer token. The headers browsers really send (`localhost`, `127.0.0.1:port`, `[::1]:port`, and a bare `http://localhost:port` origin) still pass.
+
+### Validation
+
+- Full Python suite with the PR merged into main. Its 10 new checks fail on the previous code. GitHub CI passed on the PR. No Resolve behavior changed, so no live run.
+
 ## What's New in v5.7.1 — Non-ASCII auth headers get a 401, not a crash
 
 From #401 by @FFXFF1.
